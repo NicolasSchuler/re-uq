@@ -54,6 +54,20 @@ Avoid:
 - undocumented prompt or model changes;
 - mixing temporary diagnostics into stable analysis code.
 
+## Environment
+
+This repository uses a `uv`-managed virtual environment at `.venv/`.
+
+Dependencies are declared in `pyproject.toml` and locked in `uv.lock`. Run `uv sync --group dev` to refresh the environment.
+
+Prefer running Python and notebook-related commands through that environment, for example:
+
+- `.venv/bin/python -m unittest discover -s tests -v`
+- `.venv/bin/python scripts/populate_notebooks.py`
+- `source .venv/bin/activate` before launching Jupyter locally
+
+Use established scientific/notebook libraries already declared for the project (`pandas`, `numpy`, `scipy`, `scikit-learn`, `matplotlib`, `openai`, `requests`, and `nbformat`) rather than reimplementing common CSV, metric, plotting, HTTP, or notebook-JSON functionality.
+
 ## Verification Expectations
 
 Before treating results as paper-ready:

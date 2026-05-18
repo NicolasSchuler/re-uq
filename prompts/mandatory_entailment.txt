@@ -1,0 +1,17 @@
+You are reviewing software requirements.
+
+Source statement:
+"{source_statement}"
+
+Candidate requirement:
+"{candidate_requirement}"
+
+Question:
+Is the candidate a faithful mandatory requirement entailed by the source?
+
+Return JSON only:
+{{
+  "decision": "yes" | "no",
+  "confidence": 0-100,
+  "brief_reason": "<max 12 words>"
+}}

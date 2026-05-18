@@ -1,0 +1,12 @@
+Extract exactly one requirement from the source statement.
+Preserve the modality of the source.
+
+Source:
+"{source_statement}"
+
+Return JSON only:
+{{
+  "requirement": "...",
+  "modality": "mandatory" | "recommended" | "optional" | "nice_to_have",
+  "confidence": 0-100
+}}
