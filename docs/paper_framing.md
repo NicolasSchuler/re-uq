@@ -37,12 +37,14 @@ Avoid claiming that all UQ fails. The current evidence supports the narrower cla
 - RQ1: When functional content is held constant and only modality changes, how reliably do local LLMs preserve requirement strength across mandatory, recommended, optional, and weak stakeholder-intent phrasings?
 - RQ2: Do lightweight UQ signals reveal high-confidence over-commitment errors, or can models be stable and confident while wrong?
 - RQ3: Is weak-intent collapse robust to prompt simplification and lexical variation in weak stakeholder-intent wording?
+- RQ4 diagnostic: Can a model detect, in a source-grounded verifier prompt, that its own extracted requirement strengthened or weakened the source modality?
 
 ## Contribution Bullets
 
 - A compact controlled RE benchmark that isolates requirement-strength preservation by holding functional content constant and varying modality.
 - Pilot evidence of high-confidence over-commitment: the model correctly handles mandatory entailment but fails to preserve the weakest stakeholder-intent class during extraction.
 - A UQ-focused diagnostic showing that consistency-based uncertainty is not a sufficient correctness proxy for this RE extraction setting.
+- A source-grounded self-verification diagnostic that tests whether models recognize modality strengthening after extraction.
 - A construct-validity probe showing that the weak-intent failure is not tied to a single wording, while the exact upgraded class is wording-sensitive.
 
 ## Evidence Table
@@ -77,12 +79,16 @@ Recommendation:
 - Frame Task 1 as a control and Task 2 as the main empirical result.
 - Complete `docs/weak_modality_construct_review.csv` before treating weak-class claims as paper-ready.
 - Report `nice_to_have` as an operationalized weak stakeholder-intent class, not as an RFC-standard modality.
+- Use denominator-specific risk names in the paper: `unsupported mandatory acceptance@tau` for Task 1, and `HC-OC_all@tau`, `HC-OC_overcommittable@tau`, and `weak strengthening@tau` for Task 2.
+- Keep Pearson/Spearman modality-confidence correlations and text-modality parser diagnostics out of the headline table unless needed as diagnostics.
+- Describe verbalized confidence calibration as behavioral calibration of elicited confidence, not internal model probability.
 
 Open question:
 
 - Whether the same high-confidence over-commitment pattern persists across all planned local models.
 - Whether independent RE-informed reviewers agree that all weak templates sit below `SHOULD/recommended` on the study's ordinal scale.
 - Whether verbalized confidence remains informative in full runs, given that consistency-style UQ is expected to struggle with systematic errors.
+- Whether Task 3 self-verification detects over-commitment or instead repeats the same modality normalization error.
 - Whether optional PURE robustness is needed after NICE results are known.
 
 ## Construct-Validity Gate

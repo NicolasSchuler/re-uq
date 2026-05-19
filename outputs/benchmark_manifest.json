@@ -1,32 +1,32 @@
 {
   "artifacts": [
     {
-      "bytes": 177990,
+      "bytes": 178050,
       "exists": true,
       "path": "data/processed/seeds_review.csv",
       "rows": 622,
-      "sha256": "adca256c380f32b943648f14cab271b181d76ba3f56bb29407d30e6e8398cbc0"
+      "sha256": "3341bea645f93dbfa5dcf7f5f3cae5ccc4378ca29fe8dc0766c839ea277322dc"
     },
     {
-      "bytes": 33565,
+      "bytes": 33625,
       "exists": true,
       "path": "data/processed/seeds_selected.csv",
       "rows": 120,
-      "sha256": "9931ff27ecd35c822fda4eaa1dea8bc8478bf9558ebf6bc8d931b0e32412cc42"
+      "sha256": "0199fac853c7a56f9040a7b9b2746c8cd7f6fa0704bb91a258fac479de2b7794"
     },
     {
-      "bytes": 205362,
+      "bytes": 205722,
       "exists": true,
       "path": "data/processed/benchmark_items.csv",
       "rows": 480,
-      "sha256": "96577ab9c53421caef987dd9711d4c689fc35ca803864377cb25126fa1fd62c6"
+      "sha256": "56838d0fdb151ed3b6e229114a5c64b95e847e58ba1ef83cf900c5bd2587498a"
     },
     {
-      "bytes": 206442,
+      "bytes": 206802,
       "exists": true,
       "path": "data/processed/benchmark_items_shall.csv",
       "rows": 480,
-      "sha256": "9a678dd1e47157524e600f60cf3fa704ac7c3ef56e4f0f936e79cb78b7814d01"
+      "sha256": "bc8ac467dcd075b201ab3d0c26f52ceb995d7fd094fad08db17fe69c78817cb5"
     },
     {
       "bytes": 327,
@@ -48,9 +48,23 @@
       "path": "prompts/modality_extraction.txt",
       "rows": "",
       "sha256": "0eff60df56738836e536114169e08ec27e84bd76aab6bbce285f4b8f79d9f96e"
+    },
+    {
+      "bytes": 366,
+      "exists": true,
+      "path": "prompts/modality_extraction_labels_only.txt",
+      "rows": "",
+      "sha256": "4c7ee4e2a144e896b99e47be9a6a9215309291bfc56491220a7e5d407a2c962c"
+    },
+    {
+      "bytes": 936,
+      "exists": true,
+      "path": "prompts/modality_verification.txt",
+      "rows": "",
+      "sha256": "275dfa26e4cd0bb6a0699d50f25c7752eee5cfcea24ab0cc2f7ff87ca11351ae"
     }
   ],
-  "created_at_utc": "2026-05-18T15:54:44Z",
+  "created_at_utc": "2026-05-19T17:24:56Z",
   "metadata": {
     "main_benchmark": "MUST",
     "robustness_benchmark": "SHALL",

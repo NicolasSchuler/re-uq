@@ -67,7 +67,7 @@ def notebook_00() -> list[nbf.NotebookNode]:
             """
             # 00 Prepare Data
 
-            Objective: load the NICE/PROMISE-derived requirements dataset, create a transparent seed review table, and keep exactly 120 accepted seed capabilities for the main experiment.
+            Objective: load the NICE/PROMISE-derived requirements dataset, create a transparent seed review table, and keep the configured number of accepted seed capabilities for the main experiment.
 
             The automatic filter and capability cleanup are intentionally conservative. Manual review remains part of the protocol, but `capability_text_final` is pre-filled with a cleaned suggestion so most rows should only need inspection rather than hand rewriting.
             """
@@ -152,6 +152,7 @@ def notebook_00() -> list[nbf.NotebookNode]:
             suspicious = included[
                 included["capability_text_final"].str.contains(r"\b(shall|must|should|may|system|product|application)\b", case=False, regex=True)
                 | included["capability_text_final"].str.contains(r"[.;:]", regex=True)
+                | included["capability_text_final"].str.contains(r"^(with|to|from|for|of|in|on|at|by|about|into|onto|through|across|under|over|between|among)\b", case=False, regex=True)
             ]
             print(f"Included rows: {len(included)}")
             print(f"Rows worth closer manual review: {len(suspicious)}")
@@ -324,6 +325,7 @@ def notebook_01() -> list[nbf.NotebookNode]:
                 PROJECT_ROOT / "prompts/mandatory_entailment_strict.txt",
                 PROJECT_ROOT / "prompts/modality_extraction.txt",
                 PROJECT_ROOT / "prompts/modality_extraction_labels_only.txt",
+                PROJECT_ROOT / "prompts/modality_verification.txt",
             ]
             manifest = eu.write_benchmark_manifest(
                 manifest_paths,
@@ -966,6 +968,183 @@ def notebook_03() -> list[nbf.NotebookNode]:
     ]
 
 
+def notebook_03b() -> list[nbf.NotebookNode]:
+    return [
+        md(
+            """
+            # 03b Run Modality Verification
+
+            Objective: verify deterministic Task 2 extractions with a source-grounded Task 3 self-verification prompt.
+
+            This diagnostic does not revise Task 2 outputs. It asks the same model whether its extracted requirement preserves, strengthens, weakens, or changes the source.
+            """
+        ),
+        code(COMMON_SETUP),
+        md("## Configure Verification Run"),
+        code(
+            r"""
+            HOST = os.getenv("HOST", CONFIG["llm"]["host"])
+            RUN_TASK3_VERIFICATION = os.getenv("RUN_TASK3_VERIFICATION", "true").lower() in {"1", "true", "yes"}
+            deterministic = CONFIG["llm"]["deterministic"]
+            stochastic = CONFIG["llm"]["stochastic"]
+            REQUEST_CONCURRENCY = eu.resolve_llm_concurrency(CONFIG)
+
+            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
+            source_raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", BENCHMARK_VARIANT)
+            task3_items_path = eu.variant_path(PROJECT_ROOT / "data/processed/task3_verification_items.csv", BENCHMARK_VARIANT)
+            output_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task3_verification.jsonl", BENCHMARK_VARIANT)
+
+            benchmark = eu.read_csv_rows(benchmark_path)
+            all_source_rows = eu.read_jsonl(source_raw_path)
+            requested_source_run_id = os.getenv("TASK3_SOURCE_RUN_ID") or os.getenv("RUN_ID")
+            run_prefix = "full" if BENCHMARK_VARIANT == "must" else f"full-{BENCHMARK_VARIANT}"
+
+            if requested_source_run_id:
+                source_run_id, source_rows = eu.select_run_rows(all_source_rows, run_id=requested_source_run_id, prefix=run_prefix)
+            else:
+                progress = eu.run_progress_summary(
+                    benchmark,
+                    all_source_rows,
+                    expected_stochastic_samples=int(stochastic["samples"]),
+                )
+                complete_run_ids = eu.complete_run_ids_from_progress(progress, prefix=run_prefix)
+                if not complete_run_ids:
+                    available = sorted({row.get("run_id", "") for row in all_source_rows if str(row.get("run_id", "")).startswith(run_prefix)})
+                    raise ValueError(
+                        "No complete full run found for Task 3 verification. "
+                        f"Set TASK3_SOURCE_RUN_ID explicitly or finish a full run. Available run_ids: {available[-10:]}"
+                    )
+                source_run_id, source_rows = eu.select_run_rows(all_source_rows, run_id=complete_run_ids[-1], prefix=run_prefix)
+
+            run_id = eu.new_run_id("task3" if BENCHMARK_VARIANT == "must" else f"task3-{BENCHMARK_VARIANT}")
+            print({
+                "HOST": HOST,
+                "RUN_TASK3_VERIFICATION": RUN_TASK3_VERIFICATION,
+                "REQUEST_CONCURRENCY": REQUEST_CONCURRENCY,
+                "source_run_id": source_run_id,
+                "task3_run_id": run_id,
+                "BENCHMARK_VARIANT": BENCHMARK_VARIANT,
+            })
+            print(f"Benchmark path: {benchmark_path}")
+            print(f"Task 1/2 raw path: {source_raw_path}")
+            print(f"Task 3 output path: {output_path}")
+            """
+        ),
+        md("## Build Task 3 Verification Items"),
+        code(
+            r"""
+            task3_items = eu.build_task3_verification_items(benchmark, source_rows)
+            eu.write_csv_rows(task3_items_path, task3_items, fieldnames=eu.TASK3_VERIFICATION_FIELDS)
+            print(f"Wrote Task 3 verification items: {task3_items_path}")
+            print(f"Task 3 items: {len(task3_items)}")
+            if not task3_items:
+                raise ValueError("No Task 3 items were built. Check that the selected run has valid deterministic Task 2 rows.")
+            print(eu.markdown_table(task3_items[:8], ["item_id", "source_modality", "task2_modality", "task3_gold_relation"]))
+            """
+        ),
+        md("## Run Task 3 Verification"),
+        code(
+            r"""
+            task3_template = eu.load_prompt(PROJECT_ROOT / "prompts/modality_verification.txt")
+
+            def task3_prompt_for(item):
+                return eu.render_prompt(
+                    task3_template,
+                    source_statement=item["source_statement"],
+                    extracted_requirement=item["task2_requirement"],
+                    extracted_modality=item["task2_modality"],
+                )
+
+            def task3_request_job(item, sample_kind, sample_index, temperature, top_p, request_index):
+                return {
+                    "request_index": request_index,
+                    "run_id": run_id,
+                    "model": item["task2_model"],
+                    "host": HOST,
+                    "task": "task3",
+                    "item": item,
+                    "sample_index": sample_index,
+                    "sample_kind": sample_kind,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "prompt_version": f"{CONFIG['project']['prompt_version']}:task3",
+                    "prompt": task3_prompt_for(item),
+                    "max_tokens": int(CONFIG["llm"]["max_tokens"]),
+                    "timeout_s": int(CONFIG["llm"]["timeout_s"]),
+                    "api_key_env": CONFIG["llm"]["api_key_env"],
+                }
+
+            jobs = []
+            for item in task3_items:
+                jobs.append(task3_request_job(
+                    item=item,
+                    sample_kind="deterministic",
+                    sample_index=0,
+                    temperature=float(deterministic["temperature"]),
+                    top_p=float(deterministic["top_p"]),
+                    request_index=len(jobs),
+                ))
+                for sample_index in range(int(stochastic["samples"])):
+                    jobs.append(task3_request_job(
+                        item=item,
+                        sample_kind="stochastic",
+                        sample_index=sample_index,
+                        temperature=float(stochastic["temperature"]),
+                        top_p=float(stochastic["top_p"]),
+                        request_index=len(jobs),
+                    ))
+
+            planned_calls = len(task3_items) * (1 + int(stochastic["samples"]))
+            assert len(jobs) == planned_calls
+            records = []
+
+            if RUN_TASK3_VERIFICATION:
+                print(f"Dispatching {len(jobs)} Task 3 calls with concurrency={REQUEST_CONCURRENCY}")
+                for record in eu.run_completion_jobs(jobs, max_workers=REQUEST_CONCURRENCY):
+                    eu.append_jsonl(output_path, record)
+                    records.append(record)
+                    if len(records) % 50 == 0 or len(records) == len(jobs):
+                        print(f"Completed {len(records)}/{len(jobs)} Task 3 calls")
+                print(f"Wrote {len(records)} Task 3 records to {output_path}")
+            else:
+                print("Task 3 verification not run. Set RUN_TASK3_VERIFICATION=true to execute it.")
+            """
+        ),
+        md("## Verification Summary"),
+        code(
+            r"""
+            task3_rows = [row for row in eu.read_jsonl(output_path) if row.get("run_id") == run_id] if RUN_TASK3_VERIFICATION else []
+            if task3_rows:
+                status_counts = {}
+                for row in task3_rows:
+                    status_counts[row["parse_status"]] = status_counts.get(row["parse_status"], 0) + 1
+                print(status_counts)
+                print(f"Parse success rate: {status_counts.get('ok', 0) / len(task3_rows):.3f}")
+                task3_scores = eu.build_task3_scores(task3_items, task3_rows)
+                summary = eu.metric_summary_by_model_task_method(task3_scores)
+                fields = [
+                    "model",
+                    "task",
+                    "uq_method",
+                    "n",
+                    "accuracy",
+                    "f1_or_macro_f1",
+                    "strengthening_recall",
+                    "false_preserve_rate",
+                    "evidence_phrase_source_rate",
+                    "brier",
+                    "ece",
+                    "error_detection_auroc",
+                    "parse_failure_rate",
+                ]
+                print(eu.markdown_table(summary, fields))
+            else:
+                print("No Task 3 rows for this run_id yet.")
+            """
+        ),
+    ]
+
+
 def notebook_04() -> list[nbf.NotebookNode]:
     return [
         md(
@@ -981,19 +1160,54 @@ def notebook_04() -> list[nbf.NotebookNode]:
             r"""
             benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
             raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", BENCHMARK_VARIANT)
+            task3_items_path = eu.variant_path(PROJECT_ROOT / "data/processed/task3_verification_items.csv", BENCHMARK_VARIANT)
+            task3_raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task3_verification.jsonl", BENCHMARK_VARIANT)
 
             benchmark = eu.read_csv_rows(benchmark_path)
             all_raw_rows = eu.read_jsonl(raw_path)
             requested_run_id = os.getenv("RUN_ID") or os.getenv("ANALYSIS_RUN_ID")
             run_prefix = "full" if BENCHMARK_VARIANT == "must" else f"full-{BENCHMARK_VARIANT}"
-            selected_run_id, raw_rows = eu.select_run_rows(all_raw_rows, run_id=requested_run_id, prefix=run_prefix)
+            if requested_run_id:
+                selected_run_id, raw_rows = eu.select_run_rows(all_raw_rows, run_id=requested_run_id, prefix=run_prefix)
+            else:
+                progress = eu.run_progress_summary(
+                    benchmark,
+                    all_raw_rows,
+                    expected_stochastic_samples=int(CONFIG["llm"]["stochastic"]["samples"]),
+                )
+                complete_run_ids = eu.complete_run_ids_from_progress(progress, prefix=run_prefix)
+                if not complete_run_ids:
+                    available = sorted({row.get("run_id", "") for row in all_raw_rows if str(row.get("run_id", "")).startswith(run_prefix)})
+                    raise ValueError(
+                        "No complete full run found for metric computation. "
+                        f"Set RUN_ID or ANALYSIS_RUN_ID explicitly. Available run_ids: {available[-10:]}"
+                    )
+                selected_run_id, raw_rows = eu.select_run_rows(all_raw_rows, run_id=complete_run_ids[-1], prefix=run_prefix)
+            all_task3_items = eu.read_csv_rows(task3_items_path) if task3_items_path.exists() else []
+            task3_items = [row for row in all_task3_items if row.get("task2_run_id") == selected_run_id]
+            all_task3_rows = eu.read_jsonl(task3_raw_path)
+            requested_task3_run_id = os.getenv("TASK3_RUN_ID")
+            if requested_task3_run_id:
+                selected_task3_run_id, task3_raw_rows = eu.select_run_rows(all_task3_rows, run_id=requested_task3_run_id, prefix="task3")
+            else:
+                source_task3_rows = [row for row in all_task3_rows if row.get("task2_run_id") == selected_run_id]
+                selected_task3_run_id = eu.latest_run_id(source_task3_rows, prefix="task3")
+                task3_raw_rows = [row for row in source_task3_rows if row.get("run_id") == selected_task3_run_id] if selected_task3_run_id else []
+            result_benchmark = eu.benchmark_rows_with_current_raw_outputs(benchmark, raw_rows)
+            stale_item_count = len(benchmark) - len(result_benchmark)
             print(f"Benchmark variant: {BENCHMARK_VARIANT}")
             print(f"Benchmark path: {benchmark_path}")
             print(f"Raw output path: {raw_path}")
             print(f"Benchmark items: {len(benchmark)}")
+            print(f"Result-scored benchmark items: {len(result_benchmark)}")
+            print(f"Benchmark items without current raw prompts: {stale_item_count}")
             print(f"Raw output rows: {len(all_raw_rows)}")
             print(f"Selected run_id: {selected_run_id}")
             print(f"Selected raw rows: {len(raw_rows)}")
+            print(f"Task 3 items path: {task3_items_path} ({'exists' if task3_items_path.exists() else 'missing'})")
+            print(f"Selected Task 3 run_id: {selected_task3_run_id}")
+            print(f"Selected Task 3 items: {len(task3_items)}")
+            print(f"Selected Task 3 raw rows: {len(task3_raw_rows)}")
             if all_raw_rows and not raw_rows:
                 available = sorted({row.get("run_id", "") for row in all_raw_rows if row.get("run_id")})
                 raise ValueError(f"No rows found for selected run_id. Available run_ids: {available[-10:]}")
@@ -1002,13 +1216,15 @@ def notebook_04() -> list[nbf.NotebookNode]:
         md("## Build UQ Scores"),
         code(
             r"""
-            scores = eu.build_uq_scores(benchmark, raw_rows)
-            baseline_scores = eu.build_rule_baseline_scores(benchmark)
+            scores = eu.build_uq_scores(result_benchmark, raw_rows)
+            task3_scores = eu.build_task3_scores(task3_items, task3_raw_rows) if task3_items and task3_raw_rows else []
+            baseline_scores = eu.build_rule_baseline_scores(result_benchmark)
+            scores.extend(task3_scores)
             scores.extend(baseline_scores)
             scores_path = eu.variant_path(PROJECT_ROOT / "data/processed/uq_scores.csv", BENCHMARK_VARIANT)
             eu.write_csv_rows(scores_path, scores)
             print(f"Wrote UQ scores: {scores_path}")
-            print(f"Score rows: {len(scores)} including {len(baseline_scores)} rule-baseline rows")
+            print(f"Score rows: {len(scores)} including {len(baseline_scores)} rule-baseline rows and {len(task3_scores)} Task 3 rows")
             scores[:3]
             """
         ),
@@ -1031,13 +1247,34 @@ def notebook_04() -> list[nbf.NotebookNode]:
                 "ece",
                 "auroc",
                 "monotonicity_violations",
+                "monotonicity_strict_violations",
+                "monotonicity_tolerance",
+                "monotonicity_mean_max_increase",
+                "monotonicity_max_increase",
+                "pearson_modality_p_yes",
                 "high_conf_overcommit_80",
                 "high_conf_overcommit_90",
+                "unsupported_mandatory_acceptance_80",
+                "unsupported_mandatory_acceptance_90",
+                "high_conf_overcommit_all_80",
+                "high_conf_overcommit_all_90",
+                "high_conf_overcommit_overcommittable_80",
+                "high_conf_overcommit_overcommittable_90",
+                "weak_recall",
+                "weak_strengthening_80",
+                "weak_strengthening_90",
+                "over_commitment_severity_all",
+                "over_commitment_severity_given_overcommitment",
                 "text_modality_accuracy",
+                "text_modality_accuracy_all",
+                "text_modality_parse_coverage",
                 "label_text_consistency",
                 "text_over_commitment",
                 "text_high_conf_overcommit_80",
                 "text_high_conf_overcommit_90",
+                "strengthening_recall",
+                "false_preserve_rate",
+                "evidence_phrase_source_rate",
                 "error_detection_auroc",
                 "parse_failure_rate",
             ]
@@ -1052,10 +1289,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
                 model, task, uq_method = key
 
                 def acc_metric(sample_rows):
-                    return eu.accuracy_score(
-                        [int(row["y_true"]) for row in sample_rows],
-                        [int(row["y_pred"]) for row in sample_rows],
-                    )
+                    return eu.task_accuracy(sample_rows, task)
 
                 def brier_metric(sample_rows):
                     return eu.brier_score(
@@ -1087,7 +1321,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
         code(
             r"""
             benchmark_075 = []
-            for row in benchmark:
+            for row in result_benchmark:
                 row = dict(row)
                 row["numeric_strength"] = eu.NUMERIC_STRENGTH_RECOMMENDED_075[row["source_modality"]]
                 benchmark_075.append(row)
@@ -1098,7 +1332,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
             sensitivity_path = eu.variant_path(PROJECT_ROOT / "data/processed/metrics_summary_recommended075.csv", BENCHMARK_VARIANT)
             eu.write_csv_rows(sensitivity_path, summary_075)
             print(f"Wrote sensitivity summary: {sensitivity_path}")
-            print(eu.markdown_table(summary_075, ["model", "task", "uq_method", "spearman_modality_p_yes"]))
+            print(eu.markdown_table(summary_075, ["model", "task", "uq_method", "spearman_modality_p_yes", "pearson_modality_p_yes"]))
             """
         ),
     ]
@@ -1146,12 +1380,22 @@ def notebook_05() -> list[nbf.NotebookNode]:
                 "auroc",
                 "error_detection_auroc",
                 "monotonicity_violations",
-                "high_conf_overcommit_80",
-                "high_conf_overcommit_90",
-                "text_modality_accuracy",
+                "monotonicity_strict_violations",
+                "monotonicity_tolerance",
+                "monotonicity_mean_max_increase",
+                "monotonicity_max_increase",
+                "unsupported_mandatory_acceptance_90",
+                "high_conf_overcommit_all_90",
+                "high_conf_overcommit_overcommittable_90",
+                "weak_recall",
+                "weak_strengthening_90",
+                "over_commitment_severity_all",
+                "over_commitment_severity_given_overcommitment",
+                "text_modality_parse_coverage",
                 "label_text_consistency",
-                "text_over_commitment",
-                "text_high_conf_overcommit_90",
+                "strengthening_recall",
+                "false_preserve_rate",
+                "evidence_phrase_source_rate",
             ]
             table_md = eu.markdown_table(summary, paper_fields)
             table_path = eu.variant_path(PROJECT_ROOT / "outputs/paper_results_table.md", BENCHMARK_VARIANT)
@@ -1203,6 +1447,7 @@ def notebook_05() -> list[nbf.NotebookNode]:
                 "- Observation: <grounded result from metrics_summary.csv>.",
                 "- Observation: <grounded result from task1_p_yes_by_modality.svg>.",
                 "- Observation: <grounded high-confidence over-commitment result>.",
+                "- Observation: <grounded Task 3 self-verification result>.",
                 "",
                 "## Interpretation",
                 "- Hypothesis: <what the observed pattern may imply>.",
@@ -1229,6 +1474,7 @@ def main() -> None:
     write_notebook("02_pilot_local_llms.ipynb", notebook_02())
     write_notebook("02b_weak_modality_robustness_probe.ipynb", notebook_02b())
     write_notebook("03_run_experiments.ipynb", notebook_03())
+    write_notebook("03b_run_modality_verification.ipynb", notebook_03b())
     write_notebook("04_compute_uq_and_metrics.ipynb", notebook_04())
     write_notebook("05_analyze_and_export_results.ipynb", notebook_05())
 

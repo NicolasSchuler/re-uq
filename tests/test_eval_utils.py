@@ -138,8 +138,10 @@ class EvalUtilsTest(unittest.TestCase):
             ("The system SHOULD export reports.", "recommended"),
             ("The system MAY export reports.", "optional"),
             ("The system could export reports.", "optional"),
+            ("The system can export reports.", "optional"),
             ("It would be nice if the system could export reports.", "nice_to_have"),
-            ("The system exports reports.", "unknown"),
+            ("The system exports reports.", "mandatory"),
+            ("System provides export reports.", "mandatory"),
         ]
 
         for text, expected in cases:
@@ -224,6 +226,10 @@ class EvalUtilsTest(unittest.TestCase):
             eu.auto_capability_text('"The application must export reports as CSV."'),
             "export reports as CSV",
         )
+        self.assertEqual(
+            eu.auto_capability_text("'The system shall interface with CampusConnect's central server.'"),
+            "interface with CampusConnect's central server",
+        )
 
     def test_refresh_capability_suggestions_preserves_manual_edits(self):
         rows = [
@@ -305,11 +311,40 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertFalse(include)
         self.assertIn("multi_sentence", reason)
 
+    def test_automatic_filter_rejects_stranded_preposition_capability(self):
+        include, reason = eu.automatic_filter(
+            "The system shall interface with CampusConnect's central server.",
+            "with CampusConnect's central server",
+        )
+        self.assertFalse(include)
+        self.assertIn("stranded_preposition", reason)
+
     def test_parse_task2_response(self):
         raw = '{"requirement": "The system SHOULD export reports.", "modality": "should", "confidence": 80}'
         parsed, status = eu.parse_task_response("task2", raw)
         self.assertEqual(status, "ok")
         self.assertEqual(parsed["modality"], "recommended")
+
+    def test_parse_task3_response_and_relation_aliases(self):
+        raw = '{"relation": "stronger", "confidence": 82, "evidence_phrase": "MAY", "brief_reason": "upgraded"}'
+        parsed, status = eu.parse_task_response("task3", raw)
+
+        self.assertEqual(status, "ok")
+        self.assertEqual(parsed["relation"], "strengthens")
+        self.assertEqual(eu.normalize_relation("same modality"), "preserves")
+        self.assertEqual(eu.normalize_relation("content mismatch"), "content_changed")
+
+        _, status = eu.parse_task_response("task3", '{"relation":"preserves","confidence":50}')
+        self.assertEqual(status, "missing_fields")
+
+        _, status = eu.parse_task_response("task3", '{"relation":"unclear","confidence":50,"evidence_phrase":"MAY"}')
+        self.assertEqual(status, "invalid_label")
+
+    def test_task3_gold_relation_from_ordinal_modality(self):
+        self.assertEqual(eu.task3_gold_relation("nice_to_have", "recommended"), "strengthens")
+        self.assertEqual(eu.task3_gold_relation("optional", "mandatory"), "strengthens")
+        self.assertEqual(eu.task3_gold_relation("mandatory", "optional"), "weakens")
+        self.assertEqual(eu.task3_gold_relation("recommended", "recommended"), "preserves")
 
     def test_metrics(self):
         y_true = [1, 0, 1, 0]
@@ -317,6 +352,11 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertLess(eu.brier_score(y_true, p), 0.05)
         self.assertEqual(eu.auroc_score(y_true, p), 1.0)
         self.assertFalse(math.isnan(eu.ece_score(y_true, p)))
+        rank_strength = [1.0, 0.67, 0.33, 0.0]
+        recoded_strength = [1.0, 0.75, 0.33, 0.0]
+        p_yes = [1.0, 0.05, 0.0, 0.05]
+        self.assertEqual(eu.spearman_corr(rank_strength, p_yes), eu.spearman_corr(recoded_strength, p_yes))
+        self.assertNotEqual(eu.pearson_corr(rank_strength, p_yes), eu.pearson_corr(recoded_strength, p_yes))
 
     def test_distribution_uncertainty_helpers(self):
         distribution = eu.label_distribution(["yes", "yes", "no"], ["yes", "no"])
@@ -334,11 +374,23 @@ class EvalUtilsTest(unittest.TestCase):
             {"seed_id": "S1", "source_modality": "optional", "p_yes": 0.3},
             {"seed_id": "S1", "source_modality": "nice_to_have", "p_yes": 0.1},
             {"seed_id": "S2", "source_modality": "mandatory", "p_yes": 0.9},
-            {"seed_id": "S2", "source_modality": "recommended", "p_yes": 0.95},
+            {"seed_id": "S2", "source_modality": "recommended", "p_yes": 0.94},
             {"seed_id": "S2", "source_modality": "optional", "p_yes": 0.2},
             {"seed_id": "S2", "source_modality": "nice_to_have", "p_yes": 0.1},
+            {"seed_id": "S3", "source_modality": "mandatory", "p_yes": 0.9},
+            {"seed_id": "S3", "source_modality": "recommended", "p_yes": 0.96},
+            {"seed_id": "S3", "source_modality": "optional", "p_yes": 0.2},
+            {"seed_id": "S3", "source_modality": "nice_to_have", "p_yes": 0.1},
         ]
-        self.assertEqual(eu.monotonicity_violation_rate(rows), 0.5)
+        diagnostics = eu.monotonicity_violation_diagnostics(rows)
+
+        self.assertEqual(eu.monotonicity_violation_rate(rows), 1 / 3)
+        self.assertEqual(eu.monotonicity_violation_rate(rows, tolerance=0.0), 2 / 3)
+        self.assertEqual(diagnostics["monotonicity_violations"], 1 / 3)
+        self.assertEqual(diagnostics["monotonicity_strict_violations"], 2 / 3)
+        self.assertEqual(diagnostics["monotonicity_tolerance"], eu.MONOTONICITY_TOLERANCE)
+        self.assertAlmostEqual(diagnostics["monotonicity_mean_max_increase"], (0.0 + 0.04 + 0.06) / 3)
+        self.assertAlmostEqual(diagnostics["monotonicity_max_increase"], 0.06)
 
     def test_high_confidence_overcommitment_metrics(self):
         task1_rows = [
@@ -522,6 +574,185 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(summary[0]["accuracy"], 1.0)
         self.assertTrue(all("uncertainty_score" in row for row in scores))
 
+    def test_stale_raw_prompt_rows_are_excluded_from_scores(self):
+        benchmark = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0088",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall interface with CampusConnect's central server.",
+                    "capability_text_final": "interface with CampusConnect's central server",
+                }
+            ]
+        )
+        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        raw = {
+            "run_id": "r1",
+            "model": "m1",
+            "host": "http://localhost:8000/v1",
+            "task": "task1",
+            "item_id": item["item_id"],
+            "seed_id": item["seed_id"],
+            "source_modality": item["source_modality"],
+            "sample_index": 0,
+            "sample_kind": "deterministic",
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "prompt_version": "v1",
+            "raw_text": "",
+            "parsed_json": {"decision": "yes", "confidence": 90.0, "brief_reason": ""},
+            "parse_status": "ok",
+            "latency_s": 0.1,
+            "error": "",
+            "prompt": "Source statement:\n\"The system MUST with CampusConnect's central server.\"",
+        }
+
+        self.assertEqual(eu.benchmark_rows_with_current_raw_outputs(benchmark, [raw]), [])
+        self.assertEqual(eu.build_uq_scores(benchmark, [raw]), [])
+
+        fresh = {**raw, "prompt": f"Source statement:\n\"{item['source_statement']}\""}
+        self.assertEqual(len(eu.benchmark_rows_with_current_raw_outputs(benchmark, [fresh])), 1)
+        self.assertEqual(len(eu.build_uq_scores(benchmark, [fresh])), 1)
+
+    def test_build_task3_items_scores_and_summary(self):
+        benchmark = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0001",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall export reports.",
+                    "capability_text_final": "export reports",
+                }
+            ]
+        )
+        source_item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
+        task2_raw = [
+            {
+                "run_id": "full-r1",
+                "model": "m1",
+                "host": "http://localhost:8000/v1",
+                "task": "task2",
+                "item_id": source_item["item_id"],
+                "seed_id": source_item["seed_id"],
+                "source_modality": source_item["source_modality"],
+                "sample_index": 0,
+                "sample_kind": "deterministic",
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "prompt_version": "v1",
+                "raw_text": "",
+                "parsed_json": {"requirement": "The system SHOULD export reports.", "modality": "recommended", "confidence": 95.0},
+                "parse_status": "ok",
+                "latency_s": 0.1,
+                "error": "",
+            }
+        ]
+        task3_items = eu.build_task3_verification_items(benchmark, task2_raw)
+        item = task3_items[0]
+
+        self.assertEqual(len(task3_items), 1)
+        self.assertEqual(item["source_item_id"], source_item["item_id"])
+        self.assertEqual(item["task2_modality"], "recommended")
+        self.assertEqual(item["task3_gold_relation"], "strengthens")
+
+        raw_rows = [
+            {
+                "run_id": "task3-r1",
+                "model": "m1",
+                "host": "http://localhost:8000/v1",
+                "task": "task3",
+                "item_id": item["item_id"],
+                "seed_id": item["seed_id"],
+                "source_modality": item["source_modality"],
+                "sample_index": 0,
+                "sample_kind": "deterministic",
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "prompt_version": "v1:task3",
+                "raw_text": "",
+                "parsed_json": {
+                    "relation": "preserves",
+                    "confidence": 90.0,
+                    "evidence_phrase": "It would be useful if",
+                    "brief_reason": "missed upgrade",
+                },
+                "parse_status": "ok",
+                "latency_s": 0.1,
+                "error": "",
+            },
+            {
+                "run_id": "task3-r1",
+                "model": "m1",
+                "host": "http://localhost:8000/v1",
+                "task": "task3",
+                "item_id": item["item_id"],
+                "seed_id": item["seed_id"],
+                "source_modality": item["source_modality"],
+                "sample_index": 0,
+                "sample_kind": "stochastic",
+                "temperature": 0.7,
+                "top_p": 1.0,
+                "prompt_version": "v1:task3",
+                "raw_text": "",
+                "parsed_json": {"relation": "strengthens", "confidence": 80.0, "evidence_phrase": "It would be useful if"},
+                "parse_status": "ok",
+                "latency_s": 0.1,
+                "error": "",
+            },
+            {
+                "run_id": "task3-r1",
+                "model": "m1",
+                "host": "http://localhost:8000/v1",
+                "task": "task3",
+                "item_id": item["item_id"],
+                "seed_id": item["seed_id"],
+                "source_modality": item["source_modality"],
+                "sample_index": 1,
+                "sample_kind": "stochastic",
+                "temperature": 0.7,
+                "top_p": 1.0,
+                "prompt_version": "v1:task3",
+                "raw_text": "",
+                "parsed_json": {"relation": "strengthens", "confidence": 75.0, "evidence_phrase": "useful"},
+                "parse_status": "ok",
+                "latency_s": 0.1,
+                "error": "",
+            },
+            {
+                "run_id": "task3-r1",
+                "model": "m1",
+                "host": "http://localhost:8000/v1",
+                "task": "task3",
+                "item_id": item["item_id"],
+                "seed_id": item["seed_id"],
+                "source_modality": item["source_modality"],
+                "sample_index": 2,
+                "sample_kind": "stochastic",
+                "temperature": 0.7,
+                "top_p": 1.0,
+                "prompt_version": "v1:task3",
+                "raw_text": "",
+                "parsed_json": None,
+                "parse_status": "invalid_json",
+                "latency_s": 0.1,
+                "error": "",
+            },
+        ]
+
+        scores = eu.build_task3_scores(task3_items, raw_rows)
+        summary = eu.metric_summary_by_model_task_method(scores)
+        by_method = {row["uq_method"]: row for row in summary}
+
+        self.assertEqual({row["task"] for row in scores}, {"task3"})
+        self.assertEqual(by_method["verbalized_confidence"]["accuracy"], 0.0)
+        self.assertEqual(by_method["verbalized_confidence"]["f1_or_macro_f1"], 0.0)
+        self.assertEqual(by_method["verbalized_confidence"]["strengthening_recall"], 0.0)
+        self.assertEqual(by_method["verbalized_confidence"]["false_preserve_rate"], 1.0)
+        self.assertEqual(by_method["verbalized_confidence"]["evidence_phrase_source_rate"], 1.0)
+        self.assertEqual(by_method["relation_consistency"]["accuracy"], 1.0)
+        self.assertEqual(by_method["relation_consistency"]["f1_or_macro_f1"], 1.0)
+        self.assertAlmostEqual(by_method["relation_consistency"]["parse_failure_rate"], 1 / 3)
+
     def test_task2_summary_accuracy_uses_modality_labels(self):
         scores = [
             {
@@ -571,9 +802,41 @@ class EvalUtilsTest(unittest.TestCase):
         ]
 
         summary = eu.metric_summary_by_model_task_method(scores)
+        acc_point, _, _ = eu.bootstrap_seed_metric(
+            scores,
+            lambda sample_rows: eu.task_accuracy(sample_rows, "task2"),
+            iterations=10,
+        )
 
         self.assertEqual(summary[0]["accuracy"], 0.5)
+        self.assertEqual(acc_point, 0.5)
         self.assertEqual(summary[0]["f1_or_macro_f1"], eu.macro_f1_score(["nice_to_have", "optional"], ["recommended", "optional"], eu.MODALITIES))
+        self.assertEqual(summary[0]["over_commitment"], 0.5)
+        self.assertEqual(summary[0]["over_commitment_severity"], 1.0)
+        self.assertEqual(summary[0]["over_commitment_severity_all"], 1.0)
+        self.assertEqual(summary[0]["over_commitment_severity_given_overcommitment"], 2.0)
+        self.assertEqual(summary[0]["weak_recall"], 0.0)
+        self.assertEqual(summary[0]["weak_strengthening_90"], 1.0)
+        self.assertEqual(summary[0]["high_conf_overcommit_all_90"], 0.5)
+        self.assertEqual(summary[0]["high_conf_overcommit_overcommittable_90"], 0.5)
+
+    def test_high_confidence_denominators_are_explicit(self):
+        task1_rows = [
+            {"task": "task1", "y_true": 0, "p_yes": 0.95},
+            {"task": "task1", "y_true": 0, "p_yes": 0.40},
+            {"task": "task1", "y_true": 1, "p_yes": 0.99},
+        ]
+        task2_rows = [
+            {"task": "task2", "gold_modality": "nice_to_have", "pred_modality": "recommended", "confidence": 0.95},
+            {"task": "task2", "gold_modality": "optional", "pred_modality": "optional", "confidence": 0.95},
+            {"task": "task2", "gold_modality": "mandatory", "pred_modality": "mandatory", "confidence": 0.95},
+        ]
+
+        self.assertEqual(eu.unsupported_mandatory_acceptance_rate(task1_rows, 0.90), 0.5)
+        self.assertEqual(eu.high_confidence_overcommitment_rate(task1_rows, "task1", 0.90), 0.5)
+        self.assertEqual(eu.task2_high_confidence_overcommitment_rate(task2_rows, 0.90, denominator="all"), 1 / 3)
+        self.assertEqual(eu.task2_high_confidence_overcommitment_rate(task2_rows, 0.90, denominator="overcommittable"), 0.5)
+        self.assertEqual(eu.weak_strengthening_rate(task2_rows, 0.90), 1.0)
 
     def test_task2_deterministic_scores_include_text_modality_fields(self):
         benchmark = eu.build_benchmark_items(
@@ -617,7 +880,42 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertTrue(scores[0]["text_overcommit"])
         self.assertEqual(summary[0]["accuracy"], 1.0)
         self.assertEqual(summary[0]["text_modality_accuracy"], 0.0)
+        self.assertEqual(summary[0]["text_modality_accuracy_all"], 0.0)
+        self.assertEqual(summary[0]["text_modality_parse_coverage"], 1.0)
         self.assertEqual(summary[0]["text_high_conf_overcommit_90"], 1.0)
+
+    def test_text_modality_summary_reports_coverage_and_all_row_accuracy(self):
+        rows = [
+            {
+                "text_modality_parse_status": "ok",
+                "text_modality_correct": True,
+                "label_text_consistent": True,
+                "text_overcommit": False,
+                "text_undercommit": False,
+                "text_high_conf_overcommit_80": False,
+                "text_high_conf_overcommit_90": False,
+            },
+            {
+                "text_modality_parse_status": "unknown",
+                "text_modality_correct": False,
+                "label_text_consistent": False,
+                "text_overcommit": False,
+                "text_undercommit": False,
+                "text_high_conf_overcommit_80": False,
+                "text_high_conf_overcommit_90": False,
+            },
+        ]
+
+        metrics = eu.text_modality_summary_metrics(rows)
+
+        self.assertEqual(metrics["text_modality_accuracy"], 1.0)
+        self.assertEqual(metrics["text_modality_accuracy_all"], 0.5)
+        self.assertEqual(metrics["text_modality_parse_coverage"], 0.5)
+
+        empty_metrics = eu.text_modality_summary_metrics([{"text_modality_parse_status": ""}])
+        self.assertEqual(empty_metrics["text_modality_accuracy"], "")
+        self.assertEqual(empty_metrics["text_modality_accuracy_all"], "")
+        self.assertEqual(empty_metrics["text_modality_parse_coverage"], "")
 
     def test_external_evaluator_counts_label_text_mismatch(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -989,19 +1287,27 @@ class EvalUtilsTest(unittest.TestCase):
             {"run_id": "pilot-20260518-110000-bbbb", "value": 2},
             {"run_id": "full-20260518-120000-cccc", "value": 3},
             {"run_id": "full-20260518-120000-cccc", "value": 4},
+            {"run_id": "full-shall-20260518-130000-dddd", "value": 5},
         ]
         selected_run_id, rows = eu.select_run_rows(raw_rows, prefix="full")
         self.assertEqual(selected_run_id, "full-20260518-120000-cccc")
         self.assertEqual([row["value"] for row in rows], [3, 4])
+        self.assertFalse(eu.run_id_matches_prefix("full-shall-20260518-130000-dddd", "full"))
+        self.assertTrue(eu.run_id_matches_prefix("full-shall-20260518-130000-dddd", "full-shall"))
 
     def test_select_run_rows_honors_explicit_run_id(self):
         raw_rows = [
             {"run_id": "full-20260518-100000-aaaa", "value": 1},
             {"run_id": "full-20260518-120000-cccc", "value": 2},
+            {"run_id": "full-shall-20260518-130000-dddd", "value": 3},
         ]
         selected_run_id, rows = eu.select_run_rows(raw_rows, run_id="full-20260518-100000-aaaa", prefix="full")
         self.assertEqual(selected_run_id, "full-20260518-100000-aaaa")
         self.assertEqual([row["value"] for row in rows], [1])
+
+        selected_run_id, rows = eu.select_run_rows(raw_rows, run_id="full-shall-20260518-130000-dddd", prefix="full")
+        self.assertEqual(selected_run_id, "full-shall-20260518-130000-dddd")
+        self.assertEqual(rows, [])
 
     def test_calibration_probabilities_task1_use_p_yes(self):
         rows = [
@@ -1051,6 +1357,56 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertAlmostEqual(progress[0]["parse_success_rate"], 0.5)
         self.assertAlmostEqual(progress[0]["record_completion_rate"], 2 / 24)
         self.assertAlmostEqual(progress[0]["deterministic_item_coverage"], 0.25)
+
+    def test_complete_run_ids_from_progress_can_be_variant_scoped(self):
+        progress = []
+        for run_id in ["full-20260518-120000-aaaa", "full-shall-20260518-130000-bbbb"]:
+            for task in ["task1", "task2"]:
+                progress.append(
+                    {
+                        "run_id": run_id,
+                        "task": task,
+                        "record_completion_rate": 1.0,
+                        "deterministic_item_coverage": 1.0,
+                        "stochastic_complete_item_rate": 1.0,
+                    }
+                )
+
+        self.assertEqual(
+            eu.complete_run_ids_from_progress(progress, prefix="full"),
+            ["full-20260518-120000-aaaa"],
+        )
+        self.assertEqual(
+            eu.complete_run_ids_from_progress(progress, prefix="full-shall"),
+            ["full-shall-20260518-130000-bbbb"],
+        )
+
+    def test_run_progress_summary_ignores_rows_for_removed_benchmark_items(self):
+        benchmark = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0001",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall export reports.",
+                    "capability_text_final": "export reports",
+                }
+            ]
+        )
+        raw_rows = [
+            {
+                "run_id": "r1",
+                "model": "m1",
+                "task": "task1",
+                "item_id": "removed_item",
+                "sample_kind": "deterministic",
+                "parse_status": "ok",
+                "parsed_json": {"decision": "yes", "confidence": 90.0, "brief_reason": ""},
+            }
+        ]
+
+        progress = eu.run_progress_summary(benchmark, raw_rows, expected_stochastic_samples=5)
+
+        self.assertEqual(progress, [])
 
     def test_write_preliminary_result_snapshot(self):
         benchmark = eu.build_benchmark_items(

@@ -1,0 +1,27 @@
+You are auditing whether an extracted software requirement preserves the source statement.
+
+Source statement:
+"{source_statement}"
+
+Extracted requirement:
+"{extracted_requirement}"
+
+Declared extracted modality:
+"{extracted_modality}"
+
+Question:
+Compared with the source statement, does the extracted requirement preserve, strengthen, weaken, or change the functional content?
+
+Use these labels:
+- preserves: same functional content and same modality strength
+- strengthens: same functional content but stronger modality or stakeholder commitment
+- weakens: same functional content but weaker modality or stakeholder commitment
+- content_changed: functional content was added, removed, or changed
+
+Return JSON only:
+{{
+  "relation": "preserves" | "strengthens" | "weakens" | "content_changed",
+  "confidence": 0-100,
+  "evidence_phrase": "<exact phrase from the source that supports the relation>",
+  "brief_reason": "<max 16 words>"
+}}

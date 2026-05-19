@@ -66,6 +66,7 @@ class NotebookBoundaryTest(unittest.TestCase):
         "02_pilot_local_llms.ipynb": populate_notebooks.notebook_02,
         "02b_weak_modality_robustness_probe.ipynb": populate_notebooks.notebook_02b,
         "03_run_experiments.ipynb": populate_notebooks.notebook_03,
+        "03b_run_modality_verification.ipynb": populate_notebooks.notebook_03b,
         "04_compute_uq_and_metrics.ipynb": populate_notebooks.notebook_04,
         "05_analyze_and_export_results.ipynb": populate_notebooks.notebook_05,
     }
@@ -90,6 +91,23 @@ class NotebookBoundaryTest(unittest.TestCase):
                         continue
                     self.assertIsNone(cell.execution_count, f"{path} cell {index} has an execution count")
                     self.assertEqual(cell.outputs, [], f"{path} cell {index} has stored outputs")
+
+    def test_benchmark_manifest_tracks_prompt_inputs_and_metadata(self):
+        manifest = json.loads(Path("outputs/benchmark_manifest.json").read_text(encoding="utf-8"))
+        artifact_paths = {artifact["path"] for artifact in manifest["artifacts"]}
+        required_paths = {
+            "prompts/mandatory_entailment.txt",
+            "prompts/mandatory_entailment_strict.txt",
+            "prompts/modality_extraction.txt",
+            "prompts/modality_extraction_labels_only.txt",
+            "prompts/modality_verification.txt",
+        }
+
+        self.assertTrue(required_paths.issubset(artifact_paths))
+        self.assertEqual(manifest["metadata"]["main_benchmark"], "MUST")
+        self.assertEqual(manifest["metadata"]["robustness_benchmark"], "SHALL")
+        self.assertEqual(manifest["metadata"]["seed_count"], 120)
+        self.assertEqual(manifest["metadata"]["source_modalities"], eu.MODALITIES)
 
 
 class AggregationBoundaryTest(unittest.TestCase):
@@ -163,6 +181,9 @@ class ParsingAndExternalProbeTest(unittest.TestCase):
         self.assertEqual(status, "invalid_confidence")
 
         _, status = eu.parse_task_response("task2", '{"modality":"optional","confidence":80}')
+        self.assertEqual(status, "missing_fields")
+
+        _, status = eu.parse_task_response("task3", '{"relation":"preserves","confidence":80}')
         self.assertEqual(status, "missing_fields")
 
     def test_external_evaluator_reports_validation_anomalies(self):

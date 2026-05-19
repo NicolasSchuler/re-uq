@@ -37,6 +37,8 @@ import matplotlib.pyplot as plt
 
 
 MODALITIES = ["mandatory", "recommended", "optional", "nice_to_have"]
+TASK3_RELATIONS = ["preserves", "strengthens", "weakens", "content_changed"]
+MONOTONICITY_TOLERANCE = 0.05
 WEAK_MODALITY_PROBE_TEMPLATES = [
     {
         "template_id": "useful_if",
@@ -101,6 +103,24 @@ WEAK_MODALITY_PROBE_SUMMARY_FIELDS = [
     "pred_optional_rate",
     "pred_nice_to_have_rate",
     "mean_confidence",
+]
+TASK3_VERIFICATION_FIELDS = [
+    "item_id",
+    "source_item_id",
+    "seed_id",
+    "source_dataset",
+    "original_requirement",
+    "capability_text",
+    "source_modality",
+    "source_statement",
+    "task2_run_id",
+    "task2_model",
+    "task2_requirement",
+    "task2_modality",
+    "task2_confidence",
+    "task3_gold_relation",
+    "ordinal_strength",
+    "numeric_strength",
 ]
 ORDINAL_STRENGTH = {
     "mandatory": 3,
@@ -349,15 +369,12 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
 
 
 def latest_run_id(raw_rows: list[dict[str, Any]], prefix: str | None = None) -> str | None:
-    normalized_prefix = None
-    if prefix:
-        normalized_prefix = prefix if prefix.endswith("-") else f"{prefix}-"
     selected: list[str] = []
     for row in raw_rows:
         run_id = str(row.get("run_id", "")).strip()
         if not run_id:
             continue
-        if normalized_prefix and not run_id.startswith(normalized_prefix):
+        if not run_id_matches_prefix(run_id, prefix):
             continue
         if not selected or selected[-1] != run_id:
             selected.append(run_id)
@@ -372,7 +389,27 @@ def select_run_rows(
     selected_run_id = str(run_id).strip() if run_id else latest_run_id(raw_rows, prefix=prefix)
     if not selected_run_id:
         return None, []
+    if not run_id_matches_prefix(selected_run_id, prefix):
+        return selected_run_id, []
     return selected_run_id, [row for row in raw_rows if row.get("run_id") == selected_run_id]
+
+
+def run_id_matches_prefix(run_id: Any, prefix: str | None = None) -> bool:
+    if not prefix:
+        return True
+    candidate = str(run_id or "").strip()
+    normalized = str(prefix).strip().strip("-")
+    if not candidate:
+        return False
+    if not normalized:
+        return True
+    marker = f"{normalized}-"
+    if not candidate.startswith(marker):
+        return False
+    remainder = candidate[len(marker) :]
+    # Benchmark variants are encoded inside the run prefix, e.g. full-shall-*.
+    # A request for full-* should not also match full-shall-*.
+    return remainder.split("-", 1)[0] not in {"shall"}
 
 
 def append_jsonl(path: str | Path, row: dict[str, Any]) -> None:
@@ -405,6 +442,10 @@ NEGATION_RE = re.compile(r"\b(no|not|never|none|without|cannot|can't|won't|mustn
 FORMULA_RE = re.compile(r"(<=|>=|==|!=|[<>]|%|\b\d+\s*[*/+-]\s*\d+\b)")
 SENTENCE_END_RE = re.compile(r"[.!?]+")
 OUTER_QUOTES_RE = re.compile(r"^[\"'“”‘’]+|[\"'“”‘’]+$")
+STRANDED_PREPOSITION_RE = re.compile(
+    r"^(?:with|to|from|for|of|in|on|at|by|about|into|onto|through|across|under|over|between|among)\b",
+    re.I,
+)
 
 
 def normalize_space(text: str) -> str:
@@ -462,7 +503,7 @@ def auto_capability_text(requirement: str) -> str:
     text = re.sub(r"^[\-\*\d.)\s]+", "", text)
     for pattern in LEADING_REQUIREMENT_PATTERNS:
         text = pattern.sub("", text).strip()
-    text = re.sub(r"^(?:the\s+)?(?:system|software|application|app|product|platform|service|tool|interface|data|table)\s+", "", text, flags=re.I)
+    text = re.sub(r"^(?:the\s+)?(?:system|software|application|app|product|platform|service|tool|data|table)\s+", "", text, flags=re.I)
     text = re.sub(r"^(?:shall|must|should|may|will|can|could)\s+(?:be\s+able\s+to\s+)?", "", text, flags=re.I)
     text = re.sub(r"^(?:be\s+able\s+to|able\s+to)\s+", "", text, flags=re.I)
     return lower_initial(text)
@@ -488,6 +529,8 @@ def automatic_filter(requirement: str, capability: str) -> tuple[bool, str]:
         reasons.append("possibly_multiple_capabilities")
     if not capability or word_count(capability) < 2:
         reasons.append("empty_or_too_short_capability")
+    if STRANDED_PREPOSITION_RE.search(cleaned_capability):
+        reasons.append("stranded_preposition")
     return not reasons, ";".join(reasons)
 
 
@@ -675,6 +718,57 @@ def build_weak_modality_probe_items(
                     "original_requirement": seed.get("original_requirement", ""),
                 }
             )
+    return items
+
+
+def build_task3_verification_items(
+    benchmark_rows: list[dict[str, Any]],
+    task2_raw_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
+    task2_raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, task2_raw_rows)
+    items: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in task2_raw_rows:
+        if raw.get("task") != "task2" or raw.get("sample_kind") != "deterministic":
+            continue
+        if raw.get("parse_status") != "ok" or not isinstance(raw.get("parsed_json"), dict):
+            continue
+        source_item = benchmark_by_item.get(str(raw.get("item_id", "")))
+        if not source_item:
+            continue
+        parsed = raw["parsed_json"]
+        extracted_modality = normalize_modality(parsed.get("modality"))
+        if extracted_modality is None:
+            continue
+        model = str(raw.get("model", ""))
+        source_item_id = str(source_item["item_id"])
+        dedupe_key = (model, source_item_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        relation = task3_gold_relation(source_item["source_modality"], extracted_modality)
+        confidence = parse_confidence(parsed.get("confidence"))
+        items.append(
+            {
+                "item_id": f"{source_item_id}__task3__{safe_identifier(model)}",
+                "source_item_id": source_item_id,
+                "seed_id": source_item["seed_id"],
+                "source_dataset": source_item.get("source_dataset", "NICE"),
+                "original_requirement": source_item.get("original_requirement", ""),
+                "capability_text": source_item.get("capability_text", ""),
+                "source_modality": source_item["source_modality"],
+                "source_statement": source_item["source_statement"],
+                "task2_run_id": raw.get("run_id", ""),
+                "task2_model": model,
+                "task2_requirement": str(parsed.get("requirement", "")),
+                "task2_modality": extracted_modality,
+                "task2_confidence": "" if confidence is None else confidence,
+                "task3_gold_relation": relation,
+                "ordinal_strength": int(source_item["ordinal_strength"]),
+                "numeric_strength": float(source_item["numeric_strength"]),
+            }
+        )
     return items
 
 
@@ -1005,6 +1099,107 @@ def normalize_modality(value: Any) -> str | None:
     return aliases.get(text)
 
 
+def normalize_relation(value: Any) -> str | None:
+    text = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "preserve": "preserves",
+        "preserved": "preserves",
+        "preserves": "preserves",
+        "same": "preserves",
+        "same_modality": "preserves",
+        "faithful": "preserves",
+        "strengthen": "strengthens",
+        "strengthened": "strengthens",
+        "strengthens": "strengthens",
+        "stronger": "strengthens",
+        "upgrades": "strengthens",
+        "upgrade": "strengthens",
+        "overcommit": "strengthens",
+        "over_commitment": "strengthens",
+        "weaken": "weakens",
+        "weakened": "weakens",
+        "weakens": "weakens",
+        "weaker": "weakens",
+        "downgrade": "weakens",
+        "downgrades": "weakens",
+        "undercommit": "weakens",
+        "under_commitment": "weakens",
+        "content_changed": "content_changed",
+        "content_change": "content_changed",
+        "changed_content": "content_changed",
+        "content_mismatch": "content_changed",
+        "different_content": "content_changed",
+        "functionality_changed": "content_changed",
+    }
+    return aliases.get(text)
+
+
+def task3_gold_relation(source_modality: str, extracted_modality: str) -> str:
+    source = normalize_modality(source_modality)
+    extracted = normalize_modality(extracted_modality)
+    if source is None:
+        raise ValueError(f"Invalid source modality: {source_modality!r}")
+    if extracted is None:
+        raise ValueError(f"Invalid extracted modality: {extracted_modality!r}")
+    source_strength = ORDINAL_STRENGTH[source]
+    extracted_strength = ORDINAL_STRENGTH[extracted]
+    if extracted_strength > source_strength:
+        return "strengthens"
+    if extracted_strength < source_strength:
+        return "weakens"
+    return "preserves"
+
+
+def safe_identifier(value: Any) -> str:
+    text = re.sub(r"[^A-Za-z0-9]+", "_", str(value).strip()).strip("_").lower()
+    return text or "value"
+
+
+def evidence_phrase_in_source(evidence_phrase: Any, source_statement_text: Any) -> bool:
+    evidence = normalize_space(str(evidence_phrase or "")).lower()
+    source = normalize_space(str(source_statement_text or "")).lower()
+    return bool(evidence and evidence in source)
+
+
+def raw_record_matches_benchmark_item(raw: Mapping[str, Any], item: Mapping[str, Any]) -> bool:
+    prompt = raw.get("prompt")
+    if not prompt:
+        return True
+    source = normalize_space(str(item.get("source_statement", "")))
+    if not source:
+        return True
+    return source in normalize_space(str(prompt))
+
+
+def filter_raw_rows_to_current_benchmark(
+    benchmark_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    item_by_id = {str(row["item_id"]): row for row in benchmark_rows}
+    filtered: list[dict[str, Any]] = []
+    for raw in raw_rows:
+        item = item_by_id.get(str(raw.get("item_id", "")))
+        if item and raw_record_matches_benchmark_item(raw, item):
+            filtered.append(raw)
+    return filtered
+
+
+def benchmark_rows_with_current_raw_outputs(
+    benchmark_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not raw_rows:
+        return list(benchmark_rows)
+    item_by_id = {str(row["item_id"]): row for row in benchmark_rows}
+    fresh_item_ids = {
+        str(raw.get("item_id", ""))
+        for raw in raw_rows
+        if (item := item_by_id.get(str(raw.get("item_id", ""))))
+        and raw_record_matches_benchmark_item(raw, item)
+    }
+    return [row for row in benchmark_rows if str(row.get("item_id", "")) in fresh_item_ids]
+
+
 def rule_based_source_modality(source_statement_text: str) -> str | None:
     text = normalize_space(source_statement_text).lower()
     if re.match(r"^the system\s+(?:must|shall)\b", text):
@@ -1037,8 +1232,10 @@ def requirement_text_modality(requirement_text: Any) -> str:
         return "mandatory"
     if re.search(r"\b(?:should|recommended)\b", text):
         return "recommended"
-    if re.search(r"\b(?:may|optional|could)\b", text):
+    if re.search(r"\b(?:may|optional|could|can)\b", text):
         return "optional"
+    if re.match(r"^(?:the\s+)?system\s+\w+", text):
+        return "mandatory"
     return "unknown"
 
 
@@ -1109,6 +1306,17 @@ def parse_task_response(task: str, raw_text: str) -> tuple[dict[str, Any] | None
             return parsed, "missing_fields"
         parsed["modality"] = modality
         parsed["requirement"] = str(parsed.get("requirement", ""))
+        return parsed, "ok"
+
+    if task == "task3":
+        relation = normalize_relation(parsed.get("relation"))
+        if relation is None:
+            return parsed, "invalid_label"
+        if "evidence_phrase" not in parsed:
+            return parsed, "missing_fields"
+        parsed["relation"] = relation
+        parsed["evidence_phrase"] = str(parsed.get("evidence_phrase", ""))[:240]
+        parsed["brief_reason"] = str(parsed.get("brief_reason", ""))[:240]
         return parsed, "ok"
 
     raise ValueError(f"Unknown task: {task}")
@@ -1348,6 +1556,15 @@ def build_raw_record(
     }
     if "template_id" in item:
         record["template_id"] = item["template_id"]
+    for key in [
+        "source_item_id",
+        "task2_run_id",
+        "task2_model",
+        "task2_modality",
+        "task3_gold_relation",
+    ]:
+        if key in item:
+            record[key] = item[key]
     if request_index is not None:
         record["request_index"] = request_index
     return record
@@ -1461,6 +1678,19 @@ def spearman_corr(xs: list[float], ys: list[float]) -> float:
     return float(statistic) if not math.isnan(statistic) else math.nan
 
 
+def pearson_corr(xs: list[float], ys: list[float]) -> float:
+    if len(xs) < 2 or len(xs) != len(ys):
+        return math.nan
+    x = np.asarray(xs, dtype=float)
+    y = np.asarray(ys, dtype=float)
+    mask = ~(np.isnan(x) | np.isnan(y))
+    x = x[mask]
+    y = y[mask]
+    if x.size < 2 or float(np.std(x)) == 0.0 or float(np.std(y)) == 0.0:
+        return math.nan
+    return float(np.corrcoef(x, y)[0, 1])
+
+
 def auroc_score(y_true: list[int], probabilities: list[float]) -> float:
     if not y_true or len(set(y_true)) < 2:
         return math.nan
@@ -1475,6 +1705,8 @@ def class_order_for_task(task: str) -> list[str]:
         return ["yes", "no"]
     if task == "task2":
         return list(MODALITIES)
+    if task == "task3":
+        return list(TASK3_RELATIONS)
     raise ValueError(f"Unknown task: {task}")
 
 
@@ -1489,6 +1721,11 @@ def label_from_parsed(task: str, parsed: dict[str, Any]) -> str:
         if modality is None:
             raise ValueError(f"Invalid Task 2 modality: {parsed.get('modality')}")
         return modality
+    if task == "task3":
+        relation = normalize_relation(parsed.get("relation"))
+        if relation is None:
+            raise ValueError(f"Invalid Task 3 relation: {parsed.get('relation')}")
+        return relation
     raise ValueError(f"Unknown task: {task}")
 
 
@@ -1540,26 +1777,77 @@ def one_hot_distribution(label: str, label_order: list[str]) -> dict[str, float]
     return {candidate: 1.0 if candidate == label else 0.0 for candidate in label_order}
 
 
-def monotonicity_violation_rate(rows: list[dict[str, Any]], score_field: str = "p_yes") -> float:
+def task3_score_fields(item: dict[str, Any], pred_relation: str, evidence_phrase: Any = "") -> dict[str, Any]:
+    return {
+        "source_item_id": item.get("source_item_id", item.get("item_id", "")),
+        "gold_relation": item.get("task3_gold_relation", ""),
+        "pred_relation": pred_relation,
+        "task2_modality": item.get("task2_modality", ""),
+        "task2_requirement": item.get("task2_requirement", ""),
+        "evidence_phrase": str(evidence_phrase or ""),
+        "evidence_phrase_in_source": evidence_phrase_in_source(evidence_phrase, item.get("source_statement", "")),
+    }
+
+
+def monotonicity_violation_rate(
+    rows: list[dict[str, Any]],
+    score_field: str = "p_yes",
+    tolerance: float = MONOTONICITY_TOLERANCE,
+) -> float:
+    return monotonicity_violation_diagnostics(rows, score_field=score_field, tolerance=tolerance)["monotonicity_violations"]
+
+
+def monotonicity_violation_diagnostics(
+    rows: list[dict[str, Any]],
+    score_field: str = "p_yes",
+    tolerance: float = MONOTONICITY_TOLERANCE,
+) -> dict[str, float]:
     frame = pd.DataFrame.from_records(rows)
     if frame.empty or score_field not in frame.columns:
-        return math.nan
+        return {
+            "monotonicity_violations": math.nan,
+            "monotonicity_strict_violations": math.nan,
+            "monotonicity_tolerance": float(tolerance),
+            "monotonicity_mean_max_increase": math.nan,
+            "monotonicity_max_increase": math.nan,
+        }
     frame = frame[frame[score_field] != ""].copy()
     if frame.empty:
-        return math.nan
+        return {
+            "monotonicity_violations": math.nan,
+            "monotonicity_strict_violations": math.nan,
+            "monotonicity_tolerance": float(tolerance),
+            "monotonicity_mean_max_increase": math.nan,
+            "monotonicity_max_increase": math.nan,
+        }
     frame[score_field] = pd.to_numeric(frame[score_field])
     frame["_modality_sort"] = frame["source_modality"].map(lambda value: -ORDINAL_STRENGTH[str(value)])
-    checked = 0
-    violated = 0
+    max_increases: list[float] = []
     for _, seed_frame in frame.groupby("seed_id", sort=False):
         if len(seed_frame) < len(MODALITIES):
             continue
         ordered = seed_frame.sort_values("_modality_sort")
         scores = ordered[score_field].to_numpy(dtype=float)
-        checked += 1
-        if bool(np.any(np.diff(scores) > 1e-12)):
-            violated += 1
-    return math.nan if checked == 0 else violated / checked
+        diffs = np.diff(scores)
+        max_increases.append(max(0.0, float(np.max(diffs))))
+    if not max_increases:
+        return {
+            "monotonicity_violations": math.nan,
+            "monotonicity_strict_violations": math.nan,
+            "monotonicity_tolerance": float(tolerance),
+            "monotonicity_mean_max_increase": math.nan,
+            "monotonicity_max_increase": math.nan,
+        }
+    checked = len(max_increases)
+    strict_violations = sum(1 for value in max_increases if value > 1e-12)
+    tolerant_violations = sum(1 for value in max_increases if value > float(tolerance) + 1e-12)
+    return {
+        "monotonicity_violations": tolerant_violations / checked,
+        "monotonicity_strict_violations": strict_violations / checked,
+        "monotonicity_tolerance": float(tolerance),
+        "monotonicity_mean_max_increase": float(np.mean(max_increases)),
+        "monotonicity_max_increase": float(np.max(max_increases)),
+    }
 
 
 def bootstrap_ci(
@@ -1666,6 +1954,19 @@ def score_from_distribution(
             "pred_modality": pred_label,
             **empty_text_modality_fields(),
         }
+    if task == "task3":
+        gold_relation = item["task3_gold_relation"]
+        correct = 1 if pred_label == gold_relation else 0
+        return {
+            **common,
+            "y_true": correct,
+            "y_pred": correct,
+            "p_yes": "",
+            "gold_modality": item["source_modality"],
+            "pred_modality": item.get("task2_modality", ""),
+            **empty_text_modality_fields(),
+            **task3_score_fields(item, pred_label),
+        }
     raise ValueError(f"Unknown task: {task}")
 
 
@@ -1722,6 +2023,7 @@ def build_ensemble_disagreement_scores(
     raw_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
+    raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, raw_rows)
     raw_frame = pd.DataFrame.from_records(raw_rows)
     required_columns = {"sample_kind", "run_id", "task", "item_id", "model"}
     if raw_frame.empty or not required_columns.issubset(raw_frame.columns):
@@ -1764,6 +2066,7 @@ def build_ensemble_disagreement_scores(
 
 def build_uq_scores(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
+    raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, raw_rows)
     scores: list[dict[str, Any]] = []
 
     for raw in raw_rows:
@@ -1840,6 +2143,62 @@ def build_uq_scores(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[st
     return scores
 
 
+def build_task3_scores(task3_items: list[dict[str, Any]], raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    item_by_id = {row["item_id"]: row for row in task3_items}
+    scores: list[dict[str, Any]] = []
+
+    for raw in raw_rows:
+        if raw.get("task") != "task3" or raw.get("sample_kind") != "deterministic":
+            continue
+        item = item_by_id.get(str(raw.get("item_id", "")))
+        parsed = raw.get("parsed_json")
+        if not item or raw.get("parse_status") != "ok" or not isinstance(parsed, dict):
+            continue
+        pred_relation = normalize_relation(parsed.get("relation"))
+        if pred_relation is None:
+            continue
+        confidence = float(parsed["confidence"]) / 100.0
+        gold_relation = item["task3_gold_relation"]
+        correct = 1 if pred_relation == gold_relation else 0
+        base = score_base(raw, item, "verbalized_confidence", valid_n=1, total_n=1)
+        scores.append(
+            {
+                **base,
+                "y_true": correct,
+                "y_pred": correct,
+                "p_yes": "",
+                "confidence": confidence,
+                "uncertainty_score": 1.0 - confidence,
+                "uncertainty_measure": "one_minus_confidence",
+                "label_distribution": "",
+                "gold_modality": item["source_modality"],
+                "pred_modality": item.get("task2_modality", ""),
+                **empty_text_modality_fields(),
+                **task3_score_fields(item, pred_relation, parsed.get("evidence_phrase", "")),
+            }
+        )
+
+    raw_frame = pd.DataFrame.from_records(raw_rows)
+    if raw_frame.empty or "sample_kind" not in raw_frame.columns:
+        return scores
+    stochastic_frame = raw_frame[(raw_frame["sample_kind"] == "stochastic") & (raw_frame["task"] == "task3")]
+    if stochastic_frame.empty:
+        return scores
+
+    for (_, item_id, _), group_frame in stochastic_frame.groupby(["model", "item_id", "run_id"], sort=False):
+        group = group_frame.to_dict(orient="records")
+        item = item_by_id.get(str(item_id))
+        if not item:
+            continue
+        valid = [row for row in group if row.get("parse_status") == "ok" and isinstance(row.get("parsed_json"), dict)]
+        if not valid:
+            continue
+        distribution = label_distribution_from_rows("task3", valid)
+        scores.extend(distribution_score_rows(valid[0], item, distribution, len(valid), len(group), "relation_consistency"))
+
+    return scores
+
+
 def run_progress_summary(
     benchmark_rows: list[dict[str, Any]],
     raw_rows: list[dict[str, Any]],
@@ -1851,10 +2210,14 @@ def run_progress_summary(
     required = {"run_id", "model", "task", "item_id", "sample_kind", "parse_status"}
     if frame.empty or not required.issubset(frame.columns):
         return []
-    benchmark_item_count = len({row["item_id"] for row in benchmark_rows})
+    benchmark_item_ids = {str(row["item_id"]) for row in benchmark_rows}
+    benchmark_item_count = len(benchmark_item_ids)
     expected_stochastic_samples = max(0, int(expected_stochastic_samples))
     rows: list[dict[str, Any]] = []
     for (run_id, model, task), group_frame in frame.groupby(["run_id", "model", "task"], sort=False):
+        group_frame = group_frame[group_frame["item_id"].astype(str).isin(benchmark_item_ids)]
+        if group_frame.empty:
+            continue
         deterministic = group_frame[group_frame["sample_kind"] == "deterministic"]
         stochastic = group_frame[group_frame["sample_kind"] == "stochastic"]
         ok_count = int((group_frame["parse_status"] == "ok").sum())
@@ -1889,6 +2252,34 @@ def run_progress_summary(
     return rows
 
 
+def complete_run_ids_from_progress(
+    progress_rows: list[dict[str, Any]],
+    expected_tasks: Iterable[str] = ("task1", "task2"),
+    prefix: str | None = None,
+) -> list[str]:
+    if not progress_rows:
+        return []
+    expected_task_set = {str(task) for task in expected_tasks}
+    complete: list[str] = []
+    frame = pd.DataFrame.from_records(progress_rows)
+    if frame.empty or "run_id" not in frame.columns:
+        return complete
+    for run_id, group_frame in frame.groupby("run_id", sort=False):
+        if not run_id_matches_prefix(run_id, prefix):
+            continue
+        tasks = set(group_frame["task"].astype(str).tolist()) if "task" in group_frame.columns else set()
+        if not expected_task_set.issubset(tasks):
+            continue
+        completion_columns = ["record_completion_rate", "deterministic_item_coverage", "stochastic_complete_item_rate"]
+        if all(
+            column in group_frame.columns
+            and bool((pd.to_numeric(group_frame[column], errors="coerce") >= 1.0).all())
+            for column in completion_columns
+        ):
+            complete.append(str(run_id))
+    return complete
+
+
 def preliminary_result_paths(root: str | Path, variant: str | None = None) -> dict[str, Path]:
     root = Path(root)
     return {
@@ -1908,9 +2299,10 @@ def write_preliminary_result_snapshot(
     include_baseline: bool = True,
 ) -> dict[str, Any]:
     paths = preliminary_result_paths(root, variant)
-    scores = build_uq_scores(benchmark_rows, raw_rows)
+    scored_benchmark_rows = benchmark_rows_with_current_raw_outputs(benchmark_rows, raw_rows)
+    scores = build_uq_scores(scored_benchmark_rows, raw_rows)
     if include_baseline:
-        scores.extend(build_rule_baseline_scores(benchmark_rows))
+        scores.extend(build_rule_baseline_scores(scored_benchmark_rows))
     summary = metric_summary_by_model_task_method(scores)
     progress = run_progress_summary(
         benchmark_rows,
@@ -1961,9 +2353,27 @@ def write_preliminary_result_snapshot(
         "auroc",
         "error_detection_auroc",
         "monotonicity_violations",
+        "monotonicity_strict_violations",
+        "monotonicity_tolerance",
+        "monotonicity_mean_max_increase",
+        "monotonicity_max_increase",
+        "pearson_modality_p_yes",
         "high_conf_overcommit_80",
         "high_conf_overcommit_90",
+        "unsupported_mandatory_acceptance_80",
+        "unsupported_mandatory_acceptance_90",
+        "high_conf_overcommit_all_80",
+        "high_conf_overcommit_all_90",
+        "high_conf_overcommit_overcommittable_80",
+        "high_conf_overcommit_overcommittable_90",
+        "weak_recall",
+        "weak_strengthening_80",
+        "weak_strengthening_90",
+        "over_commitment_severity_all",
+        "over_commitment_severity_given_overcommitment",
         "text_modality_accuracy",
+        "text_modality_accuracy_all",
+        "text_modality_parse_coverage",
         "label_text_consistency",
         "text_over_commitment",
         "text_under_commitment",
@@ -2288,9 +2698,14 @@ def grouped(rows: Iterable[dict[str, Any]], keys: list[str]) -> dict[tuple[Any, 
     return groups
 
 
-def overcommitment_metrics(rows: list[dict[str, Any]]) -> tuple[float, float, float]:
+def overcommitment_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, float]:
     if not rows:
-        return math.nan, math.nan, math.nan
+        return {
+            "over_commitment": math.nan,
+            "under_commitment": math.nan,
+            "over_commitment_severity_all": math.nan,
+            "over_commitment_severity_given_overcommitment": math.nan,
+        }
     over = 0
     under = 0
     severity_sum = 0.0
@@ -2303,7 +2718,85 @@ def overcommitment_metrics(rows: list[dict[str, Any]]) -> tuple[float, float, fl
         if pred < gold:
             under += 1
     total = len(rows)
-    return over / total, under / total, severity_sum / total
+    return {
+        "over_commitment": over / total,
+        "under_commitment": under / total,
+        "over_commitment_severity_all": severity_sum / total,
+        "over_commitment_severity_given_overcommitment": (severity_sum / over) if over else math.nan,
+    }
+
+
+def overcommitment_metrics(rows: list[dict[str, Any]]) -> tuple[float, float, float]:
+    metrics = overcommitment_summary_metrics(rows)
+    return (
+        metrics["over_commitment"],
+        metrics["under_commitment"],
+        metrics["over_commitment_severity_all"],
+    )
+
+
+def unsupported_mandatory_acceptance_rate(rows: list[dict[str, Any]], threshold: float) -> float:
+    weak_rows = [row for row in rows if str(row.get("task", "")) == "task1" and int(row["y_true"]) == 0]
+    if not weak_rows:
+        return math.nan
+    accepted = [row for row in weak_rows if row.get("p_yes") != "" and float(row["p_yes"]) >= threshold]
+    return len(accepted) / len(weak_rows)
+
+
+def task2_high_confidence_overcommitment_rate(
+    rows: list[dict[str, Any]],
+    threshold: float,
+    denominator: str = "all",
+) -> float:
+    task_rows = [row for row in rows if str(row.get("task", "")) == "task2"]
+    if denominator == "overcommittable":
+        task_rows = [
+            row
+            for row in task_rows
+            if ORDINAL_STRENGTH[str(row["gold_modality"])] < max(ORDINAL_STRENGTH.values())
+        ]
+    elif denominator != "all":
+        raise ValueError(f"Unknown Task 2 high-confidence denominator: {denominator}")
+    if not task_rows:
+        return math.nan
+    over = []
+    for row in task_rows:
+        gold = ORDINAL_STRENGTH[row["gold_modality"]]
+        pred = ORDINAL_STRENGTH[row["pred_modality"]]
+        if pred > gold and float(row["confidence"]) >= threshold:
+            over.append(row)
+    return len(over) / len(task_rows)
+
+
+def weak_strengthening_rate(rows: list[dict[str, Any]], threshold: float | None = None) -> float:
+    weak_rows = [
+        row
+        for row in rows
+        if str(row.get("task", "")) == "task2" and str(row.get("gold_modality", "")) == "nice_to_have"
+    ]
+    if not weak_rows:
+        return math.nan
+    strengthened = []
+    for row in weak_rows:
+        pred_strength = ORDINAL_STRENGTH[str(row["pred_modality"])]
+        if pred_strength <= ORDINAL_STRENGTH["nice_to_have"]:
+            continue
+        if threshold is not None and float(row["confidence"]) < threshold:
+            continue
+        strengthened.append(row)
+    return len(strengthened) / len(weak_rows)
+
+
+def weak_modality_recall(rows: list[dict[str, Any]]) -> float:
+    weak_rows = [
+        row
+        for row in rows
+        if str(row.get("task", "")) == "task2" and str(row.get("gold_modality", "")) == "nice_to_have"
+    ]
+    if not weak_rows:
+        return math.nan
+    preserved = [row for row in weak_rows if str(row.get("pred_modality", "")) == "nice_to_have"]
+    return len(preserved) / len(weak_rows)
 
 
 def high_confidence_overcommitment_rate(rows: list[dict[str, Any]], task: str, threshold: float) -> float:
@@ -2311,19 +2804,11 @@ def high_confidence_overcommitment_rate(rows: list[dict[str, Any]], task: str, t
     if not task_rows:
         return math.nan
     if task == "task1":
-        weak_rows = [row for row in task_rows if int(row["y_true"]) == 0]
-        if not weak_rows:
-            return math.nan
-        over = [row for row in weak_rows if row.get("p_yes") != "" and float(row["p_yes"]) >= threshold]
-        return len(over) / len(weak_rows)
+        return unsupported_mandatory_acceptance_rate(task_rows, threshold)
     if task == "task2":
-        over = []
-        for row in task_rows:
-            gold = ORDINAL_STRENGTH[row["gold_modality"]]
-            pred = ORDINAL_STRENGTH[row["pred_modality"]]
-            if pred > gold and float(row["confidence"]) >= threshold:
-                over.append(row)
-        return len(over) / len(task_rows)
+        return task2_high_confidence_overcommitment_rate(task_rows, threshold, denominator="all")
+    if task == "task3":
+        return math.nan
     return math.nan
 
 
@@ -2334,10 +2819,33 @@ def _truthy(value: Any) -> bool:
 
 
 def text_modality_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, float | str]:
-    text_rows = [row for row in rows if str(row.get("text_modality_parse_status", "")) == "ok"]
+    diagnostic_rows = [
+        row
+        for row in rows
+        if str(row.get("text_modality_parse_status", "")) in {"ok", "unknown"}
+    ]
+    if not diagnostic_rows:
+        return {
+            "text_modality_accuracy": "",
+            "text_modality_accuracy_all": "",
+            "text_modality_parse_coverage": "",
+            "label_text_consistency": "",
+            "text_over_commitment": "",
+            "text_under_commitment": "",
+            "text_high_conf_overcommit_80": "",
+            "text_high_conf_overcommit_90": "",
+        }
+    total_rows = len(diagnostic_rows)
+    text_rows = [row for row in diagnostic_rows if str(row.get("text_modality_parse_status", "")) == "ok"]
+    coverage = len(text_rows) / total_rows
+    correct_over_all = (
+        sum(1 for row in diagnostic_rows if _truthy(row.get("text_modality_correct"))) / total_rows
+    )
     if not text_rows:
         return {
             "text_modality_accuracy": "",
+            "text_modality_accuracy_all": correct_over_all,
+            "text_modality_parse_coverage": coverage,
             "label_text_consistency": "",
             "text_over_commitment": "",
             "text_under_commitment": "",
@@ -2347,6 +2855,8 @@ def text_modality_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, float
     total = len(text_rows)
     return {
         "text_modality_accuracy": sum(1 for row in text_rows if _truthy(row.get("text_modality_correct"))) / total,
+        "text_modality_accuracy_all": correct_over_all,
+        "text_modality_parse_coverage": coverage,
         "label_text_consistency": sum(1 for row in text_rows if _truthy(row.get("label_text_consistent"))) / total,
         "text_over_commitment": sum(1 for row in text_rows if _truthy(row.get("text_overcommit"))) / total,
         "text_under_commitment": sum(1 for row in text_rows if _truthy(row.get("text_undercommit"))) / total,
@@ -2462,7 +2972,7 @@ def prediction_error_labels(rows: list[dict[str, Any]], task: str) -> list[int]:
     for row in rows:
         if task == "task1":
             labels.append(1 if int(row["y_true"]) != int(row["y_pred"]) else 0)
-        elif task == "task2":
+        elif task in {"task2", "task3"}:
             labels.append(1 - int(row["y_true"]))
         else:
             raise ValueError(f"Unknown task: {task}")
@@ -2487,6 +2997,54 @@ def error_detection_auroc(rows: list[dict[str, Any]], task: str) -> float:
     return auroc_score(errors, uncertainty_scores)
 
 
+def task3_strengthening_recall(rows: list[dict[str, Any]]) -> float:
+    strengthened = [row for row in rows if str(row.get("gold_relation", "")) == "strengthens"]
+    if not strengthened:
+        return math.nan
+    detected = [row for row in strengthened if str(row.get("pred_relation", "")) == "strengthens"]
+    return len(detected) / len(strengthened)
+
+
+def task3_false_preserve_rate(rows: list[dict[str, Any]]) -> float:
+    strengthened = [row for row in rows if str(row.get("gold_relation", "")) == "strengthens"]
+    if not strengthened:
+        return math.nan
+    false_preserve = [row for row in strengthened if str(row.get("pred_relation", "")) == "preserves"]
+    return len(false_preserve) / len(strengthened)
+
+
+def task3_evidence_phrase_source_rate(rows: list[dict[str, Any]]) -> float | str:
+    evidence_rows = [row for row in rows if str(row.get("evidence_phrase", "")).strip()]
+    if not evidence_rows:
+        return ""
+    return sum(1 for row in evidence_rows if _truthy(row.get("evidence_phrase_in_source"))) / len(evidence_rows)
+
+
+def task_accuracy(rows: list[dict[str, Any]], task: str) -> float:
+    if not rows:
+        return math.nan
+    if task == "task2":
+        return accuracy_score(
+            [str(row["gold_modality"]) for row in rows],
+            [str(row["pred_modality"]) for row in rows],
+        )
+    if task == "task3":
+        return accuracy_score(
+            [str(row["gold_relation"]) for row in rows],
+            [str(row["pred_relation"]) for row in rows],
+        )
+    return accuracy_score(
+        [int(row["y_true"]) for row in rows],
+        [int(row["y_pred"]) for row in rows],
+    )
+
+
+def labels_present_in_rows(rows: list[dict[str, Any]], field: str, label_order: list[str]) -> list[str]:
+    present = {str(row.get(field, "")) for row in rows}
+    labels = [label for label in label_order if label in present]
+    return labels or list(label_order)
+
+
 def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not scores:
         return []
@@ -2497,19 +3055,12 @@ def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[di
         y_true = group_frame["y_true"].astype(int).tolist()
         y_pred = group_frame["y_pred"].astype(int).tolist()
         calibration_scores = calibration_probabilities(rows, str(task))
-        if task == "task2":
-            accuracy = accuracy_score(
-                group_frame["gold_modality"].astype(str).tolist(),
-                group_frame["pred_modality"].astype(str).tolist(),
-            )
-        else:
-            accuracy = accuracy_score(y_true, y_pred)
         summary: dict[str, Any] = {
             "model": model,
             "task": task,
             "uq_method": uq_method,
             "n": len(rows),
-            "accuracy": accuracy,
+            "accuracy": task_accuracy(rows, str(task)),
             "brier": brier_score(y_true, calibration_scores),
             "ece": ece_score(y_true, calibration_scores),
             "error_detection_auroc": error_detection_auroc(rows, str(task)),
@@ -2518,23 +3069,59 @@ def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[di
                 / max(1, int(group_frame["total_n"].astype(int).sum()))
             ),
             "text_modality_accuracy": "",
+            "text_modality_accuracy_all": "",
+            "text_modality_parse_coverage": "",
             "label_text_consistency": "",
             "text_over_commitment": "",
             "text_under_commitment": "",
             "text_high_conf_overcommit_80": "",
             "text_high_conf_overcommit_90": "",
+            "strengthening_recall": "",
+            "false_preserve_rate": "",
+            "evidence_phrase_source_rate": "",
+            "monotonicity_strict_violations": "",
+            "monotonicity_tolerance": "",
+            "monotonicity_mean_max_increase": "",
+            "monotonicity_max_increase": "",
+            "unsupported_mandatory_acceptance_80": "",
+            "unsupported_mandatory_acceptance_90": "",
+            "high_conf_overcommit_all_80": "",
+            "high_conf_overcommit_all_90": "",
+            "high_conf_overcommit_overcommittable_80": "",
+            "high_conf_overcommit_overcommittable_90": "",
+            "weak_recall": "",
+            "weak_strengthening_80": "",
+            "weak_strengthening_90": "",
+            "over_commitment_severity_all": "",
+            "over_commitment_severity_given_overcommitment": "",
         }
         for threshold in HIGH_CONFIDENCE_THRESHOLDS:
-            key = f"high_conf_overcommit_{int(threshold * 100):02d}"
-            summary[key] = high_confidence_overcommitment_rate(rows, str(task), threshold)
+            suffix = f"{int(threshold * 100):02d}"
+            summary[f"high_conf_overcommit_{suffix}"] = high_confidence_overcommitment_rate(rows, str(task), threshold)
+            if task == "task1":
+                summary[f"unsupported_mandatory_acceptance_{suffix}"] = unsupported_mandatory_acceptance_rate(rows, threshold)
+            elif task == "task2":
+                summary[f"high_conf_overcommit_all_{suffix}"] = task2_high_confidence_overcommitment_rate(
+                    rows,
+                    threshold,
+                    denominator="all",
+                )
+                summary[f"high_conf_overcommit_overcommittable_{suffix}"] = task2_high_confidence_overcommitment_rate(
+                    rows,
+                    threshold,
+                    denominator="overcommittable",
+                )
+                summary[f"weak_strengthening_{suffix}"] = weak_strengthening_rate(rows, threshold)
         if task == "task1":
             p_yes = group_frame["p_yes"].astype(float).tolist()
+            monotonicity_metrics = monotonicity_violation_diagnostics(rows, "p_yes")
             summary.update(
                 {
                     "f1_or_macro_f1": binary_f1_score(y_true, y_pred),
                     "auroc": auroc_score(y_true, p_yes),
                     "spearman_modality_p_yes": spearman_corr(group_frame["numeric_strength"].astype(float).tolist(), p_yes),
-                    "monotonicity_violations": monotonicity_violation_rate(rows, "p_yes"),
+                    "pearson_modality_p_yes": pearson_corr(group_frame["numeric_strength"].astype(float).tolist(), p_yes),
+                    **monotonicity_metrics,
                     "over_commitment": "",
                     "under_commitment": "",
                     "over_commitment_severity": "",
@@ -2543,18 +3130,44 @@ def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[di
         elif task == "task2":
             gold = group_frame["gold_modality"].astype(str).tolist()
             pred = group_frame["pred_modality"].astype(str).tolist()
-            over, under, severity = overcommitment_metrics(rows)
+            over_metrics = overcommitment_summary_metrics(rows)
             text_metrics = text_modality_summary_metrics(rows)
             summary.update(
                 {
                     "f1_or_macro_f1": macro_f1_score(gold, pred, MODALITIES),
                     "auroc": "",
                     "spearman_modality_p_yes": "",
+                    "pearson_modality_p_yes": "",
                     "monotonicity_violations": "",
-                    "over_commitment": over,
-                    "under_commitment": under,
-                    "over_commitment_severity": severity,
+                    "over_commitment": over_metrics["over_commitment"],
+                    "under_commitment": over_metrics["under_commitment"],
+                    # Backward-compatible alias: this is severity averaged over all valid outputs.
+                    "over_commitment_severity": over_metrics["over_commitment_severity_all"],
+                    "over_commitment_severity_all": over_metrics["over_commitment_severity_all"],
+                    "over_commitment_severity_given_overcommitment": over_metrics[
+                        "over_commitment_severity_given_overcommitment"
+                    ],
+                    "weak_recall": weak_modality_recall(rows),
                     **text_metrics,
+                }
+            )
+        elif task == "task3":
+            gold = group_frame["gold_relation"].astype(str).tolist()
+            pred = group_frame["pred_relation"].astype(str).tolist()
+            gold_labels = labels_present_in_rows(rows, "gold_relation", TASK3_RELATIONS)
+            summary.update(
+                {
+                    "f1_or_macro_f1": macro_f1_score(gold, pred, gold_labels),
+                    "auroc": "",
+                    "spearman_modality_p_yes": "",
+                    "pearson_modality_p_yes": "",
+                    "monotonicity_violations": "",
+                    "over_commitment": "",
+                    "under_commitment": "",
+                    "over_commitment_severity": "",
+                    "strengthening_recall": task3_strengthening_recall(rows),
+                    "false_preserve_rate": task3_false_preserve_rate(rows),
+                    "evidence_phrase_source_rate": task3_evidence_phrase_source_rate(rows),
                 }
             )
         summaries.append(summary)
@@ -2613,12 +3226,20 @@ def uq_method_inventory_rows() -> list[dict[str, Any]]:
             "notes": "Task 2 majority frequency over modality classes.",
         },
         {
+            "uq_method": "relation_consistency",
+            "survey_family": "semantic-similarity / consistency UQ",
+            "access_requirement": "black-box stochastic verifier samples",
+            "extra_inference_cost": "K stochastic Task 3 calls",
+            "headline": "diagnostic",
+            "notes": "Task 3 majority frequency over source-grounded relation labels.",
+        },
+        {
             "uq_method": "predictive_entropy",
             "survey_family": "semantic-similarity / distributional UQ",
             "access_requirement": "black-box stochastic samples",
             "extra_inference_cost": "reuses K stochastic calls",
             "headline": "yes",
-            "notes": "Normalized entropy over task labels; modality-class entropy is the task-specific semantic analogue.",
+            "notes": "Normalized entropy over the same stochastic label distribution; report as an uncertainty signal, not a separate prediction method.",
         },
         {
             "uq_method": "variation_ratio",
@@ -2626,7 +3247,7 @@ def uq_method_inventory_rows() -> list[dict[str, Any]]:
             "access_requirement": "black-box stochastic samples",
             "extra_inference_cost": "reuses K stochastic calls",
             "headline": "yes",
-            "notes": "One minus the empirical probability of the majority label.",
+            "notes": "One minus the empirical probability of the majority label; report as an uncertainty signal, not a separate prediction method.",
         },
         {
             "uq_method": "model_ensemble_disagreement",

@@ -12,6 +12,8 @@ Use **commitment normalization** as an explanatory shorthand, not as the primary
 
 Treat Task 1 as a capability/control task and Task 2 as the main empirical task. In the current pilot, the model handled mandatory entailment correctly but failed to preserve weak stakeholder intent during extraction.
 
+Add Task 3 as a source-grounded self-verification diagnostic over deterministic Task 2 outputs. Task 3 asks the same model whether its extraction preserved, strengthened, weakened, or changed the source statement; it audits fidelity but does not revise or repair outputs.
+
 For paper-facing wording and caveats, see `docs/paper_framing.md`.
 
 ## Environment
@@ -26,7 +28,7 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 - Run `notebooks/00_prepare_data.ipynb`.
 - Load or download the NICE/PROMISE-derived CSV into `data/raw/`.
 - Generate `data/processed/seeds_review.csv`.
-- Manually review included seeds until exactly 120 accepted capabilities remain.
+- Manually review included seeds until the configured target count of accepted capabilities remains.
 
 ## Dataset Scope
 
@@ -49,6 +51,7 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 
 - Add a deterministic rule-based modality baseline as a sanity comparator, not a competing ML method.
 - Add high-confidence over-commitment metrics at thresholds `0.80` and `0.90`.
+- Add Task 3 source-grounded modality verification after the full run, using `prompts/modality_verification.txt` and writing `data/processed/model_outputs_raw_task3_verification.jsonl`.
 - Add one Task 1 prompt-sensitivity check on the pilot subset using `prompts/mandatory_entailment_strict.txt`.
 - Add one focused Task 2 prompt-validity check for `nice_to_have` sources using `prompts/modality_extraction_labels_only.txt`, which states the allowed output labels without giving deterministic mapping rules or examples.
 - Add `notebooks/02b_weak_modality_robustness_probe.ipynb` before full runs to test whether the `nice_to_have` failure is phrase-specific or robust across weak stakeholder-intent phrasings.
@@ -96,12 +99,26 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 - Set `RUN_FULL_EXPERIMENT=true` after the pilot passes.
 - Cache every raw response in `data/processed/model_outputs_raw.jsonl`.
 
+## Phase 4b: Run Source-Grounded Modality Verification
+
+- Run `notebooks/03b_run_modality_verification.ipynb` after a complete full run.
+- Build `data/processed/task3_verification_items.csv` from valid deterministic Task 2 outputs.
+- Run the same model as verifier for each extraction, with deterministic decoding plus stochastic verifier samples.
+- Cache raw Task 3 responses in `data/processed/model_outputs_raw_task3_verification.jsonl`.
+
 ## Phase 5: Compute UQ and Metrics
 
 - Run `notebooks/04_compute_uq_and_metrics.ipynb`.
 - Analyze one full experiment run at a time. The notebook selects the latest `full-*` run by default; set `RUN_ID` or `ANALYSIS_RUN_ID` to reproduce an earlier run.
-- Compute verbalized confidence, label self-consistency, modality consistency, predictive entropy, variation ratio, and model-ensemble disagreement when available.
-- Export UQ scores, metric summaries, rule-baseline rows, bootstrap confidence intervals, high-confidence over-commitment rates, error-detection AUROC, and the recommended-strength sensitivity check.
+- Compute verbalized confidence, label self-consistency, modality consistency, relation consistency, predictive entropy, variation ratio, and model-ensemble disagreement when available.
+- Export UQ scores, metric summaries, rule-baseline rows, bootstrap confidence intervals, high-confidence risk rates, error-detection AUROC, and the recommended-strength sensitivity check.
+- Use precise denominator-specific names for high-confidence risks:
+  - Task 1 `unsupported_mandatory_acceptance@tau`: among non-mandatory sources, the fraction assigned `p_yes >= tau` for the mandatory candidate.
+  - Task 2 `HC-OC_all@tau`: among all valid Task 2 outputs, the fraction that strengthen the source and have confidence at least `tau`.
+  - Task 2 `HC-OC_overcommittable@tau`: the same numerator, but excluding mandatory source rows from the denominator.
+  - Task 2 `weak_strengthening@tau`: among weak stakeholder-intent sources, the fraction predicted as any stronger modality with confidence at least `tau`.
+- Treat entropy, variation ratio, and consistency frequency as summaries of the same stochastic label distribution, not as independent prediction methods.
+- Treat Task 3 as a source-grounded self-audit diagnostic, not independent verification.
 
 ## Phase 6: Export Paper Artifacts
 
