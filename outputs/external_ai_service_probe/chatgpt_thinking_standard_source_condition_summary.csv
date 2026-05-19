@@ -1,0 +1,8 @@
+source_condition,n,accuracy,overcommit_rate,undercommit_rate,high_conf_overcommit_80,high_conf_overcommit_90,text_modality_accuracy,label_text_consistency,text_overcommit_rate,text_undercommit_rate,text_high_conf_overcommit_80,text_high_conf_overcommit_90,mean_confidence
+mandatory,20,1.0,0.0,0.0,0.0,0.0,1.0,1.0,0.0,0.0,0.0,0.0,98.0
+nice_to_have,20,0.0,1.0,0.0,1.0,1.0,0.0,1.0,1.0,0.0,1.0,1.0,90.0
+optional,20,1.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,1.0,1.0,98.0
+recommended,20,1.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,1.0,1.0,98.0
+weak_future_enhancement,20,1.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,1.0,1.0,94.0
+weak_low_priority_enhancement,20,1.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,1.0,1.0,94.0
+weak_nice_if,20,1.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0,1.0,1.0,94.0

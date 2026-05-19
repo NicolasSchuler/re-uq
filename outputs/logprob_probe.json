@@ -1,0 +1,14 @@
+{
+  "endpoint": "http://127.0.0.1:1234/v1/responses",
+  "error": "",
+  "host": "http://127.0.0.1:1234/v1",
+  "include": [
+    "message.output_text.logprobs"
+  ],
+  "latency_s": 1.7806055000110064,
+  "model": "qwen/qwen3.5-9b",
+  "raw_text": "{\"decision\":\"yes\",\"confidence\":100,\"brief_reason\":\"probe\"}",
+  "supported": true,
+  "token_count": 16,
+  "top_logprobs": 5
+}

@@ -1,0 +1,140 @@
+{"external_item_id": "EXT0001", "source_statement": "The system SHOULD display Events or Activities."}
+{"external_item_id": "EXT0002", "source_statement": "The system SHOULD offer a display of all the Events in the exercise."}
+{"external_item_id": "EXT0003", "source_statement": "The system SHOULD display Events in a vertical table by time."}
+{"external_item_id": "EXT0004", "source_statement": "The system MAY allow a user to define the time segments."}
+{"external_item_id": "EXT0005", "source_statement": "The system MUST display MSEL Summary data in both graph nodes and table rows."}
+{"external_item_id": "EXT0006", "source_statement": "It would be useful if the system could display the Events in a graph by time."}
+{"external_item_id": "EXT0007", "source_statement": "Stakeholders mentioned that the system could match the color of the schema set forth by Department of Homeland Security as a possible future enhancement."}
+{"external_item_id": "EXT0008", "source_statement": "As a low-priority enhancement, the system could display the local and exercise time in separate clocks."}
+{"external_item_id": "EXT0009", "source_statement": "The system SHOULD conform to the smart device user interface standards in look and feel."}
+{"external_item_id": "EXT0010", "source_statement": "It would be nice if the system could display the Events in a graph by time."}
+{"external_item_id": "EXT0011", "source_statement": "Stakeholders mentioned that the system could display MSEL Summary data in both graph nodes and table rows as a possible future enhancement."}
+{"external_item_id": "EXT0012", "source_statement": "The system SHOULD filter data by: Venues and Key Events."}
+{"external_item_id": "EXT0013", "source_statement": "The system SHOULD allow a user to define the time segments."}
+{"external_item_id": "EXT0014", "source_statement": "It would be nice if the system could display MSEL Summary data in both graph nodes and table rows."}
+{"external_item_id": "EXT0015", "source_statement": "Stakeholders mentioned that the system could color code events according to their variance from current time as a possible future enhancement."}
+{"external_item_id": "EXT0016", "source_statement": "It would be useful if the system could provide a history report of changes made to the Activity or Event data."}
+{"external_item_id": "EXT0017", "source_statement": "It would be useful if the system could provide charts for the Activity or Event actual versus assumed time."}
+{"external_item_id": "EXT0018", "source_statement": "It would be nice if the system could provide standard menu buttons for navigation."}
+{"external_item_id": "EXT0019", "source_statement": "It would be useful if the system could offer a display of all the Events in the exercise."}
+{"external_item_id": "EXT0020", "source_statement": "As a low-priority enhancement, the system could match the color of the schema set forth by Department of Homeland Security."}
+{"external_item_id": "EXT0021", "source_statement": "The system MUST offer a display of all the Events in the exercise."}
+{"external_item_id": "EXT0022", "source_statement": "As a low-priority enhancement, the system could have a MDI form that allows for the viewing of the graph and the data table."}
+{"external_item_id": "EXT0023", "source_statement": "The system MUST offer the ability to pause and resume the refresh of data."}
+{"external_item_id": "EXT0024", "source_statement": "The system SHOULD split the table side of the display into sequential and temporal regions."}
+{"external_item_id": "EXT0025", "source_statement": "It would be useful if the system could color code events according to their variance from current time."}
+{"external_item_id": "EXT0026", "source_statement": "The system MAY filter data by: Venues and Key Events."}
+{"external_item_id": "EXT0027", "source_statement": "The system MUST respond fast to keep up-to-date data in the display."}
+{"external_item_id": "EXT0028", "source_statement": "As a low-priority enhancement, the system could allow modification of the display."}
+{"external_item_id": "EXT0029", "source_statement": "The system MAY color code events according to their variance from current time."}
+{"external_item_id": "EXT0030", "source_statement": "It would be nice if the system could display Events in a vertical table by time."}
+{"external_item_id": "EXT0031", "source_statement": "As a low-priority enhancement, the system could display Events in a vertical table by time."}
+{"external_item_id": "EXT0032", "source_statement": "It would be nice if the system could filter data by: Venues and Key Events."}
+{"external_item_id": "EXT0033", "source_statement": "Stakeholders mentioned that the system could allow a user to define the time segments as a possible future enhancement."}
+{"external_item_id": "EXT0034", "source_statement": "It would be useful if the system could filter data by: Venues and Key Events."}
+{"external_item_id": "EXT0035", "source_statement": "Stakeholders mentioned that the system could offer the ability to pause and resume the refresh of data as a possible future enhancement."}
+{"external_item_id": "EXT0036", "source_statement": "The system MUST refresh the display every 60 seconds."}
+{"external_item_id": "EXT0037", "source_statement": "The system SHOULD provide a history report of changes made to the Activity or Event data."}
+{"external_item_id": "EXT0038", "source_statement": "The system MAY display Events in a vertical table by time."}
+{"external_item_id": "EXT0039", "source_statement": "It would be nice if the system could refresh the display every 60 seconds."}
+{"external_item_id": "EXT0040", "source_statement": "The system MAY respond fast to keep up-to-date data in the display."}
+{"external_item_id": "EXT0041", "source_statement": "The system MAY provide a history report of changes made to the Activity or Event data."}
+{"external_item_id": "EXT0042", "source_statement": "As a low-priority enhancement, the system could display the Events in a graph by time."}
+{"external_item_id": "EXT0043", "source_statement": "The system MUST display Events in a vertical table by time."}
+{"external_item_id": "EXT0044", "source_statement": "As a low-priority enhancement, the system could color code events according to their variance from current time."}
+{"external_item_id": "EXT0045", "source_statement": "Stakeholders mentioned that the system could provide charts for the Activity or Event actual versus assumed time as a possible future enhancement."}
+{"external_item_id": "EXT0046", "source_statement": "The system MAY display MSEL Summary data in both graph nodes and table rows."}
+{"external_item_id": "EXT0047", "source_statement": "The system MUST have a MDI form that allows for the viewing of the graph and the data table."}
+{"external_item_id": "EXT0048", "source_statement": "It would be useful if the system could display the local and exercise time in separate clocks."}
+{"external_item_id": "EXT0049", "source_statement": "As a low-priority enhancement, the system could offer a display of all the Events in the exercise."}
+{"external_item_id": "EXT0050", "source_statement": "It would be useful if the system could display Events in a vertical table by time."}
+{"external_item_id": "EXT0051", "source_statement": "Stakeholders mentioned that the system could display Events in a vertical table by time as a possible future enhancement."}
+{"external_item_id": "EXT0052", "source_statement": "The system MUST allow modification of the display."}
+{"external_item_id": "EXT0053", "source_statement": "The system MAY split the table side of the display into sequential and temporal regions."}
+{"external_item_id": "EXT0054", "source_statement": "Stakeholders mentioned that the system could have a MDI form that allows for the viewing of the graph and the data table as a possible future enhancement."}
+{"external_item_id": "EXT0055", "source_statement": "The system MAY match the color of the schema set forth by Department of Homeland Security."}
+{"external_item_id": "EXT0056", "source_statement": "The system MAY offer a display of all the Events in the exercise."}
+{"external_item_id": "EXT0057", "source_statement": "Stakeholders mentioned that the system could display the Events in a graph by time as a possible future enhancement."}
+{"external_item_id": "EXT0058", "source_statement": "Stakeholders mentioned that the system could offer a display of all the Events in the exercise as a possible future enhancement."}
+{"external_item_id": "EXT0059", "source_statement": "It would be nice if the system could conform to the smart device user interface standards in look and feel."}
+{"external_item_id": "EXT0060", "source_statement": "As a low-priority enhancement, the system could display MSEL Summary data in both graph nodes and table rows."}
+{"external_item_id": "EXT0061", "source_statement": "The system MAY display the Events in a graph by time."}
+{"external_item_id": "EXT0062", "source_statement": "The system SHOULD refresh the display every 60 seconds."}
+{"external_item_id": "EXT0063", "source_statement": "As a low-priority enhancement, the system could display Events or Activities."}
+{"external_item_id": "EXT0064", "source_statement": "It would be useful if the system could allow a user to define the time segments."}
+{"external_item_id": "EXT0065", "source_statement": "As a low-priority enhancement, the system could provide standard menu buttons for navigation."}
+{"external_item_id": "EXT0066", "source_statement": "The system SHOULD allow modification of the display."}
+{"external_item_id": "EXT0067", "source_statement": "It would be useful if the system could display MSEL Summary data in both graph nodes and table rows."}
+{"external_item_id": "EXT0068", "source_statement": "The system MUST filter data by: Venues and Key Events."}
+{"external_item_id": "EXT0069", "source_statement": "It would be nice if the system could allow modification of the display."}
+{"external_item_id": "EXT0070", "source_statement": "Stakeholders mentioned that the system could display the local and exercise time in separate clocks as a possible future enhancement."}
+{"external_item_id": "EXT0071", "source_statement": "Stakeholders mentioned that the system could provide a history report of changes made to the Activity or Event data as a possible future enhancement."}
+{"external_item_id": "EXT0072", "source_statement": "As a low-priority enhancement, the system could offer the ability to pause and resume the refresh of data."}
+{"external_item_id": "EXT0073", "source_statement": "Stakeholders mentioned that the system could display Events or Activities as a possible future enhancement."}
+{"external_item_id": "EXT0074", "source_statement": "The system MAY provide standard menu buttons for navigation."}
+{"external_item_id": "EXT0075", "source_statement": "The system SHOULD offer the ability to pause and resume the refresh of data."}
+{"external_item_id": "EXT0076", "source_statement": "The system MUST match the color of the schema set forth by Department of Homeland Security."}
+{"external_item_id": "EXT0077", "source_statement": "It would be useful if the system could provide standard menu buttons for navigation."}
+{"external_item_id": "EXT0078", "source_statement": "As a low-priority enhancement, the system could provide a history report of changes made to the Activity or Event data."}
+{"external_item_id": "EXT0079", "source_statement": "The system SHOULD display MSEL Summary data in both graph nodes and table rows."}
+{"external_item_id": "EXT0080", "source_statement": "The system MUST color code events according to their variance from current time."}
+{"external_item_id": "EXT0081", "source_statement": "Stakeholders mentioned that the system could provide standard menu buttons for navigation as a possible future enhancement."}
+{"external_item_id": "EXT0082", "source_statement": "The system MUST display the Events in a graph by time."}
+{"external_item_id": "EXT0083", "source_statement": "Stakeholders mentioned that the system could respond fast to keep up-to-date data in the display as a possible future enhancement."}
+{"external_item_id": "EXT0084", "source_statement": "The system SHOULD provide charts for the Activity or Event actual versus assumed time."}
+{"external_item_id": "EXT0085", "source_statement": "Stakeholders mentioned that the system could refresh the display every 60 seconds as a possible future enhancement."}
+{"external_item_id": "EXT0086", "source_statement": "As a low-priority enhancement, the system could allow a user to define the time segments."}
+{"external_item_id": "EXT0087", "source_statement": "It would be nice if the system could respond fast to keep up-to-date data in the display."}
+{"external_item_id": "EXT0088", "source_statement": "It would be nice if the system could color code events according to their variance from current time."}
+{"external_item_id": "EXT0089", "source_statement": "As a low-priority enhancement, the system could conform to the smart device user interface standards in look and feel."}
+{"external_item_id": "EXT0090", "source_statement": "The system MAY conform to the smart device user interface standards in look and feel."}
+{"external_item_id": "EXT0091", "source_statement": "The system MAY have a MDI form that allows for the viewing of the graph and the data table."}
+{"external_item_id": "EXT0092", "source_statement": "Stakeholders mentioned that the system could conform to the smart device user interface standards in look and feel as a possible future enhancement."}
+{"external_item_id": "EXT0093", "source_statement": "The system SHOULD display the local and exercise time in separate clocks."}
+{"external_item_id": "EXT0094", "source_statement": "The system SHOULD display the Events in a graph by time."}
+{"external_item_id": "EXT0095", "source_statement": "As a low-priority enhancement, the system could split the table side of the display into sequential and temporal regions."}
+{"external_item_id": "EXT0096", "source_statement": "As a low-priority enhancement, the system could provide charts for the Activity or Event actual versus assumed time."}
+{"external_item_id": "EXT0097", "source_statement": "It would be useful if the system could display Events or Activities."}
+{"external_item_id": "EXT0098", "source_statement": "The system MAY display Events or Activities."}
+{"external_item_id": "EXT0099", "source_statement": "As a low-priority enhancement, the system could refresh the display every 60 seconds."}
+{"external_item_id": "EXT0100", "source_statement": "The system SHOULD match the color of the schema set forth by Department of Homeland Security."}
+{"external_item_id": "EXT0101", "source_statement": "It would be useful if the system could match the color of the schema set forth by Department of Homeland Security."}
+{"external_item_id": "EXT0102", "source_statement": "It would be useful if the system could refresh the display every 60 seconds."}
+{"external_item_id": "EXT0103", "source_statement": "It would be nice if the system could offer the ability to pause and resume the refresh of data."}
+{"external_item_id": "EXT0104", "source_statement": "Stakeholders mentioned that the system could split the table side of the display into sequential and temporal regions as a possible future enhancement."}
+{"external_item_id": "EXT0105", "source_statement": "The system MUST display Events or Activities."}
+{"external_item_id": "EXT0106", "source_statement": "The system MUST conform to the smart device user interface standards in look and feel."}
+{"external_item_id": "EXT0107", "source_statement": "It would be useful if the system could split the table side of the display into sequential and temporal regions."}
+{"external_item_id": "EXT0108", "source_statement": "It would be nice if the system could have a MDI form that allows for the viewing of the graph and the data table."}
+{"external_item_id": "EXT0109", "source_statement": "Stakeholders mentioned that the system could allow modification of the display as a possible future enhancement."}
+{"external_item_id": "EXT0110", "source_statement": "It would be useful if the system could offer the ability to pause and resume the refresh of data."}
+{"external_item_id": "EXT0111", "source_statement": "The system MAY offer the ability to pause and resume the refresh of data."}
+{"external_item_id": "EXT0112", "source_statement": "Stakeholders mentioned that the system could filter data by: Venues and Key Events as a possible future enhancement."}
+{"external_item_id": "EXT0113", "source_statement": "The system MUST provide a history report of changes made to the Activity or Event data."}
+{"external_item_id": "EXT0114", "source_statement": "As a low-priority enhancement, the system could filter data by: Venues and Key Events."}
+{"external_item_id": "EXT0115", "source_statement": "The system SHOULD color code events according to their variance from current time."}
+{"external_item_id": "EXT0116", "source_statement": "The system MUST provide charts for the Activity or Event actual versus assumed time."}
+{"external_item_id": "EXT0117", "source_statement": "The system SHOULD provide standard menu buttons for navigation."}
+{"external_item_id": "EXT0118", "source_statement": "The system SHOULD respond fast to keep up-to-date data in the display."}
+{"external_item_id": "EXT0119", "source_statement": "It would be nice if the system could display the local and exercise time in separate clocks."}
+{"external_item_id": "EXT0120", "source_statement": "It would be useful if the system could have a MDI form that allows for the viewing of the graph and the data table."}
+{"external_item_id": "EXT0121", "source_statement": "The system MUST provide standard menu buttons for navigation."}
+{"external_item_id": "EXT0122", "source_statement": "The system MUST allow a user to define the time segments."}
+{"external_item_id": "EXT0123", "source_statement": "It would be nice if the system could split the table side of the display into sequential and temporal regions."}
+{"external_item_id": "EXT0124", "source_statement": "It would be useful if the system could conform to the smart device user interface standards in look and feel."}
+{"external_item_id": "EXT0125", "source_statement": "The system MAY refresh the display every 60 seconds."}
+{"external_item_id": "EXT0126", "source_statement": "The system MUST display the local and exercise time in separate clocks."}
+{"external_item_id": "EXT0127", "source_statement": "It would be nice if the system could provide charts for the Activity or Event actual versus assumed time."}
+{"external_item_id": "EXT0128", "source_statement": "It would be useful if the system could respond fast to keep up-to-date data in the display."}
+{"external_item_id": "EXT0129", "source_statement": "It would be nice if the system could provide a history report of changes made to the Activity or Event data."}
+{"external_item_id": "EXT0130", "source_statement": "The system MAY allow modification of the display."}
+{"external_item_id": "EXT0131", "source_statement": "The system SHOULD have a MDI form that allows for the viewing of the graph and the data table."}
+{"external_item_id": "EXT0132", "source_statement": "The system MAY provide charts for the Activity or Event actual versus assumed time."}
+{"external_item_id": "EXT0133", "source_statement": "It would be nice if the system could display Events or Activities."}
+{"external_item_id": "EXT0134", "source_statement": "It would be nice if the system could match the color of the schema set forth by Department of Homeland Security."}
+{"external_item_id": "EXT0135", "source_statement": "The system MUST split the table side of the display into sequential and temporal regions."}
+{"external_item_id": "EXT0136", "source_statement": "The system MAY display the local and exercise time in separate clocks."}
+{"external_item_id": "EXT0137", "source_statement": "It would be nice if the system could offer a display of all the Events in the exercise."}
+{"external_item_id": "EXT0138", "source_statement": "It would be nice if the system could allow a user to define the time segments."}
+{"external_item_id": "EXT0139", "source_statement": "As a low-priority enhancement, the system could respond fast to keep up-to-date data in the display."}
+{"external_item_id": "EXT0140", "source_statement": "It would be useful if the system could allow modification of the display."}

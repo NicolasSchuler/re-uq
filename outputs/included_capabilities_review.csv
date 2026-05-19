@@ -1,0 +1,121 @@
+Seed,Original requirement,Final capability text
+S0001,'The system shall refresh the display every 60 seconds.',refresh the display every 60 seconds
+S0002,'The application shall match the color of the schema set forth by Department of Homeland Security',match the color of the schema set forth by Department of Homeland Security
+S0008,'The product shall respond fast to keep up-to-date data in the display.',respond fast to keep up-to-date data in the display
+S0009,'The system shall have a MDI form that allows for the viewing of the graph and the data table.',have a MDI form that allows for the viewing of the graph and the data table
+S0010,'The system shall display Events in a vertical table by time.',display Events in a vertical table by time
+S0011,'The system shall display the Events in a graph by time.',display the Events in a graph by time
+S0012,'The system shall display Events or Activities.',display Events or Activities
+S0014,'The data displayed in both the nodes within the graph and the rows in the table are MSEL Summary data',display MSEL Summary data in both graph nodes and table rows
+S0015,'The table side of the display shall be split into 2 regions: sequential and temporal.',split the table side of the display into sequential and temporal regions
+S0018,'The system shall color code events according to their variance from current time.',color code events according to their variance from current time
+S0021,'The system shall allow modification of the display.',allow modification of the display
+S0022,'The system shall offer a display of all the Events in the exercise.',offer a display of all the Events in the exercise
+S0023,'The system shall filter data by: Venues and Key Events.',filter data by: Venues and Key Events
+S0024,'The system shall allow a user to define the time segments',allow a user to define the time segments
+S0025,'The system shall display the local and exercise time in separate clocks',display the local and exercise time in separate clocks
+S0026,'The system shall offer the ability to pause and resume the refresh of data.',offer the ability to pause and resume the refresh of data
+S0027,'The system shall provide charts for the Activity or Event actual versus assumed time.',provide charts for the Activity or Event actual versus assumed time
+S0028,'The system shall provide a history report of changes made to the Activity or Event data',provide a history report of changes made to the Activity or Event data
+S0029,'The look and feel of the system shall conform to the user interface standards of the smart device.',conform to the smart device user interface standards in look and feel
+S0030,'The user interface shall have standard menus buttons for navigation',provide standard menu buttons for navigation
+S0031,'The system shall have a professional appearance',have a professional appearance
+S0032,'The product shall have a consistent color scheme and fonts.',have a consistent color scheme and fonts
+S0034,'The system shall be intuitive and self explanatory.',be intuitive and self explanatory
+S0035,'The product shall be easy for a realtor to learn.',be easy for a realtor to learn
+S0036,'The product shall use symbols and words that are naturally understandable by the realtor community.',use symbols and words that are naturally understandable by the realtor community
+S0037,'The product shall produce search results in an acceptable time',produce search results in an acceptable time
+S0039,'The product shall generate a CMA report in an acceptable time.',generate a CMA report in an acceptable time
+S0041,'The product shall synchronize contacts and appointments in an acceptable time.',synchronize contacts and appointments in an acceptable time
+S0042,'The product shall synchronize with the office system every hour.',synchronize with the office system every hour
+S0043,'The product shall be available for use 24 hours per day 365 days per year',be available for use 24 hours per day 365 days per year
+S0044,'Out of 1000 accesses to the system the system is available 999 times.',be available for 999 out of 1000 access attempts
+S0045,'The product shall operate in offline mode whenever internet connection is unavailable.',operate in offline mode whenever internet connection is unavailable
+S0046,'The product shall allow the user to view previously downloaded search results CMA reports and appointments.',allow the user to view previously downloaded search results CMA reports and appointments
+S0047,'The product shall retain user preferences in the event of a failure.',retain user preferences in the event of a failure
+S0049,'The product shall be able to support multiple remote users',support multiple remote users
+S0050,'The product shall be able support 1000 simultaneous users.',be able support 1000 simultaneous users
+S0054,'The product is expected to run on Windows CE and Palm operating systems.',run on Windows CE and Palm operating systems
+S0055,'Only registered realtors shall be able to access the system.',allow only registered realtors to access the system
+S0056,'Every user of the system shall be authenticated and authorized.',authenticate and authorize every system user
+S0057,'The product shall prevent its data from incorrect data being introduced.',prevent its data from incorrect data being introduced
+S0058,'The system shall allow a real estate agent to query MLS information',allow a real estate agent to query MLS information
+S0059,'The user shall be able to get driving directions to a selected property',provide users with driving directions to a selected property
+S0060,'The user shall be able to download appointments and contact information for clients',allow users to download appointments and client contact information
+S0061,'The system shall display clear property images in the search results',display clear property images in the search results
+S0062,'The system shall update or create new property listings in the MLS',update or create new property listings in the MLS
+S0063,'Realtor shall be able to generate a CMA report based on property criteria',allow realtors to generate CMA reports based on property criteria
+S0064,'The system shall be able to call the seller or buyer to schedule an appointment',call the seller or buyer to schedule an appointment
+S0065,'The realtor shall be notified of new client appointments after automatic synchronization with office system',notify realtors of new client appointments after automatic synchronization with the office system
+S0066,'The realtor shall be able to retrieve a map showing property locations for a specified area',allow realtors to retrieve maps showing property locations for a specified area
+S0067,'The system shall notify the realtor when a seller or buyer responds to an appointment request',notify the realtor when a seller or buyer responds to an appointment request
+S0068,'The product shall allow the user to save the property search results.',allow the user to save the property search results
+S0069,'The system shall be easy to use by the Program Administrators/Nursing Staff Members.',be easy to use by the Program Administrators/Nursing Staff Members
+S0070,'All of the users shall be able to use the system after one day of training.',be usable by all users after one day of training
+S0071,'The system shall help the user avoid making mistakes while scheduling classes and clinicals for the nursing students.',help the user avoid making mistakes while scheduling classes and clinicals for the nursing students
+S0073,'The system shall be intuitive to the Program Administrators/Nursing Staff Members.',be intuitive to the Program Administrators/Nursing Staff Members
+S0074,'2 out of 3 Program Administrators/Nursing Staff Members shall successfully be able to use the system to manage the scheduling of classes and clinicals.',enable program administrators and nursing staff members to manage class and clinical scheduling
+S0075,'The system shall use symbols and words that are naturally understandable by the user community.',use symbols and words that are naturally understandable by the user community
+S0076,'The verbiage used within the system shall be consistent with Standard English and the terminology of the national Nursing Community.',use Standard English and national Nursing Community terminology consistently
+S0077,'Staff members shall be able to complete a set of tasks in a timely manner.',enable staff members to complete assigned tasks in a timely manner
+S0079,'The system shall be available for use between the hours of 8am and 6pm.',be available for use between the hours of 8am and 6pm
+S0081,'system shall be able to handle all of the user requests/usage during business hours.',handle all of the user requests/usage during business hours
+S0082,'The system shall cater to 10 simultaneous users from 9am to 5pm.',cater to 10 simultaneous users from 9am to 5pm
+S0084,'The system shall be expected to manage the nursing program curriculum and class/clinical scheduling for a minimum of 5 years.',be expected to manage the nursing program curriculum and class/clinical scheduling for a minimum of 5 years
+S0085,'The system shall able to operate within a business office environment typical of the Nursing Department at DePaul University.',operate within a business office environment typical of the Nursing Department at DePaul University
+S0086,'The system shall be used within the specifications defined by the computers used by the Program Administrators/Nursing Staff Members.',be used within the specifications defined by the computers used by the Program Administrators/Nursing Staff Members
+S0087,'The system shall operate within the Windows XP Professional operating system.',operate within the Windows XP Professional operating system
+S0088,The system shall interface with CampusConnect's central server',with CampusConnect's central server
+S0089,'The system shall interface with the faculty central server.',with the faculty central server
+S0090,'The system shall interface with the student master server.',with the student master server
+S0091,'We must be able to interface with any HTML browser.',interface with any HTML browser
+S0092,'Only authorized users shall have access to clinical site information.',restrict access to clinical site information to authorized users
+S0093,'Program Administrators/Nursing Staff Members are the only people who shall have access to clinical site details.',restrict access to clinical site details to Program Administrators and Nursing Staff Members
+S0094,Only authorized users shall have access to students' personal information.',restrict access to students' personal information to authorized users
+S0095,Dr Susan Poslusny and Dr Julie Donalek are the only people who shall have access to students' personal information.',restrict access to students' personal information to Dr Susan Poslusny and Dr Julie Donalek
+S0096,'Only authorized users shall have access to the portion of the system that interfaces with CampusConnect.',restrict access to the CampusConnect interface portion of the system to authorized users
+S0097,'Fit Criterion: Dr Susan Poslusny and Karen Sysol are the only people who shall have access to the final class section scheduling for the system that interfaces with CampusConnect.',restrict access to final class section scheduling for the CampusConnect interface to Dr Susan Poslusny and Karen Sysol
+S0098,'The system shall have basic data integrity checking to reduce the possibility of incorrect or invalid data being introduced.',have basic data integrity checking to reduce the possibility of incorrect or invalid data being introduced
+S0099,The system shall protect private information in accordance with the organization's information policy.',protect private information in accordance with the organization's information policy
+S0100,'The system shall be built such that it is as secure as possible from malicious interference.',be built such that it is as secure as possible from malicious interference
+S0101,The system shall use the organization's standard virus protection software to help monitor threats to itself.',use the organization's standard virus protection software to help monitor threats to itself
+S0102,'A cohort shall be associated to one Program of Study offered by the department.',associate each cohort with one Program of Study offered by the department
+S0103,'Program Administrators and Nursing Staff Members shall be able to add a listing of students to a cohort.',allow Program Administrators and Nursing Staff Members to add student listings to cohorts
+S0104,'Program Administrators and Nursing Staff Members shall be able to add a single student to a cohort',allow Program Administrators and Nursing Staff Members to add single students to cohorts
+S0105,Students added to a cohort shall be eligible for the cohort's Program of Study.',ensure students added to a cohort are eligible for the cohort Program of Study
+S0106,'Program Administrators and Nursing Staff Members shall be able to specify the preferred sequence of classes for a given cohort.',allow Program Administrators and Nursing Staff Members to specify the preferred class sequence for a cohort
+S0107,'For each class within a sequence for a cohort Program Administrators and Nursing Staff Members shall be able to specify which quarter that class will be offered.',allow Program Administrators and Nursing Staff Members to specify the offering quarter for each class in a cohort sequence
+S0108,'Program Administrators and Nursing Staff Members shall be able to add new classes to a sequence of classes',allow Program Administrators and Nursing Staff Members to add new classes to class sequences
+S0111,'Program Administrators and Nursing Staff Members shall be able to add new classes for the nursing department into the system.',allow Program Administrators and Nursing Staff Members to add new nursing department classes to the system
+S0112,'A class shall be either a non-clinical class or a clinical class.',classify each class as either non-clinical or clinical
+S0113,'A non-clinical class shall specify the course name lecture room requirements and instructor needs.',capture course name lecture room requirements and instructor needs for non-clinical classes
+S0114,'A clinical class shall specify the course name lecture room requirements clinical site needs lecture instructor needs and clinical lab instructor needs.',capture course name lecture room requirements clinical site needs lecture instructor needs and clinical lab instructor needs for clinical classes
+S0115,'Program Administrators/Nursing Staff Members shall be able to create a new Program of Study.',allow Program Administrators and Nursing Staff Members to create Programs of Study
+S0117,'Program Administrators and Nursing Staff Members shall have the ability to specify which classes are required for a Program of Study',allow Program Administrators and Nursing Staff Members to specify required classes for a Program of Study
+S0118,The system shall be able to display a report of needed classes for a given quarter for all cohorts of all programs for Program Administrators/Nursing Staff Members' planning purposes.',display a report of needed classes for a given quarter for all cohorts of all programs for Program Administrators/Nursing Staff Members' planning purposes
+S0121,'Program Administrators and Nursing Staff Members shall be able to add a new clinical site into the system.',allow Program Administrators and Nursing Staff Members to add new clinical sites to the system
+S0123,'Program Administrators and Nursing Staff Members shall be able to add a new clinical lab section for an existing clinical class into the System.',allow Program Administrators and Nursing Staff Members to add new clinical lab sections for existing clinical classes
+S0124,'A clinical lab section shall include the clinical site name the class instructor day and time of the lab.',include the clinical site name class instructor day and lab time for each clinical lab section
+S0125,'Program Administrators and Nursing Staff Members shall be able to add a student who has registered for a clinical class to a clinical lab section for that class.',allow Program Administrators and Nursing Staff Members to add registered clinical-class students to clinical lab sections
+S0126,'The system shall allow a Program Administrator or Nursing staff member to remove a student from a clinical lab section.',allow a Program Administrator or Nursing staff member to remove a student from a clinical lab section
+S0127,'The system shall allow a Program Administrator/Nursing Staff Member to move a student from one clinical lab section to another clinical lab section corresponding to the same clinical class.',allow a Program Administrator/Nursing Staff Member to move a student from one clinical lab section to another clinical lab section corresponding to the same clinical class
+S0129,'A Program Administrator/Nursing Staff Member shall be able to add a new nursing student to the system.',allow Program Administrators and Nursing Staff Members to add new nursing students to the system
+S0130,'A staff member shall have the ability to manage the progress of a part time student which includes modifying their sequence of classes and timeline of classes.',allow staff members to manage part-time student progress by modifying class sequences and timelines
+S0131,'The system shall be able to display a printable summary for individual cohorts which will include the students enlisted the Program of study sequence of classes cohort progress through the program and timeline of completion.',display a printable summary for individual cohorts which will include the students enlisted the Program of study sequence of classes cohort progress through the program and timeline of completion
+S0135,'The system shall be able to display a printable summary of the system log.',display a printable summary of the system log
+S0137,'The system will use the stored e-mail addresses as a primary means of communicating information to affected parties.',use the stored e-mail addresses as a primary means of communicating information to affected parties
+S0143,'Program Administrators/Nursing Staff Members shall have the ability to modify information relating to cohorts including cohort identifier program of study preferred sequence of classes and quarters that a cohort will be taking specific classes.',allow Program Administrators and Nursing Staff Members to modify cohort information including identifier Program of Study preferred class sequence and class quarters
+S0145,'Program Administrators/Nursing Staff Members shall have the ability to modify information relating to a Clinical Site including the clinical site name site contact person contact information and address.',allow Program Administrators and Nursing Staff Members to modify clinical site information including name contact person contact information and address
+S0148,'The Disputes application shall comply with the corporate standards for user interface creation for internally and externally used applications.',comply with corporate user interface creation standards for internal and external applications
+S0149,'All screens created as part of the Disputes application must comply with corporate standards for interface creation.',ensure all Disputes application screens comply with corporate interface creation standards
+S0150,'The list of dispute cases that are displayed after a search is performed must be color coded for easy identification of dispute cases based upon the dispute case status.',color-code dispute search results by dispute case status for easy identification
+S0162,'The Disputes application shall ensure that only users with the appropriate access level are allowed to initiate dispute requests.',allow only users with the appropriate access level to initiate dispute requests
+S0163,'Only users with Update access must be able to initiate dispute requests.',allow only users with Update access to initiate dispute requests
+S0164,'The Disputes application shall ensure that only authorized users are allowed to logon to the application.',allow only authorized users to log on to the application
+S0165,'All authorized users once authenticated must be able to logon to the Disputes System',allow authenticated authorized users to log on to the Disputes System
+S0167,All additions of new users and modifications to user's access shall be recorded on the User Report.',record new-user additions and user-access modifications on the User Report
+S0168,'If a user account is revoked it can only be re-instantiated by the System Administrator.',allow only the System Administrator to reinstate revoked user accounts
+S0169,'Only the System Administrator shall be able to reset a revoked user logon account',allow only the System Administrator to reset revoked user logon accounts
+S0171,'All updates to data files or database must be initiated from the Disputes System.',ensure all data file or database updates are initiated from the Disputes System
+S0172,'The Disputes application must conform to the legal requirements as specified by the Merchant Operating Regulations.',conform to the legal requirements specified by the Merchant Operating Regulations
+S0173,'All business rules specified in the Disputes System shall be in compliance with the Merchant Operating Regulations.',ensure Disputes System business rules comply with Merchant Operating Regulations

@@ -1,0 +1,5 @@
+template_id,source_statement_template,example_source_statement,intended_gold_modality,weaker_than_should,reviewer,review_note
+useful_if,It would be useful if the system could {capability}.,It would be useful if the system could export reports.,nice_to_have,yes,Nicolas,Weak desiderative wording below SHOULD/recommended.
+nice_if,It would be nice if the system could {capability}.,It would be nice if the system could export reports.,nice_to_have,yes,Nicolas,Weak desiderative wording below SHOULD/recommended.
+low_priority_enhancement,"As a low-priority enhancement, the system could {capability}.","As a low-priority enhancement, the system could export reports.",nice_to_have,yes,Nicolas,Explicit low-priority enhancement below SHOULD/recommended.
+future_enhancement,Stakeholders mentioned that the system could {capability} as a possible future enhancement.,Stakeholders mentioned that the system could export reports as a possible future enhancement.,nice_to_have,yes,Nicolas,Possible future enhancement below SHOULD/recommended.

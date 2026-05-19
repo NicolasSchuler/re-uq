@@ -1,0 +1,141 @@
+external_item_id,source_statement
+EXT0001,The system SHOULD display Events or Activities.
+EXT0002,The system SHOULD offer a display of all the Events in the exercise.
+EXT0003,The system SHOULD display Events in a vertical table by time.
+EXT0004,The system MAY allow a user to define the time segments.
+EXT0005,The system MUST display MSEL Summary data in both graph nodes and table rows.
+EXT0006,It would be useful if the system could display the Events in a graph by time.
+EXT0007,Stakeholders mentioned that the system could match the color of the schema set forth by Department of Homeland Security as a possible future enhancement.
+EXT0008,"As a low-priority enhancement, the system could display the local and exercise time in separate clocks."
+EXT0009,The system SHOULD conform to the smart device user interface standards in look and feel.
+EXT0010,It would be nice if the system could display the Events in a graph by time.
+EXT0011,Stakeholders mentioned that the system could display MSEL Summary data in both graph nodes and table rows as a possible future enhancement.
+EXT0012,The system SHOULD filter data by: Venues and Key Events.
+EXT0013,The system SHOULD allow a user to define the time segments.
+EXT0014,It would be nice if the system could display MSEL Summary data in both graph nodes and table rows.
+EXT0015,Stakeholders mentioned that the system could color code events according to their variance from current time as a possible future enhancement.
+EXT0016,It would be useful if the system could provide a history report of changes made to the Activity or Event data.
+EXT0017,It would be useful if the system could provide charts for the Activity or Event actual versus assumed time.
+EXT0018,It would be nice if the system could provide standard menu buttons for navigation.
+EXT0019,It would be useful if the system could offer a display of all the Events in the exercise.
+EXT0020,"As a low-priority enhancement, the system could match the color of the schema set forth by Department of Homeland Security."
+EXT0021,The system MUST offer a display of all the Events in the exercise.
+EXT0022,"As a low-priority enhancement, the system could have a MDI form that allows for the viewing of the graph and the data table."
+EXT0023,The system MUST offer the ability to pause and resume the refresh of data.
+EXT0024,The system SHOULD split the table side of the display into sequential and temporal regions.
+EXT0025,It would be useful if the system could color code events according to their variance from current time.
+EXT0026,The system MAY filter data by: Venues and Key Events.
+EXT0027,The system MUST respond fast to keep up-to-date data in the display.
+EXT0028,"As a low-priority enhancement, the system could allow modification of the display."
+EXT0029,The system MAY color code events according to their variance from current time.
+EXT0030,It would be nice if the system could display Events in a vertical table by time.
+EXT0031,"As a low-priority enhancement, the system could display Events in a vertical table by time."
+EXT0032,It would be nice if the system could filter data by: Venues and Key Events.
+EXT0033,Stakeholders mentioned that the system could allow a user to define the time segments as a possible future enhancement.
+EXT0034,It would be useful if the system could filter data by: Venues and Key Events.
+EXT0035,Stakeholders mentioned that the system could offer the ability to pause and resume the refresh of data as a possible future enhancement.
+EXT0036,The system MUST refresh the display every 60 seconds.
+EXT0037,The system SHOULD provide a history report of changes made to the Activity or Event data.
+EXT0038,The system MAY display Events in a vertical table by time.
+EXT0039,It would be nice if the system could refresh the display every 60 seconds.
+EXT0040,The system MAY respond fast to keep up-to-date data in the display.
+EXT0041,The system MAY provide a history report of changes made to the Activity or Event data.
+EXT0042,"As a low-priority enhancement, the system could display the Events in a graph by time."
+EXT0043,The system MUST display Events in a vertical table by time.
+EXT0044,"As a low-priority enhancement, the system could color code events according to their variance from current time."
+EXT0045,Stakeholders mentioned that the system could provide charts for the Activity or Event actual versus assumed time as a possible future enhancement.
+EXT0046,The system MAY display MSEL Summary data in both graph nodes and table rows.
+EXT0047,The system MUST have a MDI form that allows for the viewing of the graph and the data table.
+EXT0048,It would be useful if the system could display the local and exercise time in separate clocks.
+EXT0049,"As a low-priority enhancement, the system could offer a display of all the Events in the exercise."
+EXT0050,It would be useful if the system could display Events in a vertical table by time.
+EXT0051,Stakeholders mentioned that the system could display Events in a vertical table by time as a possible future enhancement.
+EXT0052,The system MUST allow modification of the display.
+EXT0053,The system MAY split the table side of the display into sequential and temporal regions.
+EXT0054,Stakeholders mentioned that the system could have a MDI form that allows for the viewing of the graph and the data table as a possible future enhancement.
+EXT0055,The system MAY match the color of the schema set forth by Department of Homeland Security.
+EXT0056,The system MAY offer a display of all the Events in the exercise.
+EXT0057,Stakeholders mentioned that the system could display the Events in a graph by time as a possible future enhancement.
+EXT0058,Stakeholders mentioned that the system could offer a display of all the Events in the exercise as a possible future enhancement.
+EXT0059,It would be nice if the system could conform to the smart device user interface standards in look and feel.
+EXT0060,"As a low-priority enhancement, the system could display MSEL Summary data in both graph nodes and table rows."
+EXT0061,The system MAY display the Events in a graph by time.
+EXT0062,The system SHOULD refresh the display every 60 seconds.
+EXT0063,"As a low-priority enhancement, the system could display Events or Activities."
+EXT0064,It would be useful if the system could allow a user to define the time segments.
+EXT0065,"As a low-priority enhancement, the system could provide standard menu buttons for navigation."
+EXT0066,The system SHOULD allow modification of the display.
+EXT0067,It would be useful if the system could display MSEL Summary data in both graph nodes and table rows.
+EXT0068,The system MUST filter data by: Venues and Key Events.
+EXT0069,It would be nice if the system could allow modification of the display.
+EXT0070,Stakeholders mentioned that the system could display the local and exercise time in separate clocks as a possible future enhancement.
+EXT0071,Stakeholders mentioned that the system could provide a history report of changes made to the Activity or Event data as a possible future enhancement.
+EXT0072,"As a low-priority enhancement, the system could offer the ability to pause and resume the refresh of data."
+EXT0073,Stakeholders mentioned that the system could display Events or Activities as a possible future enhancement.
+EXT0074,The system MAY provide standard menu buttons for navigation.
+EXT0075,The system SHOULD offer the ability to pause and resume the refresh of data.
+EXT0076,The system MUST match the color of the schema set forth by Department of Homeland Security.
+EXT0077,It would be useful if the system could provide standard menu buttons for navigation.
+EXT0078,"As a low-priority enhancement, the system could provide a history report of changes made to the Activity or Event data."
+EXT0079,The system SHOULD display MSEL Summary data in both graph nodes and table rows.
+EXT0080,The system MUST color code events according to their variance from current time.
+EXT0081,Stakeholders mentioned that the system could provide standard menu buttons for navigation as a possible future enhancement.
+EXT0082,The system MUST display the Events in a graph by time.
+EXT0083,Stakeholders mentioned that the system could respond fast to keep up-to-date data in the display as a possible future enhancement.
+EXT0084,The system SHOULD provide charts for the Activity or Event actual versus assumed time.
+EXT0085,Stakeholders mentioned that the system could refresh the display every 60 seconds as a possible future enhancement.
+EXT0086,"As a low-priority enhancement, the system could allow a user to define the time segments."
+EXT0087,It would be nice if the system could respond fast to keep up-to-date data in the display.
+EXT0088,It would be nice if the system could color code events according to their variance from current time.
+EXT0089,"As a low-priority enhancement, the system could conform to the smart device user interface standards in look and feel."
+EXT0090,The system MAY conform to the smart device user interface standards in look and feel.
+EXT0091,The system MAY have a MDI form that allows for the viewing of the graph and the data table.
+EXT0092,Stakeholders mentioned that the system could conform to the smart device user interface standards in look and feel as a possible future enhancement.
+EXT0093,The system SHOULD display the local and exercise time in separate clocks.
+EXT0094,The system SHOULD display the Events in a graph by time.
+EXT0095,"As a low-priority enhancement, the system could split the table side of the display into sequential and temporal regions."
+EXT0096,"As a low-priority enhancement, the system could provide charts for the Activity or Event actual versus assumed time."
+EXT0097,It would be useful if the system could display Events or Activities.
+EXT0098,The system MAY display Events or Activities.
+EXT0099,"As a low-priority enhancement, the system could refresh the display every 60 seconds."
+EXT0100,The system SHOULD match the color of the schema set forth by Department of Homeland Security.
+EXT0101,It would be useful if the system could match the color of the schema set forth by Department of Homeland Security.
+EXT0102,It would be useful if the system could refresh the display every 60 seconds.
+EXT0103,It would be nice if the system could offer the ability to pause and resume the refresh of data.
+EXT0104,Stakeholders mentioned that the system could split the table side of the display into sequential and temporal regions as a possible future enhancement.
+EXT0105,The system MUST display Events or Activities.
+EXT0106,The system MUST conform to the smart device user interface standards in look and feel.
+EXT0107,It would be useful if the system could split the table side of the display into sequential and temporal regions.
+EXT0108,It would be nice if the system could have a MDI form that allows for the viewing of the graph and the data table.
+EXT0109,Stakeholders mentioned that the system could allow modification of the display as a possible future enhancement.
+EXT0110,It would be useful if the system could offer the ability to pause and resume the refresh of data.
+EXT0111,The system MAY offer the ability to pause and resume the refresh of data.
+EXT0112,Stakeholders mentioned that the system could filter data by: Venues and Key Events as a possible future enhancement.
+EXT0113,The system MUST provide a history report of changes made to the Activity or Event data.
+EXT0114,"As a low-priority enhancement, the system could filter data by: Venues and Key Events."
+EXT0115,The system SHOULD color code events according to their variance from current time.
+EXT0116,The system MUST provide charts for the Activity or Event actual versus assumed time.
+EXT0117,The system SHOULD provide standard menu buttons for navigation.
+EXT0118,The system SHOULD respond fast to keep up-to-date data in the display.
+EXT0119,It would be nice if the system could display the local and exercise time in separate clocks.
+EXT0120,It would be useful if the system could have a MDI form that allows for the viewing of the graph and the data table.
+EXT0121,The system MUST provide standard menu buttons for navigation.
+EXT0122,The system MUST allow a user to define the time segments.
+EXT0123,It would be nice if the system could split the table side of the display into sequential and temporal regions.
+EXT0124,It would be useful if the system could conform to the smart device user interface standards in look and feel.
+EXT0125,The system MAY refresh the display every 60 seconds.
+EXT0126,The system MUST display the local and exercise time in separate clocks.
+EXT0127,It would be nice if the system could provide charts for the Activity or Event actual versus assumed time.
+EXT0128,It would be useful if the system could respond fast to keep up-to-date data in the display.
+EXT0129,It would be nice if the system could provide a history report of changes made to the Activity or Event data.
+EXT0130,The system MAY allow modification of the display.
+EXT0131,The system SHOULD have a MDI form that allows for the viewing of the graph and the data table.
+EXT0132,The system MAY provide charts for the Activity or Event actual versus assumed time.
+EXT0133,It would be nice if the system could display Events or Activities.
+EXT0134,It would be nice if the system could match the color of the schema set forth by Department of Homeland Security.
+EXT0135,The system MUST split the table side of the display into sequential and temporal regions.
+EXT0136,The system MAY display the local and exercise time in separate clocks.
+EXT0137,It would be nice if the system could offer a display of all the Events in the exercise.
+EXT0138,It would be nice if the system could allow a user to define the time segments.
+EXT0139,"As a low-priority enhancement, the system could respond fast to keep up-to-date data in the display."
+EXT0140,It would be useful if the system could allow modification of the display.

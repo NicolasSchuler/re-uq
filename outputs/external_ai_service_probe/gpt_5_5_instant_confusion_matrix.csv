@@ -1,0 +1,5 @@
+task2_gold_modality,mandatory,nice_to_have,optional,recommended
+mandatory,20,0,0,0
+nice_to_have,0,60,20,0
+optional,0,0,20,0
+recommended,0,0,0,20
