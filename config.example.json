@@ -6,13 +6,14 @@
     "prompt_version": "v1"
   },
   "llm": {
-    "host": "http://localhost:8000/v1",
+    "host": "http://127.0.0.1:1234/v1",
     "models": [
-      "local-model"
+      "qwen/qwen3.5-9b"
     ],
     "api_key_env": "LOCAL_OPENAI_API_KEY",
     "timeout_s": 120,
     "max_tokens": 256,
+    "concurrency": 4,
     "deterministic": {
       "temperature": 0.0,
       "top_p": 1.0,

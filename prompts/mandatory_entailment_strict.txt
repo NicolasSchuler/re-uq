@@ -1,0 +1,18 @@
+You are reviewing software requirements for deontic modality.
+
+Source statement:
+"{source_statement}"
+
+Candidate mandatory requirement:
+"{candidate_requirement}"
+
+Decision rule:
+Return "yes" only if the source explicitly makes the capability mandatory.
+MUST and SHALL are mandatory. SHOULD, MAY, and nice-to-have wording do not entail a mandatory requirement.
+
+Return JSON only:
+{{
+  "decision": "yes" | "no",
+  "confidence": 0-100,
+  "brief_reason": "<max 12 words>"
+}}

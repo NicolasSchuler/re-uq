@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from textwrap import dedent
 
 import nbformat as nbf
 
@@ -10,17 +11,18 @@ NOTEBOOK_DIR = ROOT / "notebooks"
 
 
 def md(source: str) -> nbf.NotebookNode:
-    return nbf.v4.new_markdown_cell(source.strip() + "\n")
+    return nbf.v4.new_markdown_cell(dedent(source).strip() + "\n")
 
 
 def code(source: str) -> nbf.NotebookNode:
-    return nbf.v4.new_code_cell(source.strip() + "\n")
+    return nbf.v4.new_code_cell(dedent(source).strip() + "\n")
 
 
 COMMON_SETUP = r"""
 from pathlib import Path
 import os
 import sys
+import importlib
 
 PROJECT_ROOT = Path.cwd()
 if PROJECT_ROOT.name == "notebooks":
@@ -30,14 +32,17 @@ while not (PROJECT_ROOT / "AGENTS.md").exists() and PROJECT_ROOT.parent != PROJE
 
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 import eval_utils as eu
+eu = importlib.reload(eu)
 
 CONFIG_PATH = PROJECT_ROOT / "config.json"
 if not CONFIG_PATH.exists():
     CONFIG_PATH = PROJECT_ROOT / "config.example.json"
 CONFIG = eu.load_config(CONFIG_PATH)
 eu.ensure_project_dirs(PROJECT_ROOT)
+BENCHMARK_VARIANT = os.getenv("BENCHMARK_VARIANT", "must").strip().lower()
+VARIANT_SUFFIX = eu.variant_suffix(BENCHMARK_VARIANT)
 
-PROJECT_ROOT, CONFIG_PATH
+PROJECT_ROOT, CONFIG_PATH, BENCHMARK_VARIANT
 """
 
 
@@ -64,7 +69,7 @@ def notebook_00() -> list[nbf.NotebookNode]:
 
             Objective: load the NICE/PROMISE-derived requirements dataset, create a transparent seed review table, and keep exactly 120 accepted seed capabilities for the main experiment.
 
-            The automatic filter is intentionally conservative. Manual review remains part of the protocol: inspect `data/processed/seeds_review.csv`, edit `include`, `exclusion_reason`, and `capability_text_final` if needed, then rerun the validation cells.
+            The automatic filter and capability cleanup are intentionally conservative. Manual review remains part of the protocol, but `capability_text_final` is pre-filled with a cleaned suggestion so most rows should only need inspection rather than hand rewriting.
             """
         ),
         code(COMMON_SETUP),
@@ -104,13 +109,67 @@ def notebook_00() -> list[nbf.NotebookNode]:
                 "capability_text_final",
             ]
             review_path = PROJECT_ROOT / "data/processed/seeds_review.csv"
-            eu.write_csv_rows(review_path, candidates, fieldnames=review_fields)
+            auto_candidates_path = PROJECT_ROOT / "data/processed/seeds_review_candidates_auto.csv"
+
+            if review_path.exists():
+                eu.write_csv_rows(auto_candidates_path, candidates, fieldnames=review_fields)
+                print(f"Existing review table found: {review_path}")
+                print("Did not overwrite reviewed/manual capability edits.")
+                print(f"Wrote fresh automatic candidates for comparison: {auto_candidates_path}")
+            else:
+                eu.write_csv_rows(review_path, candidates, fieldnames=review_fields)
+                print(f"Wrote new review table: {review_path}")
 
             auto_ok = sum(1 for row in candidates if row["auto_include"] == "yes")
             selected = eu.load_reviewed_seeds(review_path, target_count=target_count, strict=False)
-            print(f"Wrote review table: {review_path}")
             print(f"Automatic candidates passing filters: {auto_ok}")
             print(f"Currently included seeds: {len(selected)} / {target_count}")
+            print("Inspect capability_text_final for included rows; edit only unclear or awkward suggestions.")
+            """
+        ),
+        md("## Optionally Refresh Existing Capability Suggestions"),
+        code(
+            r"""
+            # Manual review edits are preserved by default.
+            # Set RUN_REFRESH = True only if you want to refresh unedited capability suggestions.
+            RUN_REFRESH = False
+            review_path = PROJECT_ROOT / "data/processed/seeds_review.csv"
+
+            if RUN_REFRESH:
+                refreshed_count = eu.refresh_capability_suggestions_file(review_path)
+                print(f"Refreshed capability_text_final suggestions: {refreshed_count}")
+            else:
+                print("Skipped refresh; reviewed/manual capability edits were left untouched.")
+            """
+        ),
+        md("## Inspect Included Capability Suggestions"),
+        code(
+            r"""
+            import pandas as pd
+
+            review_df = pd.read_csv(review_path, dtype=str, keep_default_na=False)
+            included = review_df[review_df["include"] == "yes"].copy()
+            suspicious = included[
+                included["capability_text_final"].str.contains(r"\b(shall|must|should|may|system|product|application)\b", case=False, regex=True)
+                | included["capability_text_final"].str.contains(r"[.;:]", regex=True)
+            ]
+            print(f"Included rows: {len(included)}")
+            print(f"Rows worth closer manual review: {len(suspicious)}")
+            suspicious[["seed_id", "original_requirement", "capability_text_final"]].head(20)
+            """
+        ),
+        md("## Show Full Included Capability Review Table"),
+        code(
+            r"""
+            capability_review = eu.included_capability_review_frame(review_path)
+            export_paths = eu.write_included_capability_review(review_path, PROJECT_ROOT / "outputs")
+
+            print(f"Included rows: {len(capability_review)}")
+            print(f"Wrote Markdown review table: {export_paths['markdown']}")
+            print(f"Wrote CSV review table: {export_paths['csv']}")
+
+            with pd.option_context("display.max_rows", None, "display.max_colwidth", 180, "display.width", 240):
+                display(capability_review)
             """
         ),
         md("## Validate Reviewed Seeds"),
@@ -158,8 +217,29 @@ def notebook_01() -> list[nbf.NotebookNode]:
             r"""
             benchmark = eu.build_benchmark_items(seeds)
             benchmark_path = PROJECT_ROOT / "data/processed/benchmark_items.csv"
-            eu.write_csv_rows(benchmark_path, benchmark)
-            print(f"Wrote benchmark: {benchmark_path}")
+            candidate_benchmark_path = PROJECT_ROOT / "data/processed/benchmark_items_candidate.csv"
+
+            # Existing benchmark artifacts are preserved by default after review.
+            # Set FORCE_REBUILD_BENCHMARK = True only when you intentionally accept regenerated items.
+            FORCE_REBUILD_BENCHMARK = False
+            write_result = eu.write_csv_rows_if_changed(
+                benchmark_path,
+                benchmark,
+                candidate_path=candidate_benchmark_path,
+                overwrite=FORCE_REBUILD_BENCHMARK,
+            )
+
+            if write_result["status"] == "written":
+                print(f"Wrote benchmark: {benchmark_path}")
+            elif write_result["status"] == "overwritten":
+                print(f"Overwrote benchmark by explicit request: {benchmark_path}")
+            elif write_result["status"] == "unchanged":
+                print(f"Existing benchmark matches regenerated items: {benchmark_path}")
+            else:
+                print(f"Existing benchmark preserved: {benchmark_path}")
+                print(f"Regenerated candidate differs and was written for review: {write_result['candidate_path']}")
+
+            benchmark = eu.read_csv_rows(benchmark_path)
             print(f"Items: {len(benchmark)}")
             benchmark[:4]
             """
@@ -174,6 +254,90 @@ def notebook_01() -> list[nbf.NotebookNode]:
             assert all(row["task2_gold_modality"] == row["source_modality"] for row in benchmark)
             assert eu.ORDINAL_STRENGTH["mandatory"] > eu.ORDINAL_STRENGTH["recommended"] > eu.ORDINAL_STRENGTH["optional"] > eu.ORDINAL_STRENGTH["nice_to_have"]
             print("OK: benchmark shape, labels, and modality ordering are valid.")
+            """
+        ),
+        md("## Export Benchmark Statements For Review"),
+        code(
+            r"""
+            import pandas as pd
+
+            benchmark_review = eu.benchmark_statement_review_frame(benchmark)
+            review_paths = eu.write_benchmark_statement_review(benchmark, PROJECT_ROOT / "outputs")
+
+            print(f"Review rows: {len(benchmark_review)}")
+            print(f"Wrote Markdown review table: {review_paths['markdown']}")
+            print(f"Wrote CSV review table: {review_paths['csv']}")
+
+            with pd.option_context("display.max_rows", 20, "display.max_colwidth", 160, "display.width", 240):
+                display(benchmark_review.head(20))
+            """
+        ),
+        md("## Build SHALL Robustness Benchmark"),
+        code(
+            r"""
+            shall_benchmark = eu.build_benchmark_items(seeds, mandatory_keyword="SHALL")
+            shall_path = PROJECT_ROOT / "data/processed/benchmark_items_shall.csv"
+            candidate_shall_path = PROJECT_ROOT / "data/processed/benchmark_items_shall_candidate.csv"
+
+            FORCE_REBUILD_SHALL_BENCHMARK = False
+            shall_write_result = eu.write_csv_rows_if_changed(
+                shall_path,
+                shall_benchmark,
+                candidate_path=candidate_shall_path,
+                overwrite=FORCE_REBUILD_SHALL_BENCHMARK,
+            )
+
+            if shall_write_result["status"] == "written":
+                print(f"Wrote SHALL benchmark: {shall_path}")
+            elif shall_write_result["status"] == "overwritten":
+                print(f"Overwrote SHALL benchmark by explicit request: {shall_path}")
+            elif shall_write_result["status"] == "unchanged":
+                print(f"Existing SHALL benchmark matches regenerated items: {shall_path}")
+            else:
+                print(f"Existing SHALL benchmark preserved: {shall_path}")
+                print(f"Regenerated candidate differs and was written for review: {shall_write_result['candidate_path']}")
+
+            shall_benchmark = eu.read_csv_rows(shall_path)
+            assert len(shall_benchmark) == expected_items
+            assert len({row["item_id"] for row in shall_benchmark}) == expected_items
+            assert all(row["task1_gold_decision"] == ("yes" if row["source_modality"] == "mandatory" else "no") for row in shall_benchmark)
+            assert all(row["task2_gold_modality"] == row["source_modality"] for row in shall_benchmark)
+            assert all("SHALL" in row["source_statement"] for row in shall_benchmark if row["source_modality"] == "mandatory")
+            assert all("SHALL" in row["candidate_requirement"] for row in shall_benchmark)
+
+            shall_review_paths = eu.write_benchmark_statement_review(shall_benchmark, PROJECT_ROOT / "outputs", suffix="_shall")
+            print(f"SHALL items: {len(shall_benchmark)}")
+            print(f"Wrote SHALL Markdown review table: {shall_review_paths['markdown']}")
+            print(f"Wrote SHALL CSV review table: {shall_review_paths['csv']}")
+            """
+        ),
+        md("## Write Benchmark Manifest"),
+        code(
+            r"""
+            manifest_path = PROJECT_ROOT / "outputs/benchmark_manifest.json"
+            manifest_paths = [
+                PROJECT_ROOT / "data/processed/seeds_review.csv",
+                PROJECT_ROOT / "data/processed/seeds_selected.csv",
+                PROJECT_ROOT / "data/processed/benchmark_items.csv",
+                PROJECT_ROOT / "data/processed/benchmark_items_shall.csv",
+                PROJECT_ROOT / "prompts/mandatory_entailment.txt",
+                PROJECT_ROOT / "prompts/mandatory_entailment_strict.txt",
+                PROJECT_ROOT / "prompts/modality_extraction.txt",
+                PROJECT_ROOT / "prompts/modality_extraction_labels_only.txt",
+            ]
+            manifest = eu.write_benchmark_manifest(
+                manifest_paths,
+                manifest_path,
+                root=PROJECT_ROOT,
+                metadata={
+                    "main_benchmark": "MUST",
+                    "robustness_benchmark": "SHALL",
+                    "seed_count": target_count,
+                    "source_modalities": eu.MODALITIES,
+                },
+            )
+            print(f"Wrote manifest: {manifest_path}")
+            print(f"Artifacts recorded: {len(manifest['artifacts'])}")
             """
         ),
     ]
@@ -194,34 +358,37 @@ def prompt_for(task, item):
         return eu.render_prompt(task2_template, source_statement=item["source_statement"])
     raise ValueError(task)
 
-def run_one(item, task, model, sample_kind, sample_index, temperature, top_p, output_path, run_id):
-    prompt = prompt_for(task, item)
-    completion = eu.chat_completion(
-        host=HOST,
-        model=model,
-        prompt=prompt,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=int(CONFIG["llm"]["max_tokens"]),
-        timeout_s=int(CONFIG["llm"]["timeout_s"]),
-        api_key_env=CONFIG["llm"]["api_key_env"],
-    )
-    record = eu.build_raw_record(
-        run_id=run_id,
-        model=model,
-        host=HOST,
-        task=task,
-        item=item,
-        sample_index=sample_index,
-        sample_kind=sample_kind,
-        temperature=temperature,
-        top_p=top_p,
-        prompt_version=CONFIG["project"]["prompt_version"],
-        prompt=prompt,
-        completion=completion,
-    )
-    eu.append_jsonl(output_path, record)
-    return record
+def request_job(
+    item,
+    task,
+    model,
+    sample_kind,
+    sample_index,
+    temperature,
+    top_p,
+    run_id,
+    request_index,
+    prompt=None,
+    prompt_version=None,
+):
+    prompt = prompt if prompt is not None else prompt_for(task, item)
+    return {
+        "request_index": request_index,
+        "run_id": run_id,
+        "model": model,
+        "host": HOST,
+        "task": task,
+        "item": item,
+        "sample_index": sample_index,
+        "sample_kind": sample_kind,
+        "temperature": temperature,
+        "top_p": top_p,
+        "prompt_version": prompt_version or CONFIG["project"]["prompt_version"],
+        "prompt": prompt,
+        "max_tokens": int(CONFIG["llm"]["max_tokens"]),
+        "timeout_s": int(CONFIG["llm"]["timeout_s"]),
+        "api_key_env": CONFIG["llm"]["api_key_env"],
+    }
 """
 
 
@@ -233,7 +400,7 @@ def notebook_02() -> list[nbf.NotebookNode]:
 
             Objective: run a bounded pilot against one local OpenAI-compatible model and check JSON parse rate before the full experiment.
 
-            By default this notebook does not call the model. Set `RUN_PILOT = True` after the local endpoint is running.
+            By default this notebook calls the configured model. Set `RUN_PILOT=false` to skip requests.
             """
         ),
         code(COMMON_SETUP),
@@ -243,21 +410,30 @@ def notebook_02() -> list[nbf.NotebookNode]:
             HOST = os.getenv("HOST", CONFIG["llm"]["host"])
             configured_models = [m.strip() for m in os.getenv("MODELS", ",".join(CONFIG["llm"]["models"])).split(",") if m.strip()]
             MODEL = os.getenv("MODEL", configured_models[0])
-            RUN_PILOT = os.getenv("RUN_PILOT", "false").lower() in {"1", "true", "yes"}
+            RUN_PILOT = os.getenv("RUN_PILOT", "true").lower() in {"1", "true", "yes"}
+            REQUEST_CONCURRENCY = eu.resolve_llm_concurrency(CONFIG)
 
             deterministic = CONFIG["llm"]["deterministic"]
             stochastic = CONFIG["llm"]["stochastic"]
-            print({"HOST": HOST, "MODEL": MODEL, "RUN_PILOT": RUN_PILOT})
+            print({
+                "HOST": HOST,
+                "MODEL": MODEL,
+                "RUN_PILOT": RUN_PILOT,
+                "REQUEST_CONCURRENCY": REQUEST_CONCURRENCY,
+                "BENCHMARK_VARIANT": BENCHMARK_VARIANT,
+            })
             """
         ),
         md("## Select Pilot Items"),
         code(
             r"""
-            benchmark = eu.read_csv_rows(PROJECT_ROOT / "data/processed/benchmark_items.csv")
+            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
+            benchmark = eu.read_csv_rows(benchmark_path)
             pilot_seed_count = int(CONFIG["project"]["pilot_seed_count"])
             pilot_seed_ids = sorted({row["seed_id"] for row in benchmark})[:pilot_seed_count]
             pilot_items = [row for row in benchmark if row["seed_id"] in pilot_seed_ids]
             planned_calls = len(pilot_items) * 2 * (1 + int(stochastic["samples"]))
+            print(f"Benchmark path: {benchmark_path}")
             print(f"Pilot items: {len(pilot_items)} ({pilot_seed_count} seeds)")
             print(f"Planned calls for one model across both tasks: {planned_calls}")
             """
@@ -266,36 +442,45 @@ def notebook_02() -> list[nbf.NotebookNode]:
         code(PROMPT_RUNNER),
         code(
             r"""
-            output_path = PROJECT_ROOT / "data/processed/model_outputs_raw_pilot.jsonl"
-            run_id = eu.new_run_id("pilot")
+            output_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_pilot.jsonl", BENCHMARK_VARIANT)
+            run_id = eu.new_run_id("pilot" if BENCHMARK_VARIANT == "must" else f"pilot-{BENCHMARK_VARIANT}")
             records = []
+            jobs = []
 
-            if RUN_PILOT:
-                for item in pilot_items:
-                    for task in ["task1", "task2"]:
-                        records.append(run_one(
+            for item in pilot_items:
+                for task in ["task1", "task2"]:
+                    jobs.append(request_job(
+                        item=item,
+                        task=task,
+                        model=MODEL,
+                        sample_kind="deterministic",
+                        sample_index=0,
+                        temperature=float(deterministic["temperature"]),
+                        top_p=float(deterministic["top_p"]),
+                        run_id=run_id,
+                        request_index=len(jobs),
+                    ))
+                    for sample_index in range(int(stochastic["samples"])):
+                        jobs.append(request_job(
                             item=item,
                             task=task,
                             model=MODEL,
-                            sample_kind="deterministic",
-                            sample_index=0,
-                            temperature=float(deterministic["temperature"]),
-                            top_p=float(deterministic["top_p"]),
-                            output_path=output_path,
+                            sample_kind="stochastic",
+                            sample_index=sample_index,
+                            temperature=float(stochastic["temperature"]),
+                            top_p=float(stochastic["top_p"]),
                             run_id=run_id,
+                            request_index=len(jobs),
                         ))
-                        for sample_index in range(int(stochastic["samples"])):
-                            records.append(run_one(
-                                item=item,
-                                task=task,
-                                model=MODEL,
-                                sample_kind="stochastic",
-                                sample_index=sample_index,
-                                temperature=float(stochastic["temperature"]),
-                                top_p=float(stochastic["top_p"]),
-                                output_path=output_path,
-                                run_id=run_id,
-                            ))
+            assert len(jobs) == planned_calls
+
+            if RUN_PILOT:
+                print(f"Dispatching {len(jobs)} pilot calls with concurrency={REQUEST_CONCURRENCY}")
+                for record in eu.run_completion_jobs(jobs, max_workers=REQUEST_CONCURRENCY):
+                    eu.append_jsonl(output_path, record)
+                    records.append(record)
+                    if len(records) % 25 == 0 or len(records) == len(jobs):
+                        print(f"Completed {len(records)}/{len(jobs)} pilot calls")
                 print(f"Wrote {len(records)} pilot records to {output_path}")
             else:
                 print("Pilot not run. Set RUN_PILOT=true in the environment or edit RUN_PILOT to True.")
@@ -317,6 +502,329 @@ def notebook_02() -> list[nbf.NotebookNode]:
                     print("Gate passed: parse success is >= 95%.")
             """
         ),
+        md("## Survey-Aligned UQ Pilot Diagnostics"),
+        code(
+            r"""
+            if pilot_rows:
+                pilot_scores = eu.build_uq_scores(benchmark, pilot_rows)
+                fields = [
+                    "model",
+                    "task",
+                    "uq_method",
+                    "source_modality",
+                    "p_yes",
+                    "confidence",
+                    "uncertainty_score",
+                    "uncertainty_measure",
+                    "valid_n",
+                    "total_n",
+                ]
+                diagnostic_rows = [
+                    row for row in pilot_scores
+                    if row["uq_method"] in {"label_self_consistency", "modality_consistency", "predictive_entropy", "variation_ratio"}
+                ]
+                print(eu.markdown_table(diagnostic_rows[:24], fields))
+            else:
+                print("No pilot rows available. Run the pilot to inspect entropy and variation-ratio diagnostics.")
+            """
+        ),
+        md("## Optional Logprob Capability Probe"),
+        code(
+            r"""
+            RUN_LOGPROB_PROBE = os.getenv("RUN_LOGPROB_PROBE", "true").lower() in {"1", "true", "yes"}
+            logprob_probe_path = eu.variant_path(PROJECT_ROOT / "outputs/logprob_probe.json", BENCHMARK_VARIANT)
+
+            if RUN_LOGPROB_PROBE:
+                probe = eu.logprob_support_probe(
+                    host=HOST,
+                    model=MODEL,
+                    api_key_env=CONFIG["llm"]["api_key_env"],
+                    timeout_s=int(CONFIG["llm"]["timeout_s"]),
+                )
+                eu.write_json(logprob_probe_path, probe)
+                print(probe)
+            else:
+                print("Logprob probe not run. Set RUN_LOGPROB_PROBE=true to test token-level UQ support via /v1/responses.")
+                print(f"Probe output path when enabled: {logprob_probe_path}")
+            """
+        ),
+        md("## Prompt Sensitivity Check"),
+        code(
+            r"""
+            strict_template = eu.load_prompt(PROJECT_ROOT / "prompts/mandatory_entailment_strict.txt")
+            sensitivity_raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_prompt_sensitivity.jsonl", BENCHMARK_VARIANT)
+            sensitivity_summary_path = eu.variant_path(PROJECT_ROOT / "outputs/prompt_sensitivity_summary.csv", BENCHMARK_VARIANT)
+            RUN_PROMPT_SENSITIVITY = os.getenv("RUN_PROMPT_SENSITIVITY", "true").lower() in {"1", "true", "yes"}
+
+            sensitivity_records = []
+            sensitivity_run_id = eu.new_run_id("prompt-sensitivity" if BENCHMARK_VARIANT == "must" else f"prompt-sensitivity-{BENCHMARK_VARIANT}")
+            task1_pilot_items = list(pilot_items)
+            sensitivity_jobs = []
+
+            if RUN_PROMPT_SENSITIVITY:
+                for prompt_name, template in [("default", task1_template), ("strict", strict_template)]:
+                    for item in task1_pilot_items:
+                        prompt = eu.render_prompt(
+                            template,
+                            source_statement=item["source_statement"],
+                            candidate_requirement=item["candidate_requirement"],
+                        )
+                        sensitivity_jobs.append(request_job(
+                            run_id=f"{sensitivity_run_id}-{prompt_name}",
+                            model=f"{MODEL}:{prompt_name}",
+                            task="task1",
+                            item=item,
+                            sample_index=0,
+                            sample_kind="deterministic",
+                            temperature=float(deterministic["temperature"]),
+                            top_p=float(deterministic["top_p"]),
+                            prompt_version=f"{CONFIG['project']['prompt_version']}:{prompt_name}",
+                            prompt=prompt,
+                            request_index=len(sensitivity_jobs),
+                        ))
+                print(f"Dispatching {len(sensitivity_jobs)} prompt-sensitivity calls with concurrency={REQUEST_CONCURRENCY}")
+                for record in eu.run_completion_jobs(sensitivity_jobs, max_workers=REQUEST_CONCURRENCY):
+                    eu.append_jsonl(sensitivity_raw_path, record)
+                    sensitivity_records.append(record)
+                    if len(sensitivity_records) % 25 == 0 or len(sensitivity_records) == len(sensitivity_jobs):
+                        print(f"Completed {len(sensitivity_records)}/{len(sensitivity_jobs)} prompt-sensitivity calls")
+                print(f"Wrote {len(sensitivity_records)} prompt-sensitivity records to {sensitivity_raw_path}")
+            else:
+                print("Prompt sensitivity not run. Set RUN_PROMPT_SENSITIVITY=true or RUN_PILOT=true.")
+
+            sensitivity_summary = eu.prompt_sensitivity_summary(benchmark, sensitivity_records)
+            eu.write_csv_rows(
+                sensitivity_summary_path,
+                sensitivity_summary,
+                fieldnames=["model", "prompt_run_id", "n", "accuracy", "weak_source_high_p_yes_80", "weak_source_high_p_yes_90", "mean_weak_p_yes"],
+            )
+            print(f"Wrote prompt sensitivity summary: {sensitivity_summary_path}")
+            print(eu.markdown_table(sensitivity_summary, ["model", "prompt_run_id", "n", "accuracy", "weak_source_high_p_yes_80", "weak_source_high_p_yes_90", "mean_weak_p_yes"]))
+            """
+        ),
+        md("## Task 2 Modality Prompt Validity Check"),
+        code(
+            r"""
+            task2_labels_only_template = eu.load_prompt(PROJECT_ROOT / "prompts/modality_extraction_labels_only.txt")
+            task2_sensitivity_raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task2_prompt_sensitivity.jsonl", BENCHMARK_VARIANT)
+            task2_sensitivity_summary_path = eu.variant_path(PROJECT_ROOT / "outputs/task2_prompt_sensitivity_summary.csv", BENCHMARK_VARIANT)
+            RUN_TASK2_PROMPT_SENSITIVITY = os.getenv("RUN_TASK2_PROMPT_SENSITIVITY", "true").lower() in {"1", "true", "yes"}
+
+            task2_sensitivity_items = [row for row in pilot_items if row["source_modality"] == "nice_to_have"]
+            task2_sensitivity_records = []
+            task2_sensitivity_run_id = eu.new_run_id("task2-prompt-sensitivity" if BENCHMARK_VARIANT == "must" else f"task2-prompt-sensitivity-{BENCHMARK_VARIANT}")
+            task2_sensitivity_jobs = []
+
+            if RUN_TASK2_PROMPT_SENSITIVITY:
+                for prompt_name, template in [("default", task2_template), ("labels_only", task2_labels_only_template)]:
+                    for item in task2_sensitivity_items:
+                        prompt = eu.render_prompt(template, source_statement=item["source_statement"])
+                        task2_sensitivity_jobs.append(request_job(
+                            run_id=f"{task2_sensitivity_run_id}-{prompt_name}",
+                            model=f"{MODEL}:task2_{prompt_name}",
+                            task="task2",
+                            item=item,
+                            sample_index=0,
+                            sample_kind="deterministic",
+                            temperature=float(deterministic["temperature"]),
+                            top_p=float(deterministic["top_p"]),
+                            prompt_version=f"{CONFIG['project']['prompt_version']}:task2_{prompt_name}",
+                            prompt=prompt,
+                            request_index=len(task2_sensitivity_jobs),
+                        ))
+                print(f"Dispatching {len(task2_sensitivity_jobs)} Task 2 prompt-validity calls with concurrency={REQUEST_CONCURRENCY}")
+                for record in eu.run_completion_jobs(task2_sensitivity_jobs, max_workers=REQUEST_CONCURRENCY):
+                    eu.append_jsonl(task2_sensitivity_raw_path, record)
+                    task2_sensitivity_records.append(record)
+                    if len(task2_sensitivity_records) % 10 == 0 or len(task2_sensitivity_records) == len(task2_sensitivity_jobs):
+                        print(f"Completed {len(task2_sensitivity_records)}/{len(task2_sensitivity_jobs)} Task 2 prompt-validity calls")
+                print(f"Wrote {len(task2_sensitivity_records)} Task 2 prompt-validity records to {task2_sensitivity_raw_path}")
+            else:
+                print("Task 2 prompt-validity check not run. Set RUN_TASK2_PROMPT_SENSITIVITY=true or edit the flag to True.")
+
+            task2_sensitivity_summary = eu.task2_prompt_sensitivity_summary(benchmark, task2_sensitivity_records)
+            task2_sensitivity_fields = [
+                "model",
+                "prompt_run_id",
+                "n",
+                "valid_n",
+                "parse_success_rate",
+                "accuracy",
+                "nice_to_have_n",
+                "nice_to_have_accuracy",
+                "nice_to_have_to_recommended_rate",
+                "over_commitment",
+                "high_conf_overcommit_80",
+                "high_conf_overcommit_90",
+            ]
+            eu.write_csv_rows(task2_sensitivity_summary_path, task2_sensitivity_summary, fieldnames=task2_sensitivity_fields)
+            print(f"Wrote Task 2 prompt-validity summary: {task2_sensitivity_summary_path}")
+            print(eu.markdown_table(task2_sensitivity_summary, task2_sensitivity_fields))
+            """
+        ),
+    ]
+
+
+def notebook_02b() -> list[nbf.NotebookNode]:
+    return [
+        md(
+            """
+            # 02b Weak-Modality Robustness Probe
+
+            Objective: test whether the pilot `nice_to_have` to `recommended` collapse is tied to one wording or generalizes across weak stakeholder-intent phrasings.
+
+            This formative probe uses the same 20 pilot seeds, Task 2 only, and the existing modality extraction prompt. It does not change the main benchmark.
+            """
+        ),
+        code(COMMON_SETUP),
+        md("## Configure Probe"),
+        code(
+            r"""
+            HOST = os.getenv("HOST", CONFIG["llm"]["host"])
+            configured_models = [m.strip() for m in os.getenv("MODELS", ",".join(CONFIG["llm"]["models"])).split(",") if m.strip()]
+            MODEL = os.getenv("MODEL", configured_models[0])
+            RUN_WEAK_MODALITY_PROBE = os.getenv("RUN_WEAK_MODALITY_PROBE", "true").lower() in {"1", "true", "yes"}
+            RUN_WEAK_MODALITY_STOCHASTIC = os.getenv("RUN_WEAK_MODALITY_STOCHASTIC", "false").lower() in {"1", "true", "yes"}
+            REQUEST_CONCURRENCY = eu.resolve_llm_concurrency(CONFIG)
+
+            deterministic = CONFIG["llm"]["deterministic"]
+            stochastic = CONFIG["llm"]["stochastic"]
+            print({
+                "HOST": HOST,
+                "MODEL": MODEL,
+                "RUN_WEAK_MODALITY_PROBE": RUN_WEAK_MODALITY_PROBE,
+                "RUN_WEAK_MODALITY_STOCHASTIC": RUN_WEAK_MODALITY_STOCHASTIC,
+                "REQUEST_CONCURRENCY": REQUEST_CONCURRENCY,
+                "BENCHMARK_VARIANT": BENCHMARK_VARIANT,
+            })
+            """
+        ),
+        md("## Build Probe Items"),
+        code(
+            r"""
+            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
+            seeds_path = PROJECT_ROOT / "data/processed/seeds_selected.csv"
+            probe_items_path = eu.variant_path(PROJECT_ROOT / "data/processed/weak_modality_probe_items.csv", BENCHMARK_VARIANT)
+
+            benchmark = eu.read_csv_rows(benchmark_path)
+            seed_rows = eu.read_csv_rows(seeds_path)
+            pilot_seed_count = int(CONFIG["project"]["pilot_seed_count"])
+            pilot_seed_ids = sorted({row["seed_id"] for row in benchmark})[:pilot_seed_count]
+            pilot_seed_order = {seed_id: index for index, seed_id in enumerate(pilot_seed_ids)}
+            pilot_seeds = sorted(
+                [row for row in seed_rows if row["seed_id"] in pilot_seed_order],
+                key=lambda row: pilot_seed_order[row["seed_id"]],
+            )
+            assert len(pilot_seeds) == pilot_seed_count
+
+            probe_items = eu.build_weak_modality_probe_items(pilot_seeds)
+            expected_items = pilot_seed_count * len(eu.WEAK_MODALITY_PROBE_TEMPLATES)
+            assert len(probe_items) == expected_items
+            assert len({row["item_id"] for row in probe_items}) == expected_items
+            assert {row["task2_gold_modality"] for row in probe_items} == {"nice_to_have"}
+
+            eu.write_csv_rows(probe_items_path, probe_items, fieldnames=eu.WEAK_MODALITY_PROBE_FIELDS)
+            print(f"Probe items: {len(probe_items)}")
+            print(f"Wrote probe items: {probe_items_path}")
+            print(eu.markdown_table(probe_items[:8], ["item_id", "template_id", "source_statement", "task2_gold_modality"]))
+            """
+        ),
+        md("## Pre-Model Sanity Check"),
+        code(
+            r"""
+            sanity_paths = eu.write_weak_modality_template_sanity_check(PROJECT_ROOT / "outputs")
+            sanity_rows = eu.read_csv_rows(sanity_paths["csv"])
+            sanity_status = eu.weak_modality_sanity_status(sanity_rows)
+            PROBE_READY = bool(sanity_status["valid"])
+
+            print(f"Sanity CSV: {sanity_paths['csv']}")
+            print(f"Sanity Markdown: {sanity_paths['markdown']}")
+            print(sanity_status)
+            if not PROBE_READY:
+                print("Probe is gated: mark each template as weaker_than_should=yes in the sanity CSV before model execution.")
+            print(eu.markdown_table(sanity_rows, eu.WEAK_MODALITY_SANITY_FIELDS))
+            """
+        ),
+        md("## Run Task 2 Probe"),
+        code(PROMPT_RUNNER),
+        code(
+            r"""
+            output_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_weak_modality_probe.jsonl", BENCHMARK_VARIANT)
+            run_id = eu.new_run_id("weak-modality-probe" if BENCHMARK_VARIANT == "must" else f"weak-modality-probe-{BENCHMARK_VARIANT}")
+            records = []
+            jobs = []
+
+            for item in probe_items:
+                jobs.append(request_job(
+                    item=item,
+                    task="task2",
+                    model=MODEL,
+                    sample_kind="deterministic",
+                    sample_index=0,
+                    temperature=float(deterministic["temperature"]),
+                    top_p=float(deterministic["top_p"]),
+                    run_id=run_id,
+                    request_index=len(jobs),
+                ))
+                if RUN_WEAK_MODALITY_STOCHASTIC:
+                    for sample_index in range(int(stochastic["samples"])):
+                        jobs.append(request_job(
+                            item=item,
+                            task="task2",
+                            model=MODEL,
+                            sample_kind="stochastic",
+                            sample_index=sample_index,
+                            temperature=float(stochastic["temperature"]),
+                            top_p=float(stochastic["top_p"]),
+                            run_id=run_id,
+                            request_index=len(jobs),
+                        ))
+
+            if RUN_WEAK_MODALITY_PROBE and PROBE_READY:
+                print(f"Dispatching {len(jobs)} weak-modality probe calls with concurrency={REQUEST_CONCURRENCY}")
+                for record in eu.run_completion_jobs(jobs, max_workers=REQUEST_CONCURRENCY):
+                    eu.append_jsonl(output_path, record)
+                    records.append(record)
+                    if len(records) % 20 == 0 or len(records) == len(jobs):
+                        print(f"Completed {len(records)}/{len(jobs)} weak-modality probe calls")
+                print(f"Wrote {len(records)} weak-modality probe records to {output_path}")
+            elif not PROBE_READY:
+                print("Weak-modality probe not run because the sanity check is incomplete.")
+            else:
+                print("Weak-modality probe not run. Set RUN_WEAK_MODALITY_PROBE=true or edit the flag to True.")
+            """
+        ),
+        md("## Summarize Probe"),
+        code(
+            r"""
+            if records:
+                probe_run_id, probe_rows = run_id, records
+            elif output_path.exists():
+                probe_run_id, probe_rows = eu.select_run_rows(
+                    eu.read_jsonl(output_path),
+                    prefix="weak-modality-probe" if BENCHMARK_VARIANT == "must" else f"weak-modality-probe-{BENCHMARK_VARIANT}",
+                )
+            else:
+                probe_run_id, probe_rows = None, []
+
+            summary = eu.weak_modality_probe_summary(probe_items, probe_rows)
+            summary_paths = eu.write_weak_modality_probe_summary(summary, PROJECT_ROOT / "outputs")
+            print(f"Selected probe run: {probe_run_id}")
+            print(f"Wrote summary CSV: {summary_paths['csv']}")
+            print(f"Wrote summary Markdown: {summary_paths['markdown']}")
+            print(eu.markdown_table(summary, eu.WEAK_MODALITY_PROBE_SUMMARY_FIELDS))
+            """
+        ),
+        md("## Decision Rule"),
+        code(
+            r"""
+            print("Interpretation guide:")
+            print("- Most templates collapse to recommended: proceed to full runs with robustness note.")
+            print("- Only useful_if collapses: treat the pilot as phrase-specific and revise or narrow the claim.")
+            print("- Mixed labels: proceed cautiously and frame weak modality as lexically sensitive.")
+            print("- Sanity check not valid: hold and revise the weak-modality construct.")
+            """
+        ),
     ]
 
 
@@ -328,7 +836,7 @@ def notebook_03() -> list[nbf.NotebookNode]:
 
             Objective: run both tasks for each locally provided model, cache every raw response, and preserve invalid outputs for auditability.
 
-            This notebook is intentionally guarded. Set `RUN_FULL_EXPERIMENT = True` only after the pilot passes.
+            This notebook runs the full experiment by default. Set `RUN_FULL_EXPERIMENT=false` to skip requests.
             """
         ),
         code(COMMON_SETUP),
@@ -337,15 +845,29 @@ def notebook_03() -> list[nbf.NotebookNode]:
             r"""
             HOST = os.getenv("HOST", CONFIG["llm"]["host"])
             MODELS = [m.strip() for m in os.getenv("MODELS", ",".join(CONFIG["llm"]["models"])).split(",") if m.strip()]
-            RUN_FULL_EXPERIMENT = os.getenv("RUN_FULL_EXPERIMENT", "false").lower() in {"1", "true", "yes"}
+            RUN_FULL_EXPERIMENT = os.getenv("RUN_FULL_EXPERIMENT", "true").lower() in {"1", "true", "yes"}
             deterministic = CONFIG["llm"]["deterministic"]
             stochastic = CONFIG["llm"]["stochastic"]
-            output_path = PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl"
-            run_id = eu.new_run_id("full")
+            REQUEST_CONCURRENCY = eu.resolve_llm_concurrency(CONFIG)
+            SAVE_PRELIMINARY_RESULTS = os.getenv("SAVE_PRELIMINARY_RESULTS", "true").lower() in {"1", "true", "yes"}
+            PRELIMINARY_EVERY_N_CALLS = max(1, int(os.getenv("PRELIMINARY_EVERY_N_CALLS", "50")))
+            output_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", BENCHMARK_VARIANT)
+            run_id = eu.new_run_id("full" if BENCHMARK_VARIANT == "must" else f"full-{BENCHMARK_VARIANT}")
 
-            benchmark = eu.read_csv_rows(PROJECT_ROOT / "data/processed/benchmark_items.csv")
+            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
+            benchmark = eu.read_csv_rows(benchmark_path)
             planned_calls = len(benchmark) * len(MODELS) * 2 * (1 + int(stochastic["samples"]))
-            print({"HOST": HOST, "MODELS": MODELS, "RUN_FULL_EXPERIMENT": RUN_FULL_EXPERIMENT, "run_id": run_id})
+            print({
+                "HOST": HOST,
+                "MODELS": MODELS,
+                "RUN_FULL_EXPERIMENT": RUN_FULL_EXPERIMENT,
+                "REQUEST_CONCURRENCY": REQUEST_CONCURRENCY,
+                "SAVE_PRELIMINARY_RESULTS": SAVE_PRELIMINARY_RESULTS,
+                "PRELIMINARY_EVERY_N_CALLS": PRELIMINARY_EVERY_N_CALLS,
+                "run_id": run_id,
+                "BENCHMARK_VARIANT": BENCHMARK_VARIANT,
+            })
+            print(f"Benchmark path: {benchmark_path}")
             print(f"Benchmark items: {len(benchmark)}")
             print(f"Planned calls: {planned_calls}")
             """
@@ -356,11 +878,28 @@ def notebook_03() -> list[nbf.NotebookNode]:
             r"""
             if RUN_FULL_EXPERIMENT:
                 total = 0
+                last_snapshot_at = 0
+                jobs = []
+
+                def write_preliminary_snapshot(total_calls):
+                    run_rows = [row for row in eu.read_jsonl(output_path) if row.get("run_id") == run_id]
+                    snapshot = eu.write_preliminary_result_snapshot(
+                        benchmark,
+                        run_rows,
+                        PROJECT_ROOT,
+                        variant=BENCHMARK_VARIANT,
+                        expected_stochastic_samples=int(stochastic["samples"]),
+                    )
+                    print(
+                        f"Saved preliminary snapshot after {total_calls}/{planned_calls} calls: "
+                        f"{snapshot['summary_rows']} summary rows, {snapshot['progress_rows']} progress rows"
+                    )
+                    print(f"Preliminary table: {snapshot['paths']['table']}")
+
                 for model in MODELS:
-                    print(f"Running model: {model}")
                     for item in benchmark:
                         for task in ["task1", "task2"]:
-                            run_one(
+                            jobs.append(request_job(
                                 item=item,
                                 task=task,
                                 model=model,
@@ -368,12 +907,11 @@ def notebook_03() -> list[nbf.NotebookNode]:
                                 sample_index=0,
                                 temperature=float(deterministic["temperature"]),
                                 top_p=float(deterministic["top_p"]),
-                                output_path=output_path,
                                 run_id=run_id,
-                            )
-                            total += 1
+                                request_index=len(jobs),
+                            ))
                             for sample_index in range(int(stochastic["samples"])):
-                                run_one(
+                                jobs.append(request_job(
                                     item=item,
                                     task=task,
                                     model=model,
@@ -381,12 +919,22 @@ def notebook_03() -> list[nbf.NotebookNode]:
                                     sample_index=sample_index,
                                     temperature=float(stochastic["temperature"]),
                                     top_p=float(stochastic["top_p"]),
-                                    output_path=output_path,
                                     run_id=run_id,
-                                )
-                                total += 1
-                            if total % 100 == 0:
-                                print(f"Completed {total}/{planned_calls} calls")
+                                    request_index=len(jobs),
+                                ))
+                assert len(jobs) == planned_calls
+
+                print(f"Dispatching {len(jobs)} full-experiment calls with concurrency={REQUEST_CONCURRENCY}")
+                for record in eu.run_completion_jobs(jobs, max_workers=REQUEST_CONCURRENCY):
+                    eu.append_jsonl(output_path, record)
+                    total += 1
+                    if total % 100 == 0 or total == planned_calls:
+                        print(f"Completed {total}/{planned_calls} calls")
+                    if SAVE_PRELIMINARY_RESULTS and total - last_snapshot_at >= PRELIMINARY_EVERY_N_CALLS:
+                        write_preliminary_snapshot(total)
+                        last_snapshot_at = total
+                if SAVE_PRELIMINARY_RESULTS:
+                    write_preliminary_snapshot(total)
                 print(f"Done. Wrote records to {output_path}")
             else:
                 print("Full experiment not run. Set RUN_FULL_EXPERIMENT=true after the pilot gate passes.")
@@ -407,6 +955,14 @@ def notebook_03() -> list[nbf.NotebookNode]:
                 print("No rows for this run_id yet.")
             """
         ),
+        md("## Preliminary Snapshot Files"),
+        code(
+            r"""
+            paths = eu.preliminary_result_paths(PROJECT_ROOT, BENCHMARK_VARIANT)
+            for name, path in paths.items():
+                print(f"{name}: {path} ({'exists' if path.exists() else 'missing'})")
+            """
+        ),
     ]
 
 
@@ -423,13 +979,17 @@ def notebook_04() -> list[nbf.NotebookNode]:
         md("## Load Raw Outputs and Benchmark"),
         code(
             r"""
-            benchmark_path = PROJECT_ROOT / "data/processed/benchmark_items.csv"
-            raw_path = PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl"
+            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
+            raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", BENCHMARK_VARIANT)
 
             benchmark = eu.read_csv_rows(benchmark_path)
             all_raw_rows = eu.read_jsonl(raw_path)
             requested_run_id = os.getenv("RUN_ID") or os.getenv("ANALYSIS_RUN_ID")
-            selected_run_id, raw_rows = eu.select_run_rows(all_raw_rows, run_id=requested_run_id, prefix="full")
+            run_prefix = "full" if BENCHMARK_VARIANT == "must" else f"full-{BENCHMARK_VARIANT}"
+            selected_run_id, raw_rows = eu.select_run_rows(all_raw_rows, run_id=requested_run_id, prefix=run_prefix)
+            print(f"Benchmark variant: {BENCHMARK_VARIANT}")
+            print(f"Benchmark path: {benchmark_path}")
+            print(f"Raw output path: {raw_path}")
             print(f"Benchmark items: {len(benchmark)}")
             print(f"Raw output rows: {len(all_raw_rows)}")
             print(f"Selected run_id: {selected_run_id}")
@@ -443,10 +1003,12 @@ def notebook_04() -> list[nbf.NotebookNode]:
         code(
             r"""
             scores = eu.build_uq_scores(benchmark, raw_rows)
-            scores_path = PROJECT_ROOT / "data/processed/uq_scores.csv"
+            baseline_scores = eu.build_rule_baseline_scores(benchmark)
+            scores.extend(baseline_scores)
+            scores_path = eu.variant_path(PROJECT_ROOT / "data/processed/uq_scores.csv", BENCHMARK_VARIANT)
             eu.write_csv_rows(scores_path, scores)
             print(f"Wrote UQ scores: {scores_path}")
-            print(f"Score rows: {len(scores)}")
+            print(f"Score rows: {len(scores)} including {len(baseline_scores)} rule-baseline rows")
             scores[:3]
             """
         ),
@@ -454,7 +1016,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
         code(
             r"""
             summary = eu.metric_summary_by_model_task_method(scores)
-            summary_path = PROJECT_ROOT / "data/processed/metrics_summary.csv"
+            summary_path = eu.variant_path(PROJECT_ROOT / "data/processed/metrics_summary.csv", BENCHMARK_VARIANT)
             eu.write_csv_rows(summary_path, summary)
             print(f"Wrote summary: {summary_path}")
             fields = [
@@ -469,6 +1031,14 @@ def notebook_04() -> list[nbf.NotebookNode]:
                 "ece",
                 "auroc",
                 "monotonicity_violations",
+                "high_conf_overcommit_80",
+                "high_conf_overcommit_90",
+                "text_modality_accuracy",
+                "label_text_consistency",
+                "text_over_commitment",
+                "text_high_conf_overcommit_80",
+                "text_high_conf_overcommit_90",
+                "error_detection_auroc",
                 "parse_failure_rate",
             ]
             print(eu.markdown_table(summary, fields))
@@ -507,7 +1077,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
                     "brier_ci_high": brier_high,
                 })
 
-            ci_path = PROJECT_ROOT / "data/processed/bootstrap_seed_ci.csv"
+            ci_path = eu.variant_path(PROJECT_ROOT / "data/processed/bootstrap_seed_ci.csv", BENCHMARK_VARIANT)
             eu.write_csv_rows(ci_path, ci_rows)
             print(f"Wrote bootstrap CIs: {ci_path}")
             print(eu.markdown_table(ci_rows, ["model", "task", "uq_method", "accuracy", "accuracy_ci_low", "accuracy_ci_high", "brier", "brier_ci_low", "brier_ci_high"]))
@@ -523,8 +1093,9 @@ def notebook_04() -> list[nbf.NotebookNode]:
                 benchmark_075.append(row)
 
             scores_075 = eu.build_uq_scores(benchmark_075, raw_rows)
+            scores_075.extend(eu.build_rule_baseline_scores(benchmark_075))
             summary_075 = eu.metric_summary_by_model_task_method(scores_075)
-            sensitivity_path = PROJECT_ROOT / "data/processed/metrics_summary_recommended075.csv"
+            sensitivity_path = eu.variant_path(PROJECT_ROOT / "data/processed/metrics_summary_recommended075.csv", BENCHMARK_VARIANT)
             eu.write_csv_rows(sensitivity_path, summary_075)
             print(f"Wrote sensitivity summary: {sensitivity_path}")
             print(eu.markdown_table(summary_075, ["model", "task", "uq_method", "spearman_modality_p_yes"]))
@@ -546,9 +1117,16 @@ def notebook_05() -> list[nbf.NotebookNode]:
         md("## Load Scores and Summaries"),
         code(
             r"""
-            scores = eu.read_csv_rows(PROJECT_ROOT / "data/processed/uq_scores.csv")
-            summary = eu.read_csv_rows(PROJECT_ROOT / "data/processed/metrics_summary.csv")
-            ci_rows = eu.read_csv_rows(PROJECT_ROOT / "data/processed/bootstrap_seed_ci.csv")
+            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
+            scores_path = eu.variant_path(PROJECT_ROOT / "data/processed/uq_scores.csv", BENCHMARK_VARIANT)
+            summary_path = eu.variant_path(PROJECT_ROOT / "data/processed/metrics_summary.csv", BENCHMARK_VARIANT)
+            ci_path = eu.variant_path(PROJECT_ROOT / "data/processed/bootstrap_seed_ci.csv", BENCHMARK_VARIANT)
+
+            benchmark = eu.read_csv_rows(benchmark_path)
+            scores = eu.read_csv_rows(scores_path)
+            summary = eu.read_csv_rows(summary_path)
+            ci_rows = eu.read_csv_rows(ci_path)
+            print(f"Benchmark variant: {BENCHMARK_VARIANT}")
             print(f"Scores: {len(scores)}")
             print(f"Summary rows: {len(summary)}")
             """
@@ -566,10 +1144,17 @@ def notebook_05() -> list[nbf.NotebookNode]:
                 "brier",
                 "ece",
                 "auroc",
+                "error_detection_auroc",
                 "monotonicity_violations",
+                "high_conf_overcommit_80",
+                "high_conf_overcommit_90",
+                "text_modality_accuracy",
+                "label_text_consistency",
+                "text_over_commitment",
+                "text_high_conf_overcommit_90",
             ]
             table_md = eu.markdown_table(summary, paper_fields)
-            table_path = PROJECT_ROOT / "outputs/paper_results_table.md"
+            table_path = eu.variant_path(PROJECT_ROOT / "outputs/paper_results_table.md", BENCHMARK_VARIANT)
             table_path.write_text(table_md + "\n", encoding="utf-8")
             print(f"Wrote table: {table_path}")
             print(table_md)
@@ -578,9 +1163,32 @@ def notebook_05() -> list[nbf.NotebookNode]:
         md("## Export Compact Figure"),
         code(
             r"""
-            figure_path = PROJECT_ROOT / "outputs/task1_p_yes_by_modality.svg"
+            figure_path = eu.variant_path(PROJECT_ROOT / "outputs/task1_p_yes_by_modality.svg", BENCHMARK_VARIANT)
             eu.write_task1_modality_svg(scores, figure_path)
             print(f"Wrote figure: {figure_path}")
+            """
+        ),
+        md("## Export Qualitative Over-Commitment Examples"),
+        code(
+            r"""
+            example_paths = eu.write_qualitative_overcommitment_examples(
+                scores,
+                benchmark,
+                PROJECT_ROOT / "outputs",
+                suffix=VARIANT_SUFFIX,
+                limit=5,
+                threshold=0.80,
+            )
+            print(f"Wrote qualitative examples CSV: {example_paths['csv']}")
+            print(f"Wrote qualitative examples Markdown: {example_paths['markdown']}")
+            """
+        ),
+        md("## Export UQ Method Inventory"),
+        code(
+            r"""
+            inventory_paths = eu.write_uq_method_inventory(PROJECT_ROOT / "outputs", suffix=VARIANT_SUFFIX)
+            print(f"Wrote UQ inventory Markdown: {inventory_paths['markdown']}")
+            print(f"Wrote UQ inventory CSV: {inventory_paths['csv']}")
             """
         ),
         md("## Export Manuscript Observation Notes"),
@@ -594,6 +1202,7 @@ def notebook_05() -> list[nbf.NotebookNode]:
                 "## Observations",
                 "- Observation: <grounded result from metrics_summary.csv>.",
                 "- Observation: <grounded result from task1_p_yes_by_modality.svg>.",
+                "- Observation: <grounded high-confidence over-commitment result>.",
                 "",
                 "## Interpretation",
                 "- Hypothesis: <what the observed pattern may imply>.",
@@ -606,7 +1215,7 @@ def notebook_05() -> list[nbf.NotebookNode]:
                 "## Recommended Next Step",
                 "- Recommendation: <best follow-up experiment or paper edit>.",
             ]
-            notes_path = PROJECT_ROOT / "outputs/result_notes_template.md"
+            notes_path = eu.variant_path(PROJECT_ROOT / "outputs/result_notes_template.md", BENCHMARK_VARIANT)
             notes_path.write_text("\n".join(notes) + "\n", encoding="utf-8")
             print(f"Wrote notes template: {notes_path}")
             """
@@ -618,6 +1227,7 @@ def main() -> None:
     write_notebook("00_prepare_data.ipynb", notebook_00())
     write_notebook("01_build_modality_benchmark.ipynb", notebook_01())
     write_notebook("02_pilot_local_llms.ipynb", notebook_02())
+    write_notebook("02b_weak_modality_robustness_probe.ipynb", notebook_02b())
     write_notebook("03_run_experiments.ipynb", notebook_03())
     write_notebook("04_compute_uq_and_metrics.ipynb", notebook_04())
     write_notebook("05_analyze_and_export_results.ipynb", notebook_05())

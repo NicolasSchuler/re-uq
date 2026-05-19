@@ -1,0 +1,9 @@
+reviewer_id,reviewer_role,template_id,source_statement_template,example_source_statement,weaker_than_should,ordinal_rank,review_note
+R1,,useful_if,It would be useful if the system could {capability}.,It would be useful if the system could export reports.,,,
+R1,,nice_if,It would be nice if the system could {capability}.,It would be nice if the system could export reports.,,,
+R1,,low_priority_enhancement,"As a low-priority enhancement, the system could {capability}.","As a low-priority enhancement, the system could export reports.",,,
+R1,,future_enhancement,Stakeholders mentioned that the system could {capability} as a possible future enhancement.,Stakeholders mentioned that the system could export reports as a possible future enhancement.,,,
+R2,,useful_if,It would be useful if the system could {capability}.,It would be useful if the system could export reports.,,,
+R2,,nice_if,It would be nice if the system could {capability}.,It would be nice if the system could export reports.,,,
+R2,,low_priority_enhancement,"As a low-priority enhancement, the system could {capability}.","As a low-priority enhancement, the system could export reports.",,,
+R2,,future_enhancement,Stakeholders mentioned that the system could {capability} as a possible future enhancement.,Stakeholders mentioned that the system could export reports as a possible future enhancement.,,,
