@@ -26,16 +26,18 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 ## Phase 1: Prepare Requirement Seeds
 
 - Run `notebooks/00_prepare_data.ipynb`.
-- Load or download the NICE/PROMISE-derived CSV into `data/raw/`.
-- Generate `data/processed/seeds_review.csv`.
+- Load or download the selected seed dataset. `DATASET_ID=nice` uses the NICE/PROMISE-derived CSV in `data/raw/`; `DATASET_ID=mlm_tapt` loads `limsc/mlm-tapt-requirements` through Hugging Face `datasets`.
+- Generate the dataset-specific review table: `data/processed/seeds_review.csv` for NICE, `data/processed/seeds_review_mlm_tapt.csv` for HF.
 - Manually review included seeds until the configured target count of accepted capabilities remains.
+- Commit the final human-readable seed documents under `docs/final_seed_documents/` once the reviewed capability text is accepted.
 
 ## Dataset Scope
 
-- NICE/PROMISE-derived requirements are the implemented main dataset for the first end-to-end evaluation.
-- PURE is the preferred optional robustness dataset after the NICE pipeline works end-to-end; add it via a dataset switch or a dedicated `00b_prepare_pure_data.ipynb`.
+- NICE/PROMISE-derived requirements remain the backward-compatible default dataset.
+- `limsc/mlm-tapt-requirements` is the second co-primary dataset path. Exclude `_PURE` sources, apply strict candidate filtering, and use deterministic source-weighted sampling before manual review.
+- Raw PURE is not recommended as a benchmark source because its document structure is too heterogeneous for the short-communication scope.
 - Dalpiaz user-story datasets are not primary paper data because of licensing/IP uncertainty; use them only for private sensitivity checks if licensing is resolved.
-- For the IST short communication, one clean main dataset is acceptable if the result is interpretable; add PURE if dataset narrowness becomes a threat to validity.
+- For the IST short communication, compare NICE and `mlm_tapt` only after both reviewed seed lists pass the same manual-review gate.
 
 ## Phase 2: Build Modality Benchmark
 

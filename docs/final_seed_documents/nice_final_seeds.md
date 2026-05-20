@@ -1,3 +1,12 @@
+# Final Reviewed Seed Capabilities: NICE/PROMISE
+
+- Dataset ID: `nice`
+- Reviewed seed count: 180
+- Purpose: final human-readable seed document for the controlled modality benchmark.
+- Capability text is the proposition `p`; benchmark generation adds modality wording separately.
+
+## Seeds
+
 | Seed   | Original requirement                                                                                                                                                                                                                                   | Final capability text                                                                                                                                                       |
 |:-------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | S0001  | 'The system shall refresh the display every 60 seconds.'                                                                                                                                                                                               | refresh the display every 60 seconds                                                                                                                                        |

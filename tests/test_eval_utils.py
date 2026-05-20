@@ -230,6 +230,14 @@ class EvalUtilsTest(unittest.TestCase):
             eu.auto_capability_text("'The system shall interface with CampusConnect's central server.'"),
             "interface with CampusConnect's central server",
         )
+        self.assertEqual(
+            eu.auto_capability_text("The TMT Observatory shall monitor subsystem performance."),
+            "monitor subsystem performance",
+        )
+        self.assertEqual(
+            eu.auto_capability_text("The system shall be able to display a summary which will include cohort progress."),
+            "display a summary which will include cohort progress",
+        )
 
     def test_refresh_capability_suggestions_preserves_manual_edits(self):
         rows = [
@@ -318,6 +326,88 @@ class EvalUtilsTest(unittest.TestCase):
         )
         self.assertFalse(include)
         self.assertIn("stranded_preposition", reason)
+
+    def test_automatic_filter_rejects_residual_modal_capability(self):
+        include, reason = eu.automatic_filter(
+            "The system shall display a summary which will include cohort progress.",
+            "display a summary which will include cohort progress",
+        )
+        self.assertFalse(include)
+        self.assertIn("residual_modal_in_capability", reason)
+        include, reason = eu.automatic_filter(
+            "There shall be possibility to power the equipment set from the vehicle alternator.",
+            "be possibility to power the equipment set from the vehicle alternator",
+        )
+        self.assertFalse(include)
+        self.assertIn("residual_modal_in_capability", reason)
+
+    def test_mlm_tapt_filter_rejects_fragments_and_messy_rows(self):
+        cases = {
+            "Initialization Data": "too_short",
+            "The input data shall include: 1. Name 2. Address": "list_or_heading_marker",
+            "The algorithm shall produce the output. NOTE 1 applies": "multi_sentence",
+            "The scheduler shall set the interval timer. The display shall refresh": "multi_sentence",
+            "The field shall match Table 8-1.": "table_or_figure_reference",
+        }
+        for requirement, expected_reason in cases.items():
+            with self.subTest(requirement=requirement):
+                include, reason = eu.mlm_tapt_filter(requirement, eu.auto_capability_text(requirement), source_corpus="source_WEB")
+                self.assertFalse(include)
+                self.assertIn(expected_reason, reason)
+
+    def test_mlm_tapt_filter_accepts_clean_requirement(self):
+        requirement = "The scheduler shall set the interval timer."
+        include, reason = eu.mlm_tapt_filter(requirement, eu.auto_capability_text(requirement), source_corpus="source_WEB")
+
+        self.assertTrue(include, reason)
+
+    def test_make_mlm_tapt_seed_candidates_preserves_source_excludes_pure_and_dedupes(self):
+        rows = [
+            {"source": "alpha_WEB", "reqs": "The scheduler shall set the interval timer."},
+            {"source": "alpha_WEB", "reqs": "The scheduler shall set the interval timer."},
+            {"source": "beta_PURE", "reqs": "The report shall include diagnostic data."},
+            {"source": "gamma_WEB", "reqs": "Initialization Data"},
+            {"source": "delta_WEB", "reqs": "The display should show recent alerts."},
+            {"source": "epsilon_WEB", "reqs": "Users may export reports."},
+        ]
+
+        candidates = eu.make_mlm_tapt_seed_candidates(rows, target_count=2, seed=123)
+        selected = [row for row in candidates if row["include"] == "yes"]
+
+        self.assertEqual(len(candidates), 5)
+        self.assertEqual(len(selected), 2)
+        self.assertEqual({row["source_dataset"] for row in candidates}, {"mlm_tapt"})
+        self.assertIn("source_corpus", candidates[0])
+        pure = [row for row in candidates if row["source_corpus"] == "beta_PURE"][0]
+        self.assertEqual(pure["auto_include"], "no")
+        self.assertIn("excluded_source", pure["auto_exclusion_reason"])
+
+    def test_weighted_sample_candidate_indices_is_deterministic_and_caps_sources(self):
+        candidates = []
+        for source in ["a", "b", "c", "d", "e", "f"]:
+            for index in range(50):
+                candidates.append({"auto_include": "yes", "source_corpus": source, "id": f"{source}{index}"})
+
+        first = eu.weighted_sample_candidate_indices(candidates, target_count=180, seed=42, source_cap=30)
+        second = eu.weighted_sample_candidate_indices(candidates, target_count=180, seed=42, source_cap=30)
+        counts = {}
+        for index in first:
+            source = candidates[index]["source_corpus"]
+            counts[source] = counts.get(source, 0) + 1
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 180)
+        self.assertLessEqual(max(counts.values()), 30)
+
+    def test_artifact_path_combines_dataset_and_variant_suffixes(self):
+        base = Path("data/processed/benchmark_items.csv")
+
+        self.assertEqual(eu.artifact_path(base, "nice"), base)
+        self.assertEqual(eu.artifact_path(base, "mlm_tapt"), Path("data/processed/benchmark_items_mlm_tapt.csv"))
+        self.assertEqual(
+            eu.artifact_path(base, "mlm_tapt", "shall"),
+            Path("data/processed/benchmark_items_mlm_tapt_shall.csv"),
+        )
 
     def test_parse_task2_response(self):
         raw = '{"requirement": "The system SHOULD export reports.", "modality": "should", "confidence": 80}'

@@ -157,7 +157,7 @@ Which lightweight black-box UQ method best detects modality mismatch and over-co
 
 ## Datasets
 
-### Main dataset: NICE / PROMISE-derived requirements
+### Co-primary dataset 1: NICE / PROMISE-derived requirements
 
 Use the recent NICE dataset as the main seed source. It is based on the original PROMISE dataset and provides requirement text plus functional/non-functional and NFR subclass labels in CSV form. ([Zenodo](https://zenodo.org/records/14590935)) This is attractive because it is small, structured, and easy to use in a short project.
 
@@ -175,9 +175,13 @@ Normalized seed:
 
 Then generate controlled variants.
 
-### Secondary robustness dataset: PURE
+### Co-primary dataset 2: `limsc/mlm-tapt-requirements`
 
-Use PURE as a secondary robustness source if time permits. PURE contains 79 public natural-language requirements documents and 34,268 sentences, with XML files for a subset, making it useful for NLP-style RE experiments. ([Zenodo](https://zenodo.org/records/1414117))
+Use the Hugging Face `limsc/mlm-tapt-requirements` corpus as a second reviewed seed source. It is much easier to ingest than raw PURE because it already exposes requirement-like rows with `source` and `reqs` columns. However, it still contains headings, fragments, list material, and very technical clauses, so it should be treated as a candidate pool rather than a ready benchmark. The pipeline excludes `_PURE` sources, filters aggressively, then samples a source-diverse 180-row review table before generating controlled modality variants. ([Hugging Face](https://huggingface.co/datasets/limsc/mlm-tapt-requirements))
+
+### Avoid as benchmark source: raw PURE
+
+PURE contains 79 public natural-language requirements documents and 34,268 sentences, with XML files for a subset. It remains useful background for RE NLP experiments, but its raw structure is too heterogeneous for this compact controlled benchmark without substantial document-specific cleaning. ([Zenodo](https://zenodo.org/records/1414117))
 
 ### Avoid as primary: Dalpiaz user-story datasets
 
@@ -194,10 +198,10 @@ Target size:
 | Version     | Seed capabilities | Modal variants | Items |
 | ----------- | ----------------: | -------------: | ----: |
 | Minimal     |                80 |              4 |   320 |
-| Recommended |               120 |              4 |   480 |
-| Extended    |               150 |              4 |   600 |
+| Recommended |               180 |              4 |   720 |
+| Extended    |               240 |              4 |   960 |
 
-For IST, 120 seeds × 4 variants = 480 items is enough.
+For IST, 180 seeds × 4 variants = 720 items per seed dataset is enough while keeping manual review manageable.
 
 Filter requirements to keep only relatively clean statements:
 
@@ -208,7 +212,7 @@ Filter requirements to keep only relatively clean statements:
 - no negation in the first version;
 - no already-ambiguous phrasing.
 
-Manually inspect the final 120 seeds. That is worth the small time investment.
+Manually inspect the final 180 seeds per dataset. That is worth the small time investment.
 
 ---
 
@@ -454,9 +458,9 @@ This is already publishable as a short communication if the framing is careful.
 
 | Component          |                                    Value |
 | ------------------ | ---------------------------------------: |
-| Seed capabilities  |                                      120 |
+| Seed capabilities  |                                      180 |
 | Modal variants     |                                        4 |
-| Items              |                                      480 |
+| Items              |                                      720 |
 | Models             |                                        3 |
 | Samples per item   |                                        5 |
 | Total Task 1 calls |                                    7,200 |
@@ -472,7 +476,7 @@ You can implement this with 4-5 notebooks:
 
 | Notebook                            | Purpose                                                                        |
 | ----------------------------------- | ------------------------------------------------------------------------------ |
-| `00_prepare_data.ipynb`             | Load NICE/PROMISE and optionally PURE; filter seed requirements                |
+| `00_prepare_data.ipynb`             | Load NICE/PROMISE or `mlm_tapt`; filter and review seed requirements          |
 | `01_build_modality_benchmark.ipynb` | Create controlled modality variants and gold labels                            |
 | `02_run_llms.ipynb`                 | Run prompts against selected models; cache raw JSON outputs                    |
 | `03_compute_uq.ipynb`               | Compute verbalized confidence, self-consistency, semantic/modality consistency |
@@ -502,7 +506,7 @@ This is feasible as a short communication if you keep the experiment narrow. The
 
 The best scope is:
 
-> 1 main dataset, 120 seed capabilities, 4 modalities, 3 LLMs, 2 tasks, 3 UQ methods.
+> 2 co-primary seed datasets, 180 seed capabilities each, 4 modalities, 3 LLMs, 2 tasks, 3 UQ methods.
 
 That is enough to support a concise empirical claim without becoming a full benchmark paper.
 
@@ -542,7 +546,7 @@ For a small team, the MVP is realistic in about 1-2 focused weeks.
 | Synthetic variants may look artificial      |        Medium | Use real RE datasets as seed content; manually inspect seeds                    |
 | Task may be too easy                        |        Medium | Include both mandatory-entailment and extraction tasks                          |
 | LLM confidence may be badly calibrated      | Not a problem | This is part of the empirical contribution                                      |
-| Dataset licensing issues                    |        Medium | Use NICE/PROMISE and PURE as main sources; avoid user-story datasets as primary |
+| Dataset provenance/licensing issues         |        Medium | Use NICE/PROMISE and reviewed `mlm_tapt` seeds; avoid raw PURE and user-story datasets as primary |
 | API model changes                           |        Medium | Record exact model IDs, dates, temperatures, prompts                            |
 | Too many calls                              |    Low-Medium | Use K=5 first; increase to K=10 only if needed                                  |
 | Word limit too tight                        |          High | One table, one small figure, 8-12 references max, no appendix                   |
@@ -553,8 +557,8 @@ For a small team, the MVP is realistic in about 1-2 focused weeks.
 
 I would implement exactly this:
 
-1. Dataset: NICE/PROMISE as main, PURE as optional robustness.
-2. Seeds: 120 manually checked requirement capabilities.
+1. Dataset: NICE/PROMISE and reviewed `mlm_tapt` as co-primary seed sources.
+2. Seeds: 180 manually checked requirement capabilities per dataset, 360 total.
 3. Modalities: MUST, SHOULD, MAY, nice-to-have.
 4. Task 1: mandatory-requirement entailment.
 5. Task 2: modality-preserving extraction.

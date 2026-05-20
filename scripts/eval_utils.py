@@ -5,6 +5,7 @@ import json
 import hashlib
 import math
 import os
+import random
 import re
 import time
 import uuid
@@ -145,11 +146,45 @@ RULE_BASELINE_MODEL = "rule_based_baseline"
 RULE_BASELINE_METHOD = "deterministic_rules"
 ENSEMBLE_MODEL_PREFIX = "ensemble"
 LOGPROB_PROBE_PROMPT = 'Return exactly this JSON object: {"decision":"yes","confidence":100,"brief_reason":"probe"}'
+DATASET_NICE = "nice"
+DATASET_MLM_TAPT = "mlm_tapt"
+DATASET_IDS = {DATASET_NICE, DATASET_MLM_TAPT}
+DATASET_SUFFIXES = {
+    DATASET_NICE: "",
+    DATASET_MLM_TAPT: "_mlm_tapt",
+}
+SOURCE_DATASET_LABELS = {
+    DATASET_NICE: "NICE",
+    DATASET_MLM_TAPT: "mlm_tapt",
+}
+BASE_SEED_REVIEW_FIELDS = [
+    "seed_id",
+    "source_dataset",
+    "source_corpus",
+    "original_requirement",
+    "capability_text_auto",
+    "auto_include",
+    "auto_exclusion_reason",
+    "include",
+    "exclusion_reason",
+    "capability_text_final",
+]
+REQUIREMENT_CUE_RE = re.compile(
+    r"\b(shall|must|should|may|required|recommended|optional|permitted|will|able\s+to)\b",
+    re.I,
+)
+CAPABILITY_MODAL_RE = re.compile(
+    r"\b(shall|must|should|may|will|can|could|able\s+to|capable(?:\s+(?:of|to))?|possible\s+to|possibility\s+to)\b",
+    re.I,
+)
+TABLE_FIGURE_RE = re.compile(r"\b(table|figure|fig\.|annex|section|clause)\s+[A-Za-z0-9.-]+", re.I)
+LIST_MARKER_RE = re.compile(r"(^|\s)(\d+\.|\([a-z]\)|[a-z]\)|[ivx]+\.|[-*]\s|[•·]|\t)", re.I)
+SYMBOL_HEAVY_RE = re.compile(r"([=<>±×µ%]|\b0x[0-9a-f]+\b)", re.I)
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "project": {
         "seed": 20260518,
-        "target_seed_count": 120,
+        "target_seed_count": 180,
         "pilot_seed_count": 20,
         "prompt_version": "v1",
     },
@@ -166,6 +201,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "datasets": {
         "nice_url": "https://zenodo.org/records/14590935/files/PROMISE-relabeled-NICE.csv?download=1",
         "nice_local_path": "data/raw/PROMISE-relabeled-NICE.csv",
+        "mlm_tapt_repo": "limsc/mlm-tapt-requirements",
+        "mlm_tapt_config": "default",
+        "mlm_tapt_splits": ["train", "val"],
+        "mlm_tapt_target_seed_count": 180,
+        "mlm_tapt_exclude_source_regex": "_PURE$",
     },
 }
 
@@ -295,6 +335,19 @@ def write_csv_rows_if_changed(
     return {"status": "candidate_written", "path": path, "candidate_path": candidate}
 
 
+def normalize_dataset_id(dataset_id: str | None) -> str:
+    normalized = str(dataset_id or DATASET_NICE).strip().lower().replace("-", "_")
+    if normalized in {"", "main", "default", DATASET_NICE}:
+        return DATASET_NICE
+    if normalized in {DATASET_MLM_TAPT, "hf", "hf_requirements", "limsc_mlm_tapt"}:
+        return DATASET_MLM_TAPT
+    raise ValueError(f"Unknown dataset_id: {dataset_id}")
+
+
+def dataset_suffix(dataset_id: str | None) -> str:
+    return DATASET_SUFFIXES[normalize_dataset_id(dataset_id)]
+
+
 def variant_suffix(variant: str | None) -> str:
     normalized = str(variant or "must").strip().lower()
     if normalized in {"", "must", "main"}:
@@ -310,6 +363,45 @@ def variant_path(path: str | Path, variant: str | None) -> Path:
     if not suffix:
         return path
     return path.with_name(f"{path.stem}{suffix}{path.suffix}")
+
+
+def dataset_variant_suffix(dataset_id: str | None, variant: str | None = None) -> str:
+    return f"{dataset_suffix(dataset_id)}{variant_suffix(variant)}"
+
+
+def artifact_path(path: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
+    path = Path(path)
+    suffix = dataset_variant_suffix(dataset_id, variant)
+    if not suffix:
+        return path
+    return path.with_name(f"{path.stem}{suffix}{path.suffix}")
+
+
+def candidate_path(path: str | Path) -> Path:
+    path = Path(path)
+    return path.with_name(f"{path.stem}_candidate{path.suffix}")
+
+
+def auto_candidates_path(path: str | Path) -> Path:
+    path = Path(path)
+    return path.with_name(f"{path.stem}_candidates_auto{path.suffix}")
+
+
+def dataset_target_seed_count(config: Mapping[str, Any], dataset_id: str | None) -> int:
+    dataset_id = normalize_dataset_id(dataset_id)
+    project_config = config.get("project", {}) if isinstance(config, Mapping) else {}
+    datasets_config = config.get("datasets", {}) if isinstance(config, Mapping) else {}
+    default_count = project_config.get("target_seed_count", DEFAULT_CONFIG["project"]["target_seed_count"])
+    if dataset_id == DATASET_MLM_TAPT and isinstance(datasets_config, Mapping):
+        return positive_int(datasets_config.get("mlm_tapt_target_seed_count", default_count), "datasets.mlm_tapt_target_seed_count")
+    return positive_int(default_count, "project.target_seed_count")
+
+
+def seed_review_fields(dataset_id: str | None = None) -> list[str]:
+    dataset_id = normalize_dataset_id(dataset_id)
+    if dataset_id == DATASET_NICE:
+        return [field for field in BASE_SEED_REVIEW_FIELDS if field != "source_corpus"]
+    return list(BASE_SEED_REVIEW_FIELDS)
 
 
 def sha256_file(path: str | Path) -> str:
@@ -496,13 +588,25 @@ LEADING_REQUIREMENT_PATTERNS = [
         re.I,
     ),
 ]
+GENERIC_MODAL_PREFIX_RE = re.compile(
+    r"^(?:the\s+)?[A-Za-z0-9][^.;:!?]{0,120}?\s+"
+    r"(?:shall|must|should|may|will|can|could)\s+(?:be\s+able\s+to\s+)?",
+    re.I,
+)
 
 
 def auto_capability_text(requirement: str) -> str:
     text = strip_final_punctuation(requirement)
     text = re.sub(r"^[\-\*\d.)\s]+", "", text)
+    stripped_leading_requirement = False
     for pattern in LEADING_REQUIREMENT_PATTERNS:
-        text = pattern.sub("", text).strip()
+        stripped = pattern.sub("", text).strip()
+        if stripped != text:
+            text = stripped
+            stripped_leading_requirement = True
+            break
+    if not stripped_leading_requirement:
+        text = GENERIC_MODAL_PREFIX_RE.sub("", text).strip()
     text = re.sub(r"^(?:the\s+)?(?:system|software|application|app|product|platform|service|tool|data|table)\s+", "", text, flags=re.I)
     text = re.sub(r"^(?:shall|must|should|may|will|can|could)\s+(?:be\s+able\s+to\s+)?", "", text, flags=re.I)
     text = re.sub(r"^(?:be\s+able\s+to|able\s+to)\s+", "", text, flags=re.I)
@@ -529,9 +633,34 @@ def automatic_filter(requirement: str, capability: str) -> tuple[bool, str]:
         reasons.append("possibly_multiple_capabilities")
     if not capability or word_count(capability) < 2:
         reasons.append("empty_or_too_short_capability")
+    if CAPABILITY_MODAL_RE.search(capability):
+        reasons.append("residual_modal_in_capability")
     if STRANDED_PREPOSITION_RE.search(cleaned_capability):
         reasons.append("stranded_preposition")
     return not reasons, ";".join(reasons)
+
+
+def mlm_tapt_filter(requirement: str, capability: str, source_corpus: str = "", exclude_source_regex: str = "_PURE$") -> tuple[bool, str]:
+    auto_include, reason = automatic_filter(requirement, capability)
+    reasons = [item for item in reason.split(";") if item]
+    if exclude_source_regex and re.search(exclude_source_regex, source_corpus or ""):
+        reasons.append("excluded_source")
+    if not REQUIREMENT_CUE_RE.search(requirement):
+        reasons.append("no_requirement_cue")
+    if TABLE_FIGURE_RE.search(requirement):
+        reasons.append("table_or_figure_reference")
+    if ":" in requirement:
+        reasons.append("colon_structure")
+    if LIST_MARKER_RE.search(requirement):
+        reasons.append("list_or_heading_marker")
+    if "NOTE" in requirement.upper():
+        reasons.append("note_text")
+    if SYMBOL_HEAVY_RE.search(requirement):
+        reasons.append("symbol_heavy")
+    if CAPABILITY_MODAL_RE.search(capability):
+        reasons.append("residual_modal_in_capability")
+    unique_reasons = list(dict.fromkeys(reasons))
+    return auto_include and not unique_reasons, ";".join(unique_reasons)
 
 
 def find_requirement_text_column(rows: list[dict[str, str]]) -> str:
@@ -548,8 +677,14 @@ def find_requirement_text_column(rows: list[dict[str, str]]) -> str:
     raise ValueError(f"Could not find a requirement text column. Columns: {columns}")
 
 
-def make_seed_candidates(dataset_rows: list[dict[str, str]], target_count: int = 120) -> list[dict[str, Any]]:
-    text_column = find_requirement_text_column(dataset_rows)
+def make_seed_candidates(
+    dataset_rows: list[dict[str, str]],
+    target_count: int = DEFAULT_CONFIG["project"]["target_seed_count"],
+    source_dataset: str = "NICE",
+    text_column: str | None = None,
+    source_corpus_field: str | None = None,
+) -> list[dict[str, Any]]:
+    text_column = text_column or find_requirement_text_column(dataset_rows)
     seen: set[str] = set()
     candidates: list[dict[str, Any]] = []
     accepted = 0
@@ -566,19 +701,132 @@ def make_seed_candidates(dataset_rows: list[dict[str, str]], target_count: int =
         include = auto_include and accepted < target_count
         if include:
             accepted += 1
+        candidate = {
+            "seed_id": f"S{len(candidates) + 1:04d}",
+            "source_dataset": source_dataset,
+            "original_requirement": original,
+            "capability_text_auto": capability,
+            "auto_include": "yes" if auto_include else "no",
+            "auto_exclusion_reason": reason,
+            "include": "yes" if include else "no",
+            "exclusion_reason": "" if include else reason,
+            "capability_text_final": capability if include else "",
+        }
+        if source_corpus_field is not None:
+            candidate["source_corpus"] = normalize_space(row.get(source_corpus_field, ""))
+        candidates.append(candidate)
+    return candidates
+
+
+def load_mlm_tapt_rows(config: Mapping[str, Any]) -> list[dict[str, str]]:
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise ImportError("Install the 'datasets' dependency to load limsc/mlm-tapt-requirements.") from exc
+
+    datasets_config = config.get("datasets", {}) if isinstance(config, Mapping) else {}
+    repo = str(datasets_config.get("mlm_tapt_repo", DEFAULT_CONFIG["datasets"]["mlm_tapt_repo"]))
+    config_name = str(datasets_config.get("mlm_tapt_config", DEFAULT_CONFIG["datasets"]["mlm_tapt_config"]))
+    splits = datasets_config.get("mlm_tapt_splits", DEFAULT_CONFIG["datasets"]["mlm_tapt_splits"])
+    if isinstance(splits, str):
+        splits = [splits]
+    rows: list[dict[str, str]] = []
+    for split in splits:
+        dataset = load_dataset(repo, config_name, split=str(split))
+        for row in dataset:
+            rows.append(
+                {
+                    "source": str(row.get("source", "")),
+                    "reqs": str(row.get("reqs", "")),
+                    "split": str(split),
+                }
+            )
+    return rows
+
+
+def weighted_sample_candidate_indices(
+    candidates: list[dict[str, Any]],
+    target_count: int,
+    seed: int,
+    source_cap: int = 30,
+    source_field: str = "source_corpus",
+) -> list[int]:
+    eligible_indices = [index for index, row in enumerate(candidates) if is_truthy(row.get("auto_include", ""))]
+    if len(eligible_indices) < target_count:
+        raise ValueError(f"Expected at least {target_count} eligible candidates, found {len(eligible_indices)}.")
+
+    source_counts = Counter(str(candidates[index].get(source_field, "") or "unknown") for index in eligible_indices)
+    rng = random.Random(seed)
+    remaining = set(eligible_indices)
+    selected: list[int] = []
+    selected_by_source: Counter[str] = Counter()
+
+    while len(selected) < target_count:
+        allowed = [
+            index
+            for index in sorted(remaining)
+            if selected_by_source[str(candidates[index].get(source_field, "") or "unknown")] < source_cap
+        ]
+        if not allowed:
+            raise ValueError(
+                f"Could not sample {target_count} candidates with source_cap={source_cap}; selected {len(selected)}."
+            )
+        weights = [1.0 / source_counts[str(candidates[index].get(source_field, "") or "unknown")] for index in allowed]
+        chosen = rng.choices(allowed, weights=weights, k=1)[0]
+        selected.append(chosen)
+        remaining.remove(chosen)
+        selected_by_source[str(candidates[chosen].get(source_field, "") or "unknown")] += 1
+    return selected
+
+
+def make_mlm_tapt_seed_candidates(
+    dataset_rows: list[dict[str, str]],
+    target_count: int = DEFAULT_CONFIG["datasets"]["mlm_tapt_target_seed_count"],
+    seed: int = DEFAULT_CONFIG["project"]["seed"],
+    exclude_source_regex: str = "_PURE$",
+    source_cap: int = 30,
+) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    candidates: list[dict[str, Any]] = []
+    for row in dataset_rows:
+        source_corpus = normalize_space(row.get("source", ""))
+        original = normalize_space(row.get("reqs", ""))
+        if not original:
+            continue
+        dedupe_key = original.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        capability = auto_capability_text(original)
+        auto_include, reason = mlm_tapt_filter(
+            original,
+            capability,
+            source_corpus=source_corpus,
+            exclude_source_regex=exclude_source_regex,
+        )
         candidates.append(
             {
                 "seed_id": f"S{len(candidates) + 1:04d}",
-                "source_dataset": "NICE",
+                "source_dataset": SOURCE_DATASET_LABELS[DATASET_MLM_TAPT],
+                "source_corpus": source_corpus,
                 "original_requirement": original,
                 "capability_text_auto": capability,
                 "auto_include": "yes" if auto_include else "no",
                 "auto_exclusion_reason": reason,
-                "include": "yes" if include else "no",
-                "exclusion_reason": "" if include else reason,
-                "capability_text_final": capability if include else "",
+                "include": "no",
+                "exclusion_reason": reason,
+                "capability_text_final": "",
             }
         )
+
+    selected_indices = set(weighted_sample_candidate_indices(candidates, target_count, seed=seed, source_cap=source_cap))
+    for index, candidate in enumerate(candidates):
+        if index in selected_indices:
+            candidate["include"] = "yes"
+            candidate["exclusion_reason"] = ""
+            candidate["capability_text_final"] = candidate["capability_text_auto"]
+        elif is_truthy(candidate["auto_include"]):
+            candidate["exclusion_reason"] = "not_sampled_weighted_pool"
     return candidates
 
 
@@ -621,7 +869,11 @@ def is_truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "include"}
 
 
-def load_reviewed_seeds(path: str | Path, target_count: int = 120, strict: bool = True) -> list[dict[str, Any]]:
+def load_reviewed_seeds(
+    path: str | Path,
+    target_count: int = DEFAULT_CONFIG["project"]["target_seed_count"],
+    strict: bool = True,
+) -> list[dict[str, Any]]:
     rows = read_csv_rows(path)
     selected: list[dict[str, Any]] = []
     for row in rows:
@@ -645,21 +897,26 @@ def included_capability_review_frame(path: str | Path) -> pd.DataFrame:
             raise ValueError(f"Missing required review column: {column}")
     included = frame[frame["include"].map(is_truthy)].copy()
     included["capability_text_final"] = included["capability_text_final"].map(strip_final_punctuation)
-    return included.loc[:, ["seed_id", "original_requirement", "capability_text_final"]].rename(
+    columns = ["seed_id"]
+    if "source_corpus" in included.columns:
+        columns.append("source_corpus")
+    columns.extend(["original_requirement", "capability_text_final"])
+    return included.loc[:, columns].rename(
         columns={
             "seed_id": "Seed",
+            "source_corpus": "Source corpus",
             "original_requirement": "Original requirement",
             "capability_text_final": "Final capability text",
         }
     )
 
 
-def write_included_capability_review(path: str | Path, output_dir: str | Path) -> dict[str, Path]:
+def write_included_capability_review(path: str | Path, output_dir: str | Path, suffix: str = "") -> dict[str, Path]:
     frame = included_capability_review_frame(path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    markdown_path = output_dir / "included_capabilities_review.md"
-    csv_path = output_dir / "included_capabilities_review.csv"
+    markdown_path = output_dir / f"included_capabilities_review{suffix}.md"
+    csv_path = output_dir / f"included_capabilities_review{suffix}.csv"
     markdown_path.write_text(frame.to_markdown(index=False) + "\n", encoding="utf-8")
     frame.to_csv(csv_path, index=False)
     return {"markdown": markdown_path, "csv": csv_path}
@@ -715,6 +972,7 @@ def build_weak_modality_probe_items(
                     "task2_gold_modality": "nice_to_have",
                     "capability_text": capability,
                     "source_dataset": seed.get("source_dataset", "NICE"),
+                    "source_corpus": seed.get("source_corpus", ""),
                     "original_requirement": seed.get("original_requirement", ""),
                 }
             )
@@ -789,11 +1047,11 @@ def weak_modality_template_sanity_rows() -> list[dict[str, Any]]:
     return rows
 
 
-def write_weak_modality_template_sanity_check(output_dir: str | Path) -> dict[str, Path]:
+def write_weak_modality_template_sanity_check(output_dir: str | Path, suffix: str = "") -> dict[str, Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = output_dir / "weak_modality_template_sanity_check.csv"
-    markdown_path = output_dir / "weak_modality_template_sanity_check.md"
+    csv_path = output_dir / f"weak_modality_template_sanity_check{suffix}.csv"
+    markdown_path = output_dir / f"weak_modality_template_sanity_check{suffix}.md"
     if csv_path.exists():
         rows = read_csv_rows(csv_path)
     else:
@@ -949,6 +1207,7 @@ def build_benchmark_items(
                     "item_id": f"{seed['seed_id']}_{modality}",
                     "seed_id": seed["seed_id"],
                     "source_dataset": seed.get("source_dataset", "NICE"),
+                    "source_corpus": seed.get("source_corpus", ""),
                     "original_requirement": seed.get("original_requirement", ""),
                     "capability_text": capability,
                     "source_modality": modality,
@@ -2280,13 +2539,13 @@ def complete_run_ids_from_progress(
     return complete
 
 
-def preliminary_result_paths(root: str | Path, variant: str | None = None) -> dict[str, Path]:
+def preliminary_result_paths(root: str | Path, variant: str | None = None, dataset_id: str | None = None) -> dict[str, Path]:
     root = Path(root)
     return {
-        "scores": variant_path(root / "data/processed/uq_scores_preliminary.csv", variant),
-        "summary": variant_path(root / "data/processed/metrics_summary_preliminary.csv", variant),
-        "progress": variant_path(root / "data/processed/run_progress_preliminary.csv", variant),
-        "table": variant_path(root / "outputs/preliminary_results_table.md", variant),
+        "scores": artifact_path(root / "data/processed/uq_scores_preliminary.csv", dataset_id, variant),
+        "summary": artifact_path(root / "data/processed/metrics_summary_preliminary.csv", dataset_id, variant),
+        "progress": artifact_path(root / "data/processed/run_progress_preliminary.csv", dataset_id, variant),
+        "table": artifact_path(root / "outputs/preliminary_results_table.md", dataset_id, variant),
     }
 
 
@@ -2295,10 +2554,11 @@ def write_preliminary_result_snapshot(
     raw_rows: list[dict[str, Any]],
     root: str | Path,
     variant: str | None = None,
+    dataset_id: str | None = None,
     expected_stochastic_samples: int = 5,
     include_baseline: bool = True,
 ) -> dict[str, Any]:
-    paths = preliminary_result_paths(root, variant)
+    paths = preliminary_result_paths(root, variant, dataset_id=dataset_id)
     scored_benchmark_rows = benchmark_rows_with_current_raw_outputs(benchmark_rows, raw_rows)
     scores = build_uq_scores(scored_benchmark_rows, raw_rows)
     if include_baseline:
@@ -2673,11 +2933,11 @@ def weak_modality_probe_summary(probe_items: list[dict[str, Any]], raw_rows: lis
     return sorted(rows, key=lambda row: (str(row["model"]), str(row["run_id"]), str(row["sample_kind"]), str(row["template_id"])))
 
 
-def write_weak_modality_probe_summary(summary_rows: list[dict[str, Any]], output_dir: str | Path) -> dict[str, Path]:
+def write_weak_modality_probe_summary(summary_rows: list[dict[str, Any]], output_dir: str | Path, suffix: str = "") -> dict[str, Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = output_dir / "weak_modality_probe_summary.csv"
-    markdown_path = output_dir / "weak_modality_probe_summary.md"
+    csv_path = output_dir / f"weak_modality_probe_summary{suffix}.csv"
+    markdown_path = output_dir / f"weak_modality_probe_summary{suffix}.md"
     write_csv_rows(csv_path, summary_rows, fieldnames=WEAK_MODALITY_PROBE_SUMMARY_FIELDS)
     markdown_path.write_text(markdown_table(summary_rows, WEAK_MODALITY_PROBE_SUMMARY_FIELDS) + "\n", encoding="utf-8")
     return {"csv": csv_path, "markdown": markdown_path}

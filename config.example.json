@@ -1,7 +1,7 @@
 {
   "project": {
     "seed": 20260518,
-    "target_seed_count": 120,
+    "target_seed_count": 180,
     "pilot_seed_count": 20,
     "prompt_version": "v1"
   },
@@ -27,6 +27,14 @@
   },
   "datasets": {
     "nice_url": "https://zenodo.org/records/14590935/files/PROMISE-relabeled-NICE.csv?download=1",
-    "nice_local_path": "data/raw/PROMISE-relabeled-NICE.csv"
+    "nice_local_path": "data/raw/PROMISE-relabeled-NICE.csv",
+    "mlm_tapt_repo": "limsc/mlm-tapt-requirements",
+    "mlm_tapt_config": "default",
+    "mlm_tapt_splits": [
+      "train",
+      "val"
+    ],
+    "mlm_tapt_target_seed_count": 180,
+    "mlm_tapt_exclude_source_regex": "_PURE$"
   }
 }

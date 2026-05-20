@@ -4,11 +4,11 @@ These notes capture the current paper-facing interpretation before the full expe
 
 ## Decision Memo
 
-Proceed with the full NICE benchmark after one small construct-validity improvement: complete the two-reviewer weak-modality template check in `docs/weak_modality_construct_review.csv`.
+Proceed with the full NICE benchmark and add `limsc/mlm-tapt-requirements` as a second reviewed seed source after the same manual review gate. Complete the two-reviewer weak-modality template check in `docs/weak_modality_construct_review.csv` before treating weak-class claims as paper-ready.
 
 Use **high-confidence over-commitment of weak stakeholder intent** as the primary empirical framing. Keep **commitment normalization** as a discussion-level interpretation, because the current evidence demonstrates output behavior rather than an internal model mechanism.
 
-The main benchmark, prompts, modality labels, and gold labels remain unchanged.
+The prompts, modality labels, and gold labels remain unchanged across seed datasets.
 
 ## Paper-Facing Claim
 
@@ -89,7 +89,7 @@ Open question:
 - Whether independent RE-informed reviewers agree that all weak templates sit below `SHOULD/recommended` on the study's ordinal scale.
 - Whether verbalized confidence remains informative in full runs, given that consistency-style UQ is expected to struggle with systematic errors.
 - Whether Task 3 self-verification detects over-commitment or instead repeats the same modality normalization error.
-- Whether optional PURE robustness is needed after NICE results are known.
+- Whether the `mlm_tapt` co-primary seed split reproduces the NICE pattern after manual review.
 
 ## Construct-Validity Gate
 

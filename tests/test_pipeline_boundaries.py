@@ -106,7 +106,7 @@ class NotebookBoundaryTest(unittest.TestCase):
         self.assertTrue(required_paths.issubset(artifact_paths))
         self.assertEqual(manifest["metadata"]["main_benchmark"], "MUST")
         self.assertEqual(manifest["metadata"]["robustness_benchmark"], "SHALL")
-        self.assertEqual(manifest["metadata"]["seed_count"], 120)
+        self.assertEqual(manifest["metadata"]["seed_count"], 180)
         self.assertEqual(manifest["metadata"]["source_modalities"], eu.MODALITIES)
 
 

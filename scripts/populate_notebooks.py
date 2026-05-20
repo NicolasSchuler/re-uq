@@ -39,10 +39,13 @@ if not CONFIG_PATH.exists():
     CONFIG_PATH = PROJECT_ROOT / "config.example.json"
 CONFIG = eu.load_config(CONFIG_PATH)
 eu.ensure_project_dirs(PROJECT_ROOT)
+DATASET_ID = eu.normalize_dataset_id(os.getenv("DATASET_ID", "nice"))
+DATASET_SUFFIX = eu.dataset_suffix(DATASET_ID)
 BENCHMARK_VARIANT = os.getenv("BENCHMARK_VARIANT", "must").strip().lower()
 VARIANT_SUFFIX = eu.variant_suffix(BENCHMARK_VARIANT)
+ARTIFACT_SUFFIX = eu.dataset_variant_suffix(DATASET_ID, BENCHMARK_VARIANT)
 
-PROJECT_ROOT, CONFIG_PATH, BENCHMARK_VARIANT
+PROJECT_ROOT, CONFIG_PATH, DATASET_ID, BENCHMARK_VARIANT
 """
 
 
@@ -73,43 +76,50 @@ def notebook_00() -> list[nbf.NotebookNode]:
             """
         ),
         code(COMMON_SETUP),
-        md("## Load or Download NICE"),
+        md("## Load Source Dataset"),
         code(
             r"""
-            nice_path = PROJECT_ROOT / CONFIG["datasets"]["nice_local_path"]
-            nice_url = CONFIG["datasets"]["nice_url"]
+            if DATASET_ID == "nice":
+                nice_path = PROJECT_ROOT / CONFIG["datasets"]["nice_local_path"]
+                nice_url = CONFIG["datasets"]["nice_url"]
 
-            if not nice_path.exists():
-                print(f"NICE CSV not found at {nice_path}. Downloading from Zenodo...")
-                eu.download_file(nice_url, nice_path, timeout_s=CONFIG["llm"]["timeout_s"])
+                if not nice_path.exists():
+                    print(f"NICE CSV not found at {nice_path}. Downloading from Zenodo...")
+                    eu.download_file(nice_url, nice_path, timeout_s=CONFIG["llm"]["timeout_s"])
+                else:
+                    print(f"Using existing NICE CSV: {nice_path}")
+
+                rows = eu.read_csv_rows(nice_path)
+                text_column = eu.find_requirement_text_column(rows)
+                print(f"Loaded {len(rows)} NICE rows. Requirement text column: {text_column}")
+                print(rows[0][text_column][:240])
+            elif DATASET_ID == "mlm_tapt":
+                rows = eu.load_mlm_tapt_rows(CONFIG)
+                text_column = "reqs"
+                print(f"Loaded {len(rows)} mlm_tapt rows from Hugging Face.")
+                print(rows[0][text_column][:240])
             else:
-                print(f"Using existing NICE CSV: {nice_path}")
-
-            rows = eu.read_csv_rows(nice_path)
-            text_column = eu.find_requirement_text_column(rows)
-            print(f"Loaded {len(rows)} rows. Requirement text column: {text_column}")
-            print(rows[0][text_column][:240])
+                raise ValueError(f"Unsupported DATASET_ID: {DATASET_ID}")
             """
         ),
         md("## Build Review Table"),
         code(
             r"""
-            target_count = int(CONFIG["project"]["target_seed_count"])
-            candidates = eu.make_seed_candidates(rows, target_count=target_count)
+            target_count = eu.dataset_target_seed_count(CONFIG, DATASET_ID)
+            if DATASET_ID == "nice":
+                candidates = eu.make_seed_candidates(rows, target_count=target_count)
+            else:
+                candidates = eu.make_mlm_tapt_seed_candidates(
+                    rows,
+                    target_count=target_count,
+                    seed=int(CONFIG["project"]["seed"]),
+                    exclude_source_regex=CONFIG["datasets"]["mlm_tapt_exclude_source_regex"],
+                    source_cap=30,
+                )
 
-            review_fields = [
-                "seed_id",
-                "source_dataset",
-                "original_requirement",
-                "capability_text_auto",
-                "auto_include",
-                "auto_exclusion_reason",
-                "include",
-                "exclusion_reason",
-                "capability_text_final",
-            ]
-            review_path = PROJECT_ROOT / "data/processed/seeds_review.csv"
-            auto_candidates_path = PROJECT_ROOT / "data/processed/seeds_review_candidates_auto.csv"
+            review_fields = eu.seed_review_fields(DATASET_ID)
+            review_path = eu.artifact_path(PROJECT_ROOT / "data/processed/seeds_review.csv", DATASET_ID)
+            auto_candidates_path = eu.auto_candidates_path(review_path)
 
             if review_path.exists():
                 eu.write_csv_rows(auto_candidates_path, candidates, fieldnames=review_fields)
@@ -122,6 +132,12 @@ def notebook_00() -> list[nbf.NotebookNode]:
 
             auto_ok = sum(1 for row in candidates if row["auto_include"] == "yes")
             selected = eu.load_reviewed_seeds(review_path, target_count=target_count, strict=False)
+            if DATASET_ID == "mlm_tapt":
+                included_sources = {}
+                for row in selected:
+                    source = row.get("source_corpus", "")
+                    included_sources[source] = included_sources.get(source, 0) + 1
+                print(f"Included source_corpus counts: {included_sources}")
             print(f"Automatic candidates passing filters: {auto_ok}")
             print(f"Currently included seeds: {len(selected)} / {target_count}")
             print("Inspect capability_text_final for included rows; edit only unclear or awkward suggestions.")
@@ -133,7 +149,7 @@ def notebook_00() -> list[nbf.NotebookNode]:
             # Manual review edits are preserved by default.
             # Set RUN_REFRESH = True only if you want to refresh unedited capability suggestions.
             RUN_REFRESH = False
-            review_path = PROJECT_ROOT / "data/processed/seeds_review.csv"
+            review_path = eu.artifact_path(PROJECT_ROOT / "data/processed/seeds_review.csv", DATASET_ID)
 
             if RUN_REFRESH:
                 refreshed_count = eu.refresh_capability_suggestions_file(review_path)
@@ -163,7 +179,7 @@ def notebook_00() -> list[nbf.NotebookNode]:
         code(
             r"""
             capability_review = eu.included_capability_review_frame(review_path)
-            export_paths = eu.write_included_capability_review(review_path, PROJECT_ROOT / "outputs")
+            export_paths = eu.write_included_capability_review(review_path, PROJECT_ROOT / "outputs", suffix=DATASET_SUFFIX)
 
             print(f"Included rows: {len(capability_review)}")
             print(f"Wrote Markdown review table: {export_paths['markdown']}")
@@ -177,7 +193,7 @@ def notebook_00() -> list[nbf.NotebookNode]:
         code(
             r"""
             selected = eu.load_reviewed_seeds(review_path, target_count=target_count, strict=False)
-            selected_path = PROJECT_ROOT / "data/processed/seeds_selected.csv"
+            selected_path = eu.artifact_path(PROJECT_ROOT / "data/processed/seeds_selected.csv", DATASET_ID)
 
             if len(selected) == target_count:
                 eu.write_csv_rows(selected_path, selected)
@@ -185,7 +201,7 @@ def notebook_00() -> list[nbf.NotebookNode]:
                 print(f"Wrote selected seeds: {selected_path}")
             else:
                 print(f"Review needed: found {len(selected)} included seeds, expected {target_count}.")
-                print("Edit data/processed/seeds_review.csv, then rerun this cell.")
+                print(f"Edit {review_path}, then rerun this cell.")
 
             selected[:3]
             """
@@ -206,8 +222,8 @@ def notebook_01() -> list[nbf.NotebookNode]:
         md("## Load Reviewed Seeds"),
         code(
             r"""
-            target_count = int(CONFIG["project"]["target_seed_count"])
-            review_path = PROJECT_ROOT / "data/processed/seeds_review.csv"
+            target_count = eu.dataset_target_seed_count(CONFIG, DATASET_ID)
+            review_path = eu.artifact_path(PROJECT_ROOT / "data/processed/seeds_review.csv", DATASET_ID)
             seeds = eu.load_reviewed_seeds(review_path, target_count=target_count, strict=True)
             print(f"Loaded {len(seeds)} reviewed seeds.")
             seeds[:2]
@@ -217,8 +233,8 @@ def notebook_01() -> list[nbf.NotebookNode]:
         code(
             r"""
             benchmark = eu.build_benchmark_items(seeds)
-            benchmark_path = PROJECT_ROOT / "data/processed/benchmark_items.csv"
-            candidate_benchmark_path = PROJECT_ROOT / "data/processed/benchmark_items_candidate.csv"
+            benchmark_path = eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID)
+            candidate_benchmark_path = eu.candidate_path(benchmark_path)
 
             # Existing benchmark artifacts are preserved by default after review.
             # Set FORCE_REBUILD_BENCHMARK = True only when you intentionally accept regenerated items.
@@ -263,7 +279,7 @@ def notebook_01() -> list[nbf.NotebookNode]:
             import pandas as pd
 
             benchmark_review = eu.benchmark_statement_review_frame(benchmark)
-            review_paths = eu.write_benchmark_statement_review(benchmark, PROJECT_ROOT / "outputs")
+            review_paths = eu.write_benchmark_statement_review(benchmark, PROJECT_ROOT / "outputs", suffix=DATASET_SUFFIX)
 
             print(f"Review rows: {len(benchmark_review)}")
             print(f"Wrote Markdown review table: {review_paths['markdown']}")
@@ -277,8 +293,8 @@ def notebook_01() -> list[nbf.NotebookNode]:
         code(
             r"""
             shall_benchmark = eu.build_benchmark_items(seeds, mandatory_keyword="SHALL")
-            shall_path = PROJECT_ROOT / "data/processed/benchmark_items_shall.csv"
-            candidate_shall_path = PROJECT_ROOT / "data/processed/benchmark_items_shall_candidate.csv"
+            shall_path = eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID, "shall")
+            candidate_shall_path = eu.candidate_path(shall_path)
 
             FORCE_REBUILD_SHALL_BENCHMARK = False
             shall_write_result = eu.write_csv_rows_if_changed(
@@ -306,7 +322,7 @@ def notebook_01() -> list[nbf.NotebookNode]:
             assert all("SHALL" in row["source_statement"] for row in shall_benchmark if row["source_modality"] == "mandatory")
             assert all("SHALL" in row["candidate_requirement"] for row in shall_benchmark)
 
-            shall_review_paths = eu.write_benchmark_statement_review(shall_benchmark, PROJECT_ROOT / "outputs", suffix="_shall")
+            shall_review_paths = eu.write_benchmark_statement_review(shall_benchmark, PROJECT_ROOT / "outputs", suffix=eu.dataset_variant_suffix(DATASET_ID, "shall"))
             print(f"SHALL items: {len(shall_benchmark)}")
             print(f"Wrote SHALL Markdown review table: {shall_review_paths['markdown']}")
             print(f"Wrote SHALL CSV review table: {shall_review_paths['csv']}")
@@ -315,12 +331,12 @@ def notebook_01() -> list[nbf.NotebookNode]:
         md("## Write Benchmark Manifest"),
         code(
             r"""
-            manifest_path = PROJECT_ROOT / "outputs/benchmark_manifest.json"
+            manifest_path = eu.artifact_path(PROJECT_ROOT / "outputs/benchmark_manifest.json", DATASET_ID)
             manifest_paths = [
-                PROJECT_ROOT / "data/processed/seeds_review.csv",
-                PROJECT_ROOT / "data/processed/seeds_selected.csv",
-                PROJECT_ROOT / "data/processed/benchmark_items.csv",
-                PROJECT_ROOT / "data/processed/benchmark_items_shall.csv",
+                eu.artifact_path(PROJECT_ROOT / "data/processed/seeds_review.csv", DATASET_ID),
+                eu.artifact_path(PROJECT_ROOT / "data/processed/seeds_selected.csv", DATASET_ID),
+                eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID),
+                eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID, "shall"),
                 PROJECT_ROOT / "prompts/mandatory_entailment.txt",
                 PROJECT_ROOT / "prompts/mandatory_entailment_strict.txt",
                 PROJECT_ROOT / "prompts/modality_extraction.txt",
@@ -334,6 +350,7 @@ def notebook_01() -> list[nbf.NotebookNode]:
                 metadata={
                     "main_benchmark": "MUST",
                     "robustness_benchmark": "SHALL",
+                    "dataset_id": DATASET_ID,
                     "seed_count": target_count,
                     "source_modalities": eu.MODALITIES,
                 },
@@ -429,7 +446,7 @@ def notebook_02() -> list[nbf.NotebookNode]:
         md("## Select Pilot Items"),
         code(
             r"""
-            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
+            benchmark_path = eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID, BENCHMARK_VARIANT)
             benchmark = eu.read_csv_rows(benchmark_path)
             pilot_seed_count = int(CONFIG["project"]["pilot_seed_count"])
             pilot_seed_ids = sorted({row["seed_id"] for row in benchmark})[:pilot_seed_count]
@@ -444,7 +461,7 @@ def notebook_02() -> list[nbf.NotebookNode]:
         code(PROMPT_RUNNER),
         code(
             r"""
-            output_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_pilot.jsonl", BENCHMARK_VARIANT)
+            output_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw_pilot.jsonl", DATASET_ID, BENCHMARK_VARIANT)
             run_id = eu.new_run_id("pilot" if BENCHMARK_VARIANT == "must" else f"pilot-{BENCHMARK_VARIANT}")
             records = []
             jobs = []
@@ -534,7 +551,7 @@ def notebook_02() -> list[nbf.NotebookNode]:
         code(
             r"""
             RUN_LOGPROB_PROBE = os.getenv("RUN_LOGPROB_PROBE", "true").lower() in {"1", "true", "yes"}
-            logprob_probe_path = eu.variant_path(PROJECT_ROOT / "outputs/logprob_probe.json", BENCHMARK_VARIANT)
+            logprob_probe_path = eu.artifact_path(PROJECT_ROOT / "outputs/logprob_probe.json", DATASET_ID, BENCHMARK_VARIANT)
 
             if RUN_LOGPROB_PROBE:
                 probe = eu.logprob_support_probe(
@@ -554,8 +571,8 @@ def notebook_02() -> list[nbf.NotebookNode]:
         code(
             r"""
             strict_template = eu.load_prompt(PROJECT_ROOT / "prompts/mandatory_entailment_strict.txt")
-            sensitivity_raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_prompt_sensitivity.jsonl", BENCHMARK_VARIANT)
-            sensitivity_summary_path = eu.variant_path(PROJECT_ROOT / "outputs/prompt_sensitivity_summary.csv", BENCHMARK_VARIANT)
+            sensitivity_raw_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw_prompt_sensitivity.jsonl", DATASET_ID, BENCHMARK_VARIANT)
+            sensitivity_summary_path = eu.artifact_path(PROJECT_ROOT / "outputs/prompt_sensitivity_summary.csv", DATASET_ID, BENCHMARK_VARIANT)
             RUN_PROMPT_SENSITIVITY = os.getenv("RUN_PROMPT_SENSITIVITY", "true").lower() in {"1", "true", "yes"}
 
             sensitivity_records = []
@@ -608,8 +625,8 @@ def notebook_02() -> list[nbf.NotebookNode]:
         code(
             r"""
             task2_labels_only_template = eu.load_prompt(PROJECT_ROOT / "prompts/modality_extraction_labels_only.txt")
-            task2_sensitivity_raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task2_prompt_sensitivity.jsonl", BENCHMARK_VARIANT)
-            task2_sensitivity_summary_path = eu.variant_path(PROJECT_ROOT / "outputs/task2_prompt_sensitivity_summary.csv", BENCHMARK_VARIANT)
+            task2_sensitivity_raw_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task2_prompt_sensitivity.jsonl", DATASET_ID, BENCHMARK_VARIANT)
+            task2_sensitivity_summary_path = eu.artifact_path(PROJECT_ROOT / "outputs/task2_prompt_sensitivity_summary.csv", DATASET_ID, BENCHMARK_VARIANT)
             RUN_TASK2_PROMPT_SENSITIVITY = os.getenv("RUN_TASK2_PROMPT_SENSITIVITY", "true").lower() in {"1", "true", "yes"}
 
             task2_sensitivity_items = [row for row in pilot_items if row["source_modality"] == "nice_to_have"]
@@ -704,9 +721,9 @@ def notebook_02b() -> list[nbf.NotebookNode]:
         md("## Build Probe Items"),
         code(
             r"""
-            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
-            seeds_path = PROJECT_ROOT / "data/processed/seeds_selected.csv"
-            probe_items_path = eu.variant_path(PROJECT_ROOT / "data/processed/weak_modality_probe_items.csv", BENCHMARK_VARIANT)
+            benchmark_path = eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID, BENCHMARK_VARIANT)
+            seeds_path = eu.artifact_path(PROJECT_ROOT / "data/processed/seeds_selected.csv", DATASET_ID)
+            probe_items_path = eu.artifact_path(PROJECT_ROOT / "data/processed/weak_modality_probe_items.csv", DATASET_ID, BENCHMARK_VARIANT)
 
             benchmark = eu.read_csv_rows(benchmark_path)
             seed_rows = eu.read_csv_rows(seeds_path)
@@ -734,7 +751,7 @@ def notebook_02b() -> list[nbf.NotebookNode]:
         md("## Pre-Model Sanity Check"),
         code(
             r"""
-            sanity_paths = eu.write_weak_modality_template_sanity_check(PROJECT_ROOT / "outputs")
+            sanity_paths = eu.write_weak_modality_template_sanity_check(PROJECT_ROOT / "outputs", suffix=DATASET_SUFFIX)
             sanity_rows = eu.read_csv_rows(sanity_paths["csv"])
             sanity_status = eu.weak_modality_sanity_status(sanity_rows)
             PROBE_READY = bool(sanity_status["valid"])
@@ -751,7 +768,7 @@ def notebook_02b() -> list[nbf.NotebookNode]:
         code(PROMPT_RUNNER),
         code(
             r"""
-            output_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_weak_modality_probe.jsonl", BENCHMARK_VARIANT)
+            output_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw_weak_modality_probe.jsonl", DATASET_ID, BENCHMARK_VARIANT)
             run_id = eu.new_run_id("weak-modality-probe" if BENCHMARK_VARIANT == "must" else f"weak-modality-probe-{BENCHMARK_VARIANT}")
             records = []
             jobs = []
@@ -810,7 +827,7 @@ def notebook_02b() -> list[nbf.NotebookNode]:
                 probe_run_id, probe_rows = None, []
 
             summary = eu.weak_modality_probe_summary(probe_items, probe_rows)
-            summary_paths = eu.write_weak_modality_probe_summary(summary, PROJECT_ROOT / "outputs")
+            summary_paths = eu.write_weak_modality_probe_summary(summary, PROJECT_ROOT / "outputs", suffix=DATASET_SUFFIX)
             print(f"Selected probe run: {probe_run_id}")
             print(f"Wrote summary CSV: {summary_paths['csv']}")
             print(f"Wrote summary Markdown: {summary_paths['markdown']}")
@@ -853,10 +870,10 @@ def notebook_03() -> list[nbf.NotebookNode]:
             REQUEST_CONCURRENCY = eu.resolve_llm_concurrency(CONFIG)
             SAVE_PRELIMINARY_RESULTS = os.getenv("SAVE_PRELIMINARY_RESULTS", "true").lower() in {"1", "true", "yes"}
             PRELIMINARY_EVERY_N_CALLS = max(1, int(os.getenv("PRELIMINARY_EVERY_N_CALLS", "50")))
-            output_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", BENCHMARK_VARIANT)
+            output_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", DATASET_ID, BENCHMARK_VARIANT)
             run_id = eu.new_run_id("full" if BENCHMARK_VARIANT == "must" else f"full-{BENCHMARK_VARIANT}")
 
-            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
+            benchmark_path = eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID, BENCHMARK_VARIANT)
             benchmark = eu.read_csv_rows(benchmark_path)
             planned_calls = len(benchmark) * len(MODELS) * 2 * (1 + int(stochastic["samples"]))
             print({
@@ -890,6 +907,7 @@ def notebook_03() -> list[nbf.NotebookNode]:
                         run_rows,
                         PROJECT_ROOT,
                         variant=BENCHMARK_VARIANT,
+                        dataset_id=DATASET_ID,
                         expected_stochastic_samples=int(stochastic["samples"]),
                     )
                     print(
@@ -960,7 +978,7 @@ def notebook_03() -> list[nbf.NotebookNode]:
         md("## Preliminary Snapshot Files"),
         code(
             r"""
-            paths = eu.preliminary_result_paths(PROJECT_ROOT, BENCHMARK_VARIANT)
+            paths = eu.preliminary_result_paths(PROJECT_ROOT, BENCHMARK_VARIANT, dataset_id=DATASET_ID)
             for name, path in paths.items():
                 print(f"{name}: {path} ({'exists' if path.exists() else 'missing'})")
             """
@@ -989,10 +1007,10 @@ def notebook_03b() -> list[nbf.NotebookNode]:
             stochastic = CONFIG["llm"]["stochastic"]
             REQUEST_CONCURRENCY = eu.resolve_llm_concurrency(CONFIG)
 
-            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
-            source_raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", BENCHMARK_VARIANT)
-            task3_items_path = eu.variant_path(PROJECT_ROOT / "data/processed/task3_verification_items.csv", BENCHMARK_VARIANT)
-            output_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task3_verification.jsonl", BENCHMARK_VARIANT)
+            benchmark_path = eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID, BENCHMARK_VARIANT)
+            source_raw_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", DATASET_ID, BENCHMARK_VARIANT)
+            task3_items_path = eu.artifact_path(PROJECT_ROOT / "data/processed/task3_verification_items.csv", DATASET_ID, BENCHMARK_VARIANT)
+            output_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task3_verification.jsonl", DATASET_ID, BENCHMARK_VARIANT)
 
             benchmark = eu.read_csv_rows(benchmark_path)
             all_source_rows = eu.read_jsonl(source_raw_path)
@@ -1158,10 +1176,10 @@ def notebook_04() -> list[nbf.NotebookNode]:
         md("## Load Raw Outputs and Benchmark"),
         code(
             r"""
-            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
-            raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", BENCHMARK_VARIANT)
-            task3_items_path = eu.variant_path(PROJECT_ROOT / "data/processed/task3_verification_items.csv", BENCHMARK_VARIANT)
-            task3_raw_path = eu.variant_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task3_verification.jsonl", BENCHMARK_VARIANT)
+            benchmark_path = eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID, BENCHMARK_VARIANT)
+            raw_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", DATASET_ID, BENCHMARK_VARIANT)
+            task3_items_path = eu.artifact_path(PROJECT_ROOT / "data/processed/task3_verification_items.csv", DATASET_ID, BENCHMARK_VARIANT)
+            task3_raw_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task3_verification.jsonl", DATASET_ID, BENCHMARK_VARIANT)
 
             benchmark = eu.read_csv_rows(benchmark_path)
             all_raw_rows = eu.read_jsonl(raw_path)
@@ -1221,7 +1239,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
             baseline_scores = eu.build_rule_baseline_scores(result_benchmark)
             scores.extend(task3_scores)
             scores.extend(baseline_scores)
-            scores_path = eu.variant_path(PROJECT_ROOT / "data/processed/uq_scores.csv", BENCHMARK_VARIANT)
+            scores_path = eu.artifact_path(PROJECT_ROOT / "data/processed/uq_scores.csv", DATASET_ID, BENCHMARK_VARIANT)
             eu.write_csv_rows(scores_path, scores)
             print(f"Wrote UQ scores: {scores_path}")
             print(f"Score rows: {len(scores)} including {len(baseline_scores)} rule-baseline rows and {len(task3_scores)} Task 3 rows")
@@ -1232,7 +1250,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
         code(
             r"""
             summary = eu.metric_summary_by_model_task_method(scores)
-            summary_path = eu.variant_path(PROJECT_ROOT / "data/processed/metrics_summary.csv", BENCHMARK_VARIANT)
+            summary_path = eu.artifact_path(PROJECT_ROOT / "data/processed/metrics_summary.csv", DATASET_ID, BENCHMARK_VARIANT)
             eu.write_csv_rows(summary_path, summary)
             print(f"Wrote summary: {summary_path}")
             fields = [
@@ -1311,7 +1329,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
                     "brier_ci_high": brier_high,
                 })
 
-            ci_path = eu.variant_path(PROJECT_ROOT / "data/processed/bootstrap_seed_ci.csv", BENCHMARK_VARIANT)
+            ci_path = eu.artifact_path(PROJECT_ROOT / "data/processed/bootstrap_seed_ci.csv", DATASET_ID, BENCHMARK_VARIANT)
             eu.write_csv_rows(ci_path, ci_rows)
             print(f"Wrote bootstrap CIs: {ci_path}")
             print(eu.markdown_table(ci_rows, ["model", "task", "uq_method", "accuracy", "accuracy_ci_low", "accuracy_ci_high", "brier", "brier_ci_low", "brier_ci_high"]))
@@ -1329,7 +1347,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
             scores_075 = eu.build_uq_scores(benchmark_075, raw_rows)
             scores_075.extend(eu.build_rule_baseline_scores(benchmark_075))
             summary_075 = eu.metric_summary_by_model_task_method(scores_075)
-            sensitivity_path = eu.variant_path(PROJECT_ROOT / "data/processed/metrics_summary_recommended075.csv", BENCHMARK_VARIANT)
+            sensitivity_path = eu.artifact_path(PROJECT_ROOT / "data/processed/metrics_summary_recommended075.csv", DATASET_ID, BENCHMARK_VARIANT)
             eu.write_csv_rows(sensitivity_path, summary_075)
             print(f"Wrote sensitivity summary: {sensitivity_path}")
             print(eu.markdown_table(summary_075, ["model", "task", "uq_method", "spearman_modality_p_yes", "pearson_modality_p_yes"]))
@@ -1351,10 +1369,10 @@ def notebook_05() -> list[nbf.NotebookNode]:
         md("## Load Scores and Summaries"),
         code(
             r"""
-            benchmark_path = eu.variant_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", BENCHMARK_VARIANT)
-            scores_path = eu.variant_path(PROJECT_ROOT / "data/processed/uq_scores.csv", BENCHMARK_VARIANT)
-            summary_path = eu.variant_path(PROJECT_ROOT / "data/processed/metrics_summary.csv", BENCHMARK_VARIANT)
-            ci_path = eu.variant_path(PROJECT_ROOT / "data/processed/bootstrap_seed_ci.csv", BENCHMARK_VARIANT)
+            benchmark_path = eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID, BENCHMARK_VARIANT)
+            scores_path = eu.artifact_path(PROJECT_ROOT / "data/processed/uq_scores.csv", DATASET_ID, BENCHMARK_VARIANT)
+            summary_path = eu.artifact_path(PROJECT_ROOT / "data/processed/metrics_summary.csv", DATASET_ID, BENCHMARK_VARIANT)
+            ci_path = eu.artifact_path(PROJECT_ROOT / "data/processed/bootstrap_seed_ci.csv", DATASET_ID, BENCHMARK_VARIANT)
 
             benchmark = eu.read_csv_rows(benchmark_path)
             scores = eu.read_csv_rows(scores_path)
@@ -1398,7 +1416,7 @@ def notebook_05() -> list[nbf.NotebookNode]:
                 "evidence_phrase_source_rate",
             ]
             table_md = eu.markdown_table(summary, paper_fields)
-            table_path = eu.variant_path(PROJECT_ROOT / "outputs/paper_results_table.md", BENCHMARK_VARIANT)
+            table_path = eu.artifact_path(PROJECT_ROOT / "outputs/paper_results_table.md", DATASET_ID, BENCHMARK_VARIANT)
             table_path.write_text(table_md + "\n", encoding="utf-8")
             print(f"Wrote table: {table_path}")
             print(table_md)
@@ -1407,7 +1425,7 @@ def notebook_05() -> list[nbf.NotebookNode]:
         md("## Export Compact Figure"),
         code(
             r"""
-            figure_path = eu.variant_path(PROJECT_ROOT / "outputs/task1_p_yes_by_modality.svg", BENCHMARK_VARIANT)
+            figure_path = eu.artifact_path(PROJECT_ROOT / "outputs/task1_p_yes_by_modality.svg", DATASET_ID, BENCHMARK_VARIANT)
             eu.write_task1_modality_svg(scores, figure_path)
             print(f"Wrote figure: {figure_path}")
             """
@@ -1460,7 +1478,7 @@ def notebook_05() -> list[nbf.NotebookNode]:
                 "## Recommended Next Step",
                 "- Recommendation: <best follow-up experiment or paper edit>.",
             ]
-            notes_path = eu.variant_path(PROJECT_ROOT / "outputs/result_notes_template.md", BENCHMARK_VARIANT)
+            notes_path = eu.artifact_path(PROJECT_ROOT / "outputs/result_notes_template.md", DATASET_ID, BENCHMARK_VARIANT)
             notes_path.write_text("\n".join(notes) + "\n", encoding="utf-8")
             print(f"Wrote notes template: {notes_path}")
             """

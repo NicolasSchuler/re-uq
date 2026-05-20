@@ -39,6 +39,16 @@ For persistent local settings, copy `config.example.json` to `config.json` and e
 
 Generated raw model outputs are cached as JSONL under `data/processed/`. The NICE dataset is downloaded or placed manually under `data/raw/`.
 
+The default seed dataset is NICE/PROMISE. To build and run the Hugging Face `limsc/mlm-tapt-requirements` co-primary dataset, set:
+
+```bash
+DATASET_ID=mlm_tapt
+```
+
+The `mlm_tapt` path loads the Hugging Face dataset through `datasets`, excludes `_PURE` sources, applies stricter candidate filtering, and writes suffixed artifacts such as `data/processed/seeds_review_mlm_tapt.csv` and `data/processed/benchmark_items_mlm_tapt.csv`. NICE/PROMISE filenames remain unchanged.
+
+The final reviewed seed capability documents are committed under `docs/final_seed_documents/` for both NICE/PROMISE and `mlm_tapt`.
+
 `notebooks/04_compute_uq_and_metrics.ipynb` analyzes one full experiment run at a time. By default it selects the latest `full-*` run in `data/processed/model_outputs_raw.jsonl`; set `RUN_ID` or `ANALYSIS_RUN_ID` to reproduce metrics for an earlier run.
 
 `notebooks/03b_run_modality_verification.ipynb` adds the Task 3 self-verification diagnostic after a complete full run. It verifies deterministic Task 2 extractions with the same model and caches raw verifier outputs in `data/processed/model_outputs_raw_task3_verification.jsonl`.
