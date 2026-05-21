@@ -45,6 +45,7 @@
       "timeout_s": 120,
       "max_tokens": 256,
       "json_mode": false,
+      "structured_output": "none",
       "requires_manual_server": true,
       "notes": "Start llama.cpp with exactly this model before running this profile."
     },
@@ -61,6 +62,7 @@
       "timeout_s": 180,
       "max_tokens": 256,
       "json_mode": true,
+      "structured_output": "json_schema",
       "requires_manual_server": false,
       "notes": "Coordinate large automated runs with ki-toolbox@scc.kit.edu."
     },
@@ -79,6 +81,7 @@
       "timeout_s": 180,
       "max_tokens": 256,
       "json_mode": true,
+      "structured_output": "json_object",
       "extra_body": {
         "thinking": {
           "type": "disabled"

@@ -234,6 +234,7 @@ RUN_REGISTRY_FIELDS = [
     "observed_api_calls",
     "timeout_s",
     "json_mode",
+    "structured_output",
     "request_extra_body",
     "server_model_probe",
     "notes",
@@ -248,6 +249,7 @@ DEFAULT_RUN_LOGGING: dict[str, Any] = {
     "write_progress_csv": True,
     "write_event_jsonl": True,
 }
+STRUCTURED_OUTPUT_MODES = {"none", "json_object", "json_schema"}
 
 RUN_PROGRESS_FIELDS = [
     "run_id",
@@ -563,6 +565,36 @@ def normalize_run_logging_config(
     }
 
 
+def normalize_structured_output_mode(value: Any, *, json_mode: bool = False, json_schema: bool = False) -> str:
+    if value is None:
+        if json_schema:
+            return "json_schema"
+        return "json_object" if json_mode else "none"
+    if isinstance(value, bool):
+        return "json_object" if value else "none"
+    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "": "none",
+        "false": "none",
+        "off": "none",
+        "none": "none",
+        "no": "none",
+        "true": "json_object",
+        "on": "json_object",
+        "json": "json_object",
+        "json_mode": "json_object",
+        "json_object": "json_object",
+        "schema": "json_schema",
+        "strict": "json_schema",
+        "strict_json": "json_schema",
+        "strict_json_schema": "json_schema",
+        "json_schema": "json_schema",
+    }
+    if normalized not in aliases:
+        raise ValueError(f"Unknown structured output mode: {value}")
+    return aliases[normalized]
+
+
 def normalize_provider_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
     provider_id = str(profile.get("provider_id") or profile.get("provider") or "").strip()
     profile_id = str(profile.get("profile_id") or profile.get("id") or provider_id).strip()
@@ -580,8 +612,14 @@ def normalize_provider_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(extra_body, Mapping):
         raise ValueError(f"Provider profile {profile_id} extra_body must be an object.")
     json_mode = bool(profile.get("json_mode", False))
+    structured_output = normalize_structured_output_mode(
+        profile.get("structured_output"),
+        json_mode=json_mode,
+        json_schema=bool(profile.get("json_schema", False)),
+    )
+    json_mode = json_mode or structured_output in {"json_object", "json_schema"}
     response_format = profile.get("response_format")
-    if response_format is None and json_mode and "response_format" not in extra_body:
+    if response_format is None and structured_output == "json_object" and "response_format" not in extra_body:
         response_format = {"type": "json_object"}
     if response_format is not None and not isinstance(response_format, Mapping):
         raise ValueError(f"Provider profile {profile_id} response_format must be an object.")
@@ -596,6 +634,7 @@ def normalize_provider_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
         "timeout_s": positive_int(profile.get("timeout_s", DEFAULT_CONFIG["llm"]["timeout_s"]), f"profiles.{profile_id}.timeout_s"),
         "max_tokens": positive_int(profile.get("max_tokens", DEFAULT_CONFIG["llm"]["max_tokens"]), f"profiles.{profile_id}.max_tokens"),
         "json_mode": json_mode,
+        "structured_output": structured_output,
         "response_format": dict(response_format) if response_format is not None else None,
         "extra_body": dict(extra_body),
         "requires_manual_server": bool(profile.get("requires_manual_server", False)),
@@ -1586,6 +1625,90 @@ def prompt_for_benchmark_task(
     raise ValueError(f"Unsupported benchmark task: {task}")
 
 
+def _json_schema_object(properties: Mapping[str, Any], required: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": dict(properties),
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
+def task_response_schema(task: str, *, batched: bool = False) -> dict[str, Any]:
+    confidence = {"type": "number", "minimum": 0, "maximum": 100}
+    if task == "task1":
+        properties: dict[str, Any] = {
+            "decision": {"type": "string", "enum": ["yes", "no"]},
+            "confidence": confidence,
+            "brief_reason": {"type": "string", "maxLength": 200},
+        }
+        required = ["decision", "confidence", "brief_reason"]
+    elif task == "task2":
+        properties = {
+            "requirement": {"type": "string"},
+            "modality": {"type": "string", "enum": ["mandatory", "recommended", "optional", "nice_to_have"]},
+            "confidence": confidence,
+        }
+        required = ["requirement", "modality", "confidence"]
+    elif task == "task3":
+        properties = {
+            "relation": {"type": "string", "enum": ["preserves", "strengthens", "weakens", "content_changed"]},
+            "confidence": confidence,
+            "evidence_phrase": {"type": "string", "maxLength": 240},
+            "brief_reason": {"type": "string", "maxLength": 240},
+        }
+        required = ["relation", "confidence", "evidence_phrase", "brief_reason"]
+    else:
+        raise ValueError(f"Unsupported task for JSON Schema response format: {task}")
+
+    if batched:
+        properties = {"request_index": {"type": "integer"}, **properties}
+        required = ["request_index", *required]
+        return _json_schema_object(
+            {"results": {"type": "array", "items": _json_schema_object(properties, required)}},
+            ["results"],
+        )
+    return _json_schema_object(properties, required)
+
+
+def response_format_for_task(task: str, structured_output: str, *, batched: bool = False) -> dict[str, Any] | None:
+    mode = normalize_structured_output_mode(structured_output)
+    if mode == "none":
+        return None
+    if mode == "json_object":
+        return {"type": "json_object"}
+    schema_name = f"re_uq_{task}_{'batch' if batched else 'single'}"
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema_name,
+            "strict": True,
+            "schema": task_response_schema(task, batched=batched),
+        },
+    }
+
+
+def resolve_response_format_args(
+    task: str,
+    *,
+    structured_output: Any = None,
+    json_mode: bool = False,
+    response_format: Mapping[str, Any] | None = None,
+    extra_body: Mapping[str, Any] | None = None,
+    batched: bool = False,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    extra = dict(extra_body) if extra_body else None
+    mode = normalize_structured_output_mode(structured_output, json_mode=json_mode)
+    if mode == "none":
+        return (dict(response_format) if response_format else None), extra
+
+    resolved = response_format_for_task(task, mode, batched=batched)
+    if extra is not None and "response_format" in extra:
+        extra["response_format"] = resolved
+        return None, extra
+    return resolved, extra
+
+
 def completion_request_job(
     *,
     item: Mapping[str, Any],
@@ -1607,10 +1730,19 @@ def completion_request_job(
     profile_id: str = "",
     run_group_id: str = "",
     json_mode: bool = False,
+    structured_output: str | None = None,
     response_format: Mapping[str, Any] | None = None,
     extra_body: Mapping[str, Any] | None = None,
     server_model_probe: Mapping[str, Any] | str | None = None,
 ) -> dict[str, Any]:
+    resolved_response_format, resolved_extra_body = resolve_response_format_args(
+        task,
+        structured_output=structured_output,
+        json_mode=json_mode,
+        response_format=response_format,
+        extra_body=extra_body,
+        batched=False,
+    )
     return {
         "request_index": request_index,
         "run_id": run_id,
@@ -1632,8 +1764,9 @@ def completion_request_job(
         "profile_id": profile_id,
         "run_group_id": run_group_id,
         "json_mode": bool(json_mode),
-        "response_format": dict(response_format) if response_format else None,
-        "extra_body": dict(extra_body) if extra_body else None,
+        "structured_output": normalize_structured_output_mode(structured_output, json_mode=json_mode),
+        "response_format": dict(resolved_response_format) if resolved_response_format else None,
+        "extra_body": dict(resolved_extra_body) if resolved_extra_body else None,
         "server_model_probe": server_model_probe,
     }
 
@@ -1657,6 +1790,7 @@ def planned_completion_jobs(
     profile_id: str = "",
     run_group_id: str = "",
     json_mode: bool = False,
+    structured_output: str | None = None,
     response_format: Mapping[str, Any] | None = None,
     extra_body: Mapping[str, Any] | None = None,
     server_model_probe: Mapping[str, Any] | str | None = None,
@@ -1688,6 +1822,7 @@ def planned_completion_jobs(
                     profile_id=profile_id,
                     run_group_id=run_group_id,
                     json_mode=json_mode,
+                    structured_output=structured_output,
                     response_format=response_format,
                     extra_body=extra_body,
                     server_model_probe=server_model_probe,
@@ -1715,6 +1850,7 @@ def planned_completion_jobs(
                         profile_id=profile_id,
                         run_group_id=run_group_id,
                         json_mode=json_mode,
+                        structured_output=structured_output,
                         response_format=response_format,
                         extra_body=extra_body,
                         server_model_probe=server_model_probe,
@@ -2326,6 +2462,8 @@ def build_raw_record(
     base_url: str = "",
     api_key_env: str = "",
     json_mode: bool = False,
+    structured_output: str = "none",
+    response_format: Mapping[str, Any] | None = None,
     request_extra_body: Mapping[str, Any] | None = None,
     server_model_probe: Mapping[str, Any] | str | None = None,
     batch_id: str = "",
@@ -2372,6 +2510,11 @@ def build_raw_record(
         record["api_key_env"] = api_key_env
     if json_mode:
         record["json_mode"] = True
+    resolved_structured_output = normalize_structured_output_mode(structured_output, json_mode=json_mode)
+    if resolved_structured_output != "none":
+        record["structured_output"] = resolved_structured_output
+    if response_format:
+        record["response_format"] = dict(response_format)
     if request_extra_body:
         record["request_extra_body"] = dict(request_extra_body)
     if server_model_probe:
@@ -2437,6 +2580,8 @@ def run_completion_job(
         base_url=str(job.get("base_url", job.get("host", ""))),
         api_key_env=str(job.get("api_key_env", "")),
         json_mode=bool(job.get("json_mode", False)),
+        structured_output=str(job.get("structured_output", "none")),
+        response_format=job.get("response_format"),
         request_extra_body=job.get("extra_body"),
         server_model_probe=job.get("server_model_probe"),
     )
@@ -2460,6 +2605,7 @@ def completion_batch_key(job: Mapping[str, Any]) -> tuple[Any, ...]:
         str(job.get("profile_id", "")),
         str(job.get("run_group_id", "")),
         bool(job.get("json_mode", False)),
+        str(job.get("structured_output", "")),
         compact_json(job.get("response_format")),
         compact_json(job.get("extra_body")),
     )
@@ -2497,6 +2643,14 @@ def run_completion_batch(
     first = jobs[0]
     batch_prompt = batch_prompt_for_completion_jobs(jobs)
     batch_prompt_hash = hashlib.sha256(batch_prompt.encode("utf-8")).hexdigest()
+    batch_response_format, batch_extra_body = resolve_response_format_args(
+        str(first["task"]),
+        structured_output=first.get("structured_output"),
+        json_mode=bool(first.get("json_mode", False)),
+        response_format=first.get("response_format"),
+        extra_body=first.get("extra_body"),
+        batched=True,
+    )
     completion = completion_fn(
         host=str(first["host"]),
         model=str(first["model"]),
@@ -2506,8 +2660,8 @@ def run_completion_batch(
         max_tokens=int(first.get("max_tokens", 256)) * len(jobs),
         timeout_s=int(first.get("timeout_s", 120)),
         api_key_env=str(first.get("api_key_env", "LOCAL_OPENAI_API_KEY")),
-        response_format=first.get("response_format"),
-        extra_body=first.get("extra_body"),
+        response_format=batch_response_format,
+        extra_body=batch_extra_body,
     )
     batch_id = (
         f"{first['run_id']}:{first['model']}:{first['task']}:"
@@ -2568,7 +2722,9 @@ def run_completion_batch(
                 base_url=str(job.get("base_url", job.get("host", ""))),
                 api_key_env=str(job.get("api_key_env", "")),
                 json_mode=bool(job.get("json_mode", False)),
-                request_extra_body=job.get("extra_body"),
+                structured_output=str(job.get("structured_output", "none")),
+                response_format=batch_response_format,
+                request_extra_body=batch_extra_body,
                 server_model_probe=job.get("server_model_probe"),
                 batch_id=batch_id,
                 batch_size=len(jobs),
@@ -3356,6 +3512,7 @@ def run_registry_summary(
     batch_size: int | str = 1,
     timeout_s: int | str = "",
     json_mode: bool = False,
+    structured_output: str = "none",
     request_extra_body: Mapping[str, Any] | None = None,
     server_model_probe: Mapping[str, Any] | str | None = None,
     notes: str = "",
@@ -3422,6 +3579,7 @@ def run_registry_summary(
         "observed_api_calls": observed_api_calls,
         "timeout_s": timeout_s,
         "json_mode": "yes" if json_mode else "no",
+        "structured_output": normalize_structured_output_mode(structured_output, json_mode=json_mode),
         "request_extra_body": compact_json(request_extra_body),
         "server_model_probe": compact_json(server_model_probe),
         "notes": notes,
@@ -3592,13 +3750,22 @@ def provider_preflight(
     api_key_env: str,
     timeout_s: int,
     json_mode: bool = False,
+    structured_output: str = "none",
     response_format: Mapping[str, Any] | None = None,
     extra_body: Mapping[str, Any] | None = None,
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
 ) -> dict[str, Any]:
-    extra_body_response_format = isinstance(extra_body, Mapping) and "response_format" in extra_body
-    resolved_response_format = response_format
-    if resolved_response_format is None and json_mode and not extra_body_response_format:
+    resolved_response_format, resolved_extra_body = resolve_response_format_args(
+        "task1",
+        structured_output=structured_output,
+        json_mode=json_mode,
+        response_format=response_format,
+        extra_body=extra_body,
+        batched=False,
+    )
+    if resolved_response_format is None and json_mode and structured_output == "none" and not (
+        isinstance(resolved_extra_body, Mapping) and "response_format" in resolved_extra_body
+    ):
         resolved_response_format = {"type": "json_object"}
     completion = completion_fn(
         host=host,
@@ -3610,7 +3777,7 @@ def provider_preflight(
         timeout_s=timeout_s,
         api_key_env=api_key_env,
         response_format=resolved_response_format,
-        extra_body=extra_body,
+        extra_body=resolved_extra_body,
     )
     _, parse_status = parse_task_response("task1", completion.get("raw_text", ""))
     return {

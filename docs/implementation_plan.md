@@ -101,6 +101,7 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 - For llama.cpp, run one model at a time because the server must be restarted manually for each loaded model; pass `--model` for the currently loaded model.
 - For Z.ai GLM Coding Plan keys, use `https://api.z.ai/api/coding/paas/v4`; the general `https://api.z.ai/api/paas/v4` endpoint requires standard API balance.
 - Use profile-level `batch_size` to reduce API-call overhead. Batches only combine compatible jobs for the same task, sample kind, sample index, model, and provider settings, then split the response back into one JSONL row per item/sample.
+- Use `structured_output=json_schema` for providers that accept strict OpenAI-style structured outputs; use `json_object` for loose JSON mode and `none` for local endpoints that do not support response formatting.
 - Cache every raw response in the canonical `data/processed/model_outputs_raw*.jsonl` files and track completion in `data/processed/run_registry*.csv`.
 - Use the live progress artifacts during long runs: `data/processed/run_progress_live*.csv` for current task coverage and `data/processed/run_events*.jsonl` for structured start/progress/warning/finish events. Monitor with `scripts/show_run_progress.py --dataset nice --run-id RUN_ID --watch 30`.
 - `notebooks/03_run_experiments.ipynb` remains available for direct env-var driven local runs, but the CLI is the reproducible path for provider matrices.

@@ -1371,6 +1371,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(config["logging"]["warn_parse_failure_rate"], 0.1)
         self.assertEqual(config["profiles"][1]["base_url"], "https://api.z.ai/api/coding/paas/v4")
         self.assertEqual(config["profiles"][1]["response_format"], None)
+        self.assertEqual(config["profiles"][1]["structured_output"], "json_object")
         self.assertEqual(config["profiles"][1]["extra_body"]["thinking"]["type"], "disabled")
         with self.assertRaises(ValueError):
             eu.validate_manual_server_profile(config["profiles"][0])
@@ -1467,6 +1468,130 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertTrue(preflight["ok"])
         self.assertIsNone(captured["response_format"])
         self.assertEqual(captured["extra_body"]["response_format"]["type"], "json_object")
+
+    def test_json_schema_structured_output_uses_task_schema(self):
+        profile = eu.normalize_provider_profile(
+            {
+                "profile_id": "kit",
+                "provider_id": "kit_toolbox",
+                "base_url": "https://ki-toolbox.scc.kit.edu/api/v1",
+                "api_key_env": "KIT_TOOLBOX_API_KEY",
+                "models": ["azure.gpt-4.1-mini"],
+                "json_schema": True,
+            }
+        )
+        seeds = [
+            {
+                "seed_id": "S0001",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall export reports.",
+                "capability_text_final": "export reports",
+            }
+        ]
+        benchmark = eu.build_benchmark_items(seeds)
+        jobs = eu.planned_completion_jobs(
+            benchmark[:1],
+            tasks=["task2"],
+            model="azure.gpt-4.1-mini",
+            host=profile["base_url"],
+            run_id="full-1",
+            prompt_version="v1",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env=profile["api_key_env"],
+            json_mode=profile["json_mode"],
+            structured_output=profile["structured_output"],
+            response_format=profile["response_format"],
+            extra_body=profile["extra_body"],
+        )
+
+        response_format = jobs[0]["response_format"]
+        self.assertEqual(profile["structured_output"], "json_schema")
+        self.assertEqual(response_format["type"], "json_schema")
+        schema = response_format["json_schema"]["schema"]
+        self.assertEqual(schema["properties"]["modality"]["enum"], ["mandatory", "recommended", "optional", "nice_to_have"])
+        self.assertTrue(response_format["json_schema"]["strict"])
+
+    def test_json_schema_batch_uses_results_schema(self):
+        seeds = [
+            {
+                "seed_id": "S0001",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall export reports.",
+                "capability_text_final": "export reports",
+            },
+            {
+                "seed_id": "S0002",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall print invoices.",
+                "capability_text_final": "print invoices",
+            },
+        ]
+        benchmark = eu.build_benchmark_items(seeds)
+        jobs = eu.planned_completion_jobs(
+            [row for row in benchmark if row["source_modality"] == "mandatory"],
+            tasks=["task1"],
+            model="m1",
+            host="http://localhost:1234/v1",
+            run_id="full-1",
+            prompt_version="v1",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+            json_mode=True,
+            structured_output="json_schema",
+        )
+        captured = {}
+
+        def fake_batch_completion(**kwargs):
+            captured.update(kwargs)
+            items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+            return {
+                "ok": True,
+                "raw_text": json.dumps(
+                    {
+                        "results": [
+                            {
+                                "request_index": item["request_index"],
+                                "decision": "yes",
+                                "confidence": 80,
+                                "brief_reason": "batched",
+                            }
+                            for item in items
+                        ]
+                    }
+                ),
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_batch_completion, batch_size=2))
+
+        schema = captured["response_format"]["json_schema"]["schema"]
+        self.assertIn("results", schema["properties"])
+        self.assertIn("request_index", schema["properties"]["results"]["items"]["properties"])
+        self.assertEqual({row["structured_output"] for row in records}, {"json_schema"})
+        self.assertEqual({row["response_format"]["json_schema"]["name"] for row in records}, {"re_uq_task1_batch"})
+
+    def test_json_schema_replaces_extra_body_response_format(self):
+        response_format, extra_body = eu.resolve_response_format_args(
+            "task1",
+            structured_output="json_schema",
+            extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+        )
+
+        self.assertIsNone(response_format)
+        self.assertEqual(extra_body["thinking"]["type"], "disabled")
+        self.assertEqual(extra_body["response_format"]["type"], "json_schema")
 
     def test_zai_example_uses_coding_plan_endpoint(self):
         config = eu.load_run_config("run_configs/full_matrix.example.json")
