@@ -4,11 +4,39 @@ __pycache__/
 .venv/
 .cache/
 .DS_Store
+tmp/
+
+# Local settings and run definitions.
 config.json
+run_configs/current_run*.json
 
 data/raw/*
 !data/raw/.gitkeep
 
+# Run outputs are preserved locally but only promoted to Git when they become
+# curated paper artifacts.
 data/processed/model_outputs_raw*.jsonl
+data/processed/run_progress*.csv
+data/processed/run_registry*.csv
+data/processed/uq_scores*.csv
+
 outputs/*
 !outputs/.gitkeep
+!outputs/benchmark_manifest*.json
+!outputs/benchmark_statements_review*
+!outputs/included_capabilities_review*
+!outputs/logprob_probe.json
+!outputs/pilot_results_summary.md
+!outputs/prompt_sensitivity_summary.csv
+!outputs/task2_prompt_sensitivity_summary.csv
+!outputs/weak_modality_probe_summary.*
+!outputs/weak_modality_template_sanity_check.*
+!outputs/external_ai_service_probe/
+!outputs/external_ai_service_probe/README.md
+!outputs/external_ai_service_probe/*_evaluation.md
+!outputs/external_ai_service_probe/*_confusion_matrix.csv
+!outputs/external_ai_service_probe/*_source_condition_summary.csv
+!outputs/external_ai_service_probe/external_probe_comparison.md
+!outputs/external_ai_service_probe/external_task2_*
+outputs/external_ai_service_probe/*_outputs.jsonl
+outputs/external_ai_service_probe/*_scored_items.csv
