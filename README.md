@@ -21,6 +21,8 @@ source .venv/bin/activate
 
 The evaluation utilities intentionally use established libraries from this environment: `pandas`, `numpy`, `scipy`, `scikit-learn`, `matplotlib`, `openai`, `requests`, and `nbformat`.
 
+Repository workflow and artifact tracking expectations are documented in `docs/repository_hygiene.md`.
+
 ## Pipeline
 
 Run the notebooks in order:
