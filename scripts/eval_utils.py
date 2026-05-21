@@ -677,9 +677,60 @@ def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def strip_json_trailing_commas(text: str) -> str:
+    output: list[str] = []
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            output.append(char)
+            index += 1
+            continue
+        if char == ",":
+            lookahead = index + 1
+            while lookahead < len(text) and text[lookahead] in " \t\r\n":
+                lookahead += 1
+            if lookahead < len(text) and text[lookahead] in "]}":
+                index += 1
+                continue
+        output.append(char)
+        index += 1
+    return "".join(output)
+
+
 def load_run_config(path: str | Path) -> dict[str, Any]:
-    with Path(path).open("r", encoding="utf-8") as handle:
-        return normalize_run_config(json.load(handle))
+    config_path = Path(path)
+    text = config_path.read_text(encoding="utf-8")
+    try:
+        config = json.loads(text)
+    except json.JSONDecodeError as first_error:
+        normalized_text = strip_json_trailing_commas(text)
+        if normalized_text == text:
+            raise ValueError(
+                f"Invalid JSON in run config {config_path}: line {first_error.lineno} "
+                f"column {first_error.colno}: {first_error.msg}"
+            ) from first_error
+        try:
+            config = json.loads(normalized_text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid JSON in run config {config_path}: line {exc.lineno} "
+                f"column {exc.colno}: {exc.msg}"
+            ) from exc
+    return normalize_run_config(config)
 
 
 def filter_run_profiles(

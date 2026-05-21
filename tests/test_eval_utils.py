@@ -1380,6 +1380,37 @@ class EvalUtilsTest(unittest.TestCase):
         eu.validate_manual_server_profile(selected[0])
         self.assertEqual(selected[0]["models"], ["m2"])
 
+    def test_load_run_config_accepts_trailing_commas(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "current_run.json"
+            config_path.write_text(
+                """
+{
+  "run_group_id": "group1",
+  "datasets": ["nice",],
+  "benchmark_variants": ["must",],
+  "profiles": [
+    {
+      "profile_id": "zai",
+      "provider_id": "zai",
+      "base_url": "https://api.z.ai/api/coding/paas/v4",
+      "api_key_env": "ZAI_API_KEY",
+      "models": ["glm-5.1",],
+      "json_mode": true,
+      "structured_output": "json_object",
+    },
+  ],
+}
+""",
+                encoding="utf-8",
+            )
+
+            config = eu.load_run_config(config_path)
+
+        self.assertEqual(config["datasets"], ["nice"])
+        self.assertEqual(config["profiles"][0]["models"], ["glm-5.1"])
+        self.assertEqual(config["profiles"][0]["structured_output"], "json_object")
+
     def test_run_logging_config_override_precedence(self):
         logging_config = eu.normalize_run_logging_config(
             {"progress_every_records": 50, "write_progress_csv": False},
