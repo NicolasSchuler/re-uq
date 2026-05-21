@@ -22,6 +22,15 @@
     "top_p": 1.0,
     "samples": 5
   },
+  "logging": {
+    "progress_every_records": 100,
+    "progress_every_seconds": 60,
+    "warn_after_records": 100,
+    "warn_parse_failure_rate": 0.02,
+    "warn_request_error_rate": 0.02,
+    "write_progress_csv": true,
+    "write_event_jsonl": true
+  },
   "profiles": [
     {
       "profile_id": "local_llama_cpp",
@@ -58,7 +67,7 @@
     {
       "profile_id": "zai",
       "provider_id": "zai",
-      "base_url": "https://api.z.ai/api/paas/v4",
+      "base_url": "https://api.z.ai/api/coding/paas/v4",
       "api_key_env": "ZAI_API_KEY",
       "models": [
         "glm-5.1",
@@ -78,7 +87,8 @@
           "type": "json_object"
         }
       },
-      "requires_manual_server": false
+      "requires_manual_server": false,
+      "notes": "GLM Coding Plan endpoint. Standard paid API users should switch this to https://api.z.ai/api/paas/v4."
     }
   ]
 }

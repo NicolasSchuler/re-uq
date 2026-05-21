@@ -62,7 +62,13 @@ For reproducible multi-provider runs, copy `run_configs/full_matrix.example.json
   --mode smoke
 ```
 
-Then run `--mode full` after the provider preflight and smoke parse checks pass. Provider profiles can set `batch_size` to pack multiple same-task benchmark items into one API request; the runner still writes one canonical raw JSONL row per item/sample so existing analysis remains unchanged. Raw outputs still append to the canonical `data/processed/model_outputs_raw*.jsonl` files; `data/processed/run_registry*.csv` records which provider/model/run IDs are complete. Compare a run group with:
+Then run `--mode full` after the provider preflight and smoke parse checks pass. Provider profiles can set `batch_size` to pack multiple same-task benchmark items into one API request; the runner still writes one canonical raw JSONL row per item/sample so existing analysis remains unchanged. The example Z.ai profile uses the GLM Coding Plan endpoint (`https://api.z.ai/api/coding/paas/v4`); switch it to the general endpoint only when using a standard paid API balance. Raw outputs still append to the canonical `data/processed/model_outputs_raw*.jsonl` files; `data/processed/run_registry*.csv` records which provider/model/run IDs are complete. During long runs, the CLI periodically refreshes `data/processed/run_progress_live*.csv` and appends structured events to `data/processed/run_events*.jsonl`. Monitor a run from another terminal with:
+
+```bash
+.venv/bin/python scripts/show_run_progress.py --dataset nice --run-id RUN_ID --watch 30
+```
+
+Compare a completed run group with:
 
 ```bash
 .venv/bin/python scripts/compare_run_matrix.py --config run_configs/current_run.json

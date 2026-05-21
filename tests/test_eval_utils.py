@@ -1,8 +1,10 @@
 import json
 import math
+import io
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -10,6 +12,7 @@ from scripts import eval_utils as eu
 from scripts import compare_run_matrix as compare_matrix
 from scripts import evaluate_external_ai_probe as external_eval
 from scripts import run_experiment_from_config as run_config_cli
+from scripts import show_run_progress
 
 
 class EvalUtilsTest(unittest.TestCase):
@@ -1338,6 +1341,7 @@ class EvalUtilsTest(unittest.TestCase):
                 "run_group_id": "group1",
                 "datasets": ["nice", "mlm_tapt"],
                 "benchmark_variants": ["must"],
+                "logging": {"progress_every_records": 5, "warn_parse_failure_rate": 0.1},
                 "profiles": [
                     {
                         "profile_id": "local",
@@ -1351,7 +1355,7 @@ class EvalUtilsTest(unittest.TestCase):
                     {
                         "profile_id": "zai",
                         "provider_id": "zai",
-                        "base_url": "https://api.z.ai/api/paas/v4/",
+                        "base_url": "https://api.z.ai/api/coding/paas/v4/",
                         "api_key_env": "ZAI_API_KEY",
                         "models": ["glm-5.1"],
                         "json_mode": True,
@@ -1363,6 +1367,9 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual(config["profiles"][0]["base_url"], "http://127.0.0.1:1234/v1")
         self.assertEqual(config["profiles"][0]["batch_size"], 4)
+        self.assertEqual(config["logging"]["progress_every_records"], 5)
+        self.assertEqual(config["logging"]["warn_parse_failure_rate"], 0.1)
+        self.assertEqual(config["profiles"][1]["base_url"], "https://api.z.ai/api/coding/paas/v4")
         self.assertEqual(config["profiles"][1]["response_format"], None)
         self.assertEqual(config["profiles"][1]["extra_body"]["thinking"]["type"], "disabled")
         with self.assertRaises(ValueError):
@@ -1371,6 +1378,17 @@ class EvalUtilsTest(unittest.TestCase):
         selected = eu.filter_run_profiles(config, profile_id="local", model="m2")
         eu.validate_manual_server_profile(selected[0])
         self.assertEqual(selected[0]["models"], ["m2"])
+
+    def test_run_logging_config_override_precedence(self):
+        logging_config = eu.normalize_run_logging_config(
+            {"progress_every_records": 50, "write_progress_csv": False},
+            overrides={"progress_every_records": 10, "warn_after_records": 0, "write_event_jsonl": False},
+        )
+
+        self.assertEqual(logging_config["progress_every_records"], 10)
+        self.assertEqual(logging_config["warn_after_records"], 0)
+        self.assertFalse(logging_config["write_progress_csv"])
+        self.assertFalse(logging_config["write_event_jsonl"])
 
     def test_provider_request_metadata_and_extra_body_are_preserved(self):
         seeds = [
@@ -1387,7 +1405,7 @@ class EvalUtilsTest(unittest.TestCase):
             benchmark[:1],
             tasks=["task1"],
             model="glm-5.1",
-            host="https://api.z.ai/api/paas/v4",
+            host="https://api.z.ai/api/coding/paas/v4",
             run_id="full-1",
             prompt_version="v1",
             task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
@@ -1437,7 +1455,7 @@ class EvalUtilsTest(unittest.TestCase):
             }
 
         preflight = eu.provider_preflight(
-            host="https://api.z.ai/api/paas/v4",
+            host="https://api.z.ai/api/coding/paas/v4",
             model="glm-5.1",
             api_key_env="ZAI_API_KEY",
             timeout_s=30,
@@ -1449,6 +1467,13 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertTrue(preflight["ok"])
         self.assertIsNone(captured["response_format"])
         self.assertEqual(captured["extra_body"]["response_format"]["type"], "json_object")
+
+    def test_zai_example_uses_coding_plan_endpoint(self):
+        config = eu.load_run_config("run_configs/full_matrix.example.json")
+        zai_profile = next(profile for profile in config["profiles"] if profile["profile_id"] == "zai")
+
+        self.assertEqual(zai_profile["base_url"], "https://api.z.ai/api/coding/paas/v4")
+        self.assertIn("Coding Plan", zai_profile["notes"])
 
     def test_batched_completion_splits_results_to_raw_records(self):
         seeds = [
@@ -1633,6 +1658,48 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["status"], "partial")
 
+    def test_live_run_counters_and_warning_events(self):
+        raw_rows = [
+            {"run_id": "r1", "request_index": 0, "parse_status": "ok"},
+            {"run_id": "r1", "request_index": 1, "parse_status": "invalid_json"},
+            {"run_id": "r1", "request_index": 2, "parse_status": "request_error"},
+        ]
+
+        counters = eu.live_run_counters(
+            raw_rows,
+            expected_records=10,
+            expected_api_calls=10,
+            started_monotonic=0.0,
+            now_monotonic=3.0,
+        )
+        early_warnings = eu.warning_events_for_counters(
+            counters,
+            {"warn_after_records": 4, "warn_parse_failure_rate": 0.1, "warn_request_error_rate": 0.1},
+            set(),
+        )
+        warnings = eu.warning_events_for_counters(
+            counters,
+            {"warn_after_records": 3, "warn_parse_failure_rate": 0.1, "warn_request_error_rate": 0.1},
+            set(),
+        )
+
+        self.assertEqual(counters["observed_records"], 3)
+        self.assertEqual(counters["ok_records"], 1)
+        self.assertEqual(counters["request_error_records"], 1)
+        self.assertEqual(counters["records_per_s"], 1.0)
+        self.assertEqual(early_warnings, [])
+        self.assertEqual({warning["warning_type"] for warning in warnings}, {"parse_failure_rate", "request_error_rate"})
+
+    def test_run_event_jsonl_shape(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "events.jsonl"
+            eu.append_run_event(path, {"event_type": "start", "run_id": "r1"})
+            eu.append_run_event(path, {"event_type": "finish", "run_id": "r1", "observed_records": 1})
+
+            rows = eu.read_jsonl(path)
+            self.assertEqual([row["event_type"] for row in rows], ["start", "finish"])
+            self.assertTrue(all("created_at_utc" in row for row in rows))
+
     def test_run_group_ensemble_disagreement_across_run_ids(self):
         benchmark = eu.build_benchmark_items(
             [
@@ -1739,6 +1806,7 @@ class EvalUtilsTest(unittest.TestCase):
                         "datasets": ["nice"],
                         "benchmark_variants": ["must"],
                         "stochastic": {"temperature": 0.7, "top_p": 1.0, "samples": 1},
+                        "logging": {"progress_every_records": 2, "progress_every_seconds": 999, "warn_after_records": 2},
                         "profiles": [
                             {
                                 "profile_id": "fake",
@@ -1767,11 +1835,17 @@ class EvalUtilsTest(unittest.TestCase):
                 "2",
                 "--fake-completion",
             ]
-            with mock.patch.object(sys, "argv", argv), mock.patch.object(run_config_cli.eu, "project_root", return_value=root):
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(run_config_cli.eu, "project_root", return_value=root),
+                redirect_stdout(io.StringIO()),
+            ):
                 run_config_cli.main()
 
             rows = eu.read_jsonl(root / "data/processed/model_outputs_raw.jsonl")
             registry = eu.read_csv_rows(root / "data/processed/run_registry.csv")
+            progress = eu.read_csv_rows(root / "data/processed/run_progress_live.csv")
+            events = eu.read_jsonl(root / "data/processed/run_events.jsonl")
             self.assertEqual(len(rows), 8)
             self.assertEqual(len({row["batch_id"] for row in rows}), 4)
             self.assertEqual(registry[0]["status"], "complete")
@@ -1779,6 +1853,150 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertEqual(registry[0]["batch_size"], "2")
             self.assertEqual(registry[0]["expected_api_calls"], "4")
             self.assertEqual(registry[0]["observed_api_calls"], "4")
+            self.assertEqual({row["task"] for row in progress}, {"task1", "task2"})
+            self.assertEqual({row["event_type"] for row in events}, {"start", "progress", "finish"})
+            finish_event = next(row for row in reversed(events) if row["event_type"] == "finish")
+            self.assertEqual(finish_event["pending_jobs"], 0)
+            self.assertEqual(finish_event["pending_api_calls"], 0)
+
+    def test_show_run_progress_reads_outputs_without_mutation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "data/processed").mkdir(parents=True)
+            (root / "AGENTS.md").write_text("", encoding="utf-8")
+            (root / "docs").mkdir()
+            (root / "docs/evaluation.md").write_text("", encoding="utf-8")
+            benchmark = eu.build_benchmark_items(
+                [
+                    {
+                        "seed_id": "S0001",
+                        "source_dataset": "NICE",
+                        "original_requirement": "The system shall export reports.",
+                        "capability_text_final": "export reports",
+                    }
+                ]
+            )[:1]
+            eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
+            raw_rows = [
+                {
+                    "run_id": "full-1",
+                    "model": "m1",
+                    "task": "task1",
+                    "item_id": benchmark[0]["item_id"],
+                    "seed_id": benchmark[0]["seed_id"],
+                    "source_modality": benchmark[0]["source_modality"],
+                    "sample_kind": "deterministic",
+                    "sample_index": 0,
+                    "parse_status": "ok",
+                    "parsed_json": {"decision": "yes", "confidence": 90},
+                    "prompt": benchmark[0]["source_statement"],
+                }
+            ]
+            for row in raw_rows:
+                eu.append_jsonl(root / "data/processed/model_outputs_raw.jsonl", row)
+            registry_row = eu.run_registry_summary(
+                benchmark,
+                raw_rows,
+                run_id="full-1",
+                run_group_id="group1",
+                provider_id="fake",
+                profile_id="fake",
+                model="m1",
+                dataset_id="nice",
+                variant="must",
+                tasks=["task1"],
+                expected_stochastic_samples=0,
+                started_at_utc="2026-05-21T00:00:00Z",
+            )
+            eu.upsert_run_registry_row(root / "data/processed/run_registry.csv", registry_row)
+
+            before = sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file())
+            output = io.StringIO()
+            with redirect_stdout(output):
+                show_run_progress.print_progress(root, "nice", "must", "full-1")
+            after = sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file())
+
+            self.assertEqual(before, after)
+            self.assertIn("full-1: records 1/1", output.getvalue())
+            self.assertIn("task_progress", output.getvalue())
+
+    def test_show_run_progress_requires_disambiguation_for_reused_run_id(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "data/processed").mkdir(parents=True)
+            (root / "AGENTS.md").write_text("", encoding="utf-8")
+            (root / "docs").mkdir()
+            (root / "docs/evaluation.md").write_text("", encoding="utf-8")
+            benchmark = eu.build_benchmark_items(
+                [
+                    {
+                        "seed_id": "S0001",
+                        "source_dataset": "NICE",
+                        "original_requirement": "The system shall export reports.",
+                        "capability_text_final": "export reports",
+                    }
+                ]
+            )[:1]
+            eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
+            raw_rows = [
+                {
+                    "run_id": "full-1",
+                    "profile_id": "p1",
+                    "model": "m1",
+                    "task": "task1",
+                    "item_id": benchmark[0]["item_id"],
+                    "seed_id": benchmark[0]["seed_id"],
+                    "source_modality": benchmark[0]["source_modality"],
+                    "sample_kind": "deterministic",
+                    "sample_index": 0,
+                    "parse_status": "ok",
+                    "parsed_json": {"decision": "yes", "confidence": 90},
+                    "prompt": benchmark[0]["source_statement"],
+                },
+                {
+                    "run_id": "full-1",
+                    "profile_id": "p2",
+                    "model": "m2",
+                    "task": "task1",
+                    "item_id": benchmark[0]["item_id"],
+                    "seed_id": benchmark[0]["seed_id"],
+                    "source_modality": benchmark[0]["source_modality"],
+                    "sample_kind": "deterministic",
+                    "sample_index": 0,
+                    "parse_status": "request_error",
+                    "parsed_json": {},
+                    "prompt": benchmark[0]["source_statement"],
+                },
+            ]
+            for row in raw_rows:
+                eu.append_jsonl(root / "data/processed/model_outputs_raw.jsonl", row)
+            for profile_id, model in [("p1", "m1"), ("p2", "m2")]:
+                registry_row = eu.run_registry_summary(
+                    benchmark,
+                    raw_rows,
+                    run_id="full-1",
+                    run_group_id="group1",
+                    provider_id="fake",
+                    profile_id=profile_id,
+                    model=model,
+                    dataset_id="nice",
+                    variant="must",
+                    tasks=["task1"],
+                    expected_stochastic_samples=0,
+                    started_at_utc="2026-05-21T00:00:00Z",
+                )
+                eu.upsert_run_registry_row(root / "data/processed/run_registry.csv", registry_row)
+
+            with self.assertRaisesRegex(ValueError, "matches multiple registry rows"):
+                show_run_progress.print_progress(root, "nice", "must", "full-1")
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                show_run_progress.print_progress(root, "nice", "must", "full-1", model="m2")
+
+            text = output.getvalue()
+            self.assertIn("full-1: records 1/1", text)
+            self.assertIn("parse_status: {'request_error': 1}", text)
 
     def test_run_completion_jobs_returns_records_from_fake_completion(self):
         item = {

@@ -239,6 +239,34 @@ RUN_REGISTRY_FIELDS = [
     "notes",
 ]
 
+DEFAULT_RUN_LOGGING: dict[str, Any] = {
+    "progress_every_records": 100,
+    "progress_every_seconds": 60,
+    "warn_after_records": 100,
+    "warn_parse_failure_rate": 0.02,
+    "warn_request_error_rate": 0.02,
+    "write_progress_csv": True,
+    "write_event_jsonl": True,
+}
+
+RUN_PROGRESS_FIELDS = [
+    "run_id",
+    "model",
+    "task",
+    "benchmark_items",
+    "expected_records",
+    "observed_records",
+    "record_completion_rate",
+    "parse_success_rate",
+    "deterministic_records",
+    "deterministic_ok",
+    "deterministic_item_coverage",
+    "stochastic_records",
+    "stochastic_ok",
+    "stochastic_item_coverage",
+    "stochastic_complete_item_rate",
+]
+
 
 def project_root() -> Path:
     cwd = Path.cwd().resolve()
@@ -277,6 +305,37 @@ def positive_int(value: Any, name: str) -> int:
     if resolved < 1:
         raise ValueError(f"{name} must be a positive integer, got {value!r}")
     return resolved
+
+
+def nonnegative_int(value: Any, name: str) -> int:
+    try:
+        resolved = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a non-negative integer, got {value!r}") from exc
+    if resolved < 0:
+        raise ValueError(f"{name} must be a non-negative integer, got {value!r}")
+    return resolved
+
+
+def nonnegative_float(value: Any, name: str) -> float:
+    try:
+        resolved = float(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a non-negative number, got {value!r}") from exc
+    if resolved < 0:
+        raise ValueError(f"{name} must be a non-negative number, got {value!r}")
+    return resolved
+
+
+def bool_config(value: Any, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value, got {value!r}")
 
 
 def resolve_llm_concurrency(
@@ -483,6 +542,27 @@ def _string_list(value: Any, name: str) -> list[str]:
     return [value for value in values if value]
 
 
+def normalize_run_logging_config(
+    logging_config: Mapping[str, Any] | None = None,
+    overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    config = dict(DEFAULT_RUN_LOGGING)
+    if logging_config:
+        config.update(dict(logging_config))
+    if overrides:
+        config.update({key: value for key, value in overrides.items() if value is not None})
+
+    return {
+        "progress_every_records": positive_int(config["progress_every_records"], "logging.progress_every_records"),
+        "progress_every_seconds": nonnegative_int(config["progress_every_seconds"], "logging.progress_every_seconds"),
+        "warn_after_records": nonnegative_int(config["warn_after_records"], "logging.warn_after_records"),
+        "warn_parse_failure_rate": nonnegative_float(config["warn_parse_failure_rate"], "logging.warn_parse_failure_rate"),
+        "warn_request_error_rate": nonnegative_float(config["warn_request_error_rate"], "logging.warn_request_error_rate"),
+        "write_progress_csv": bool_config(config["write_progress_csv"], "logging.write_progress_csv"),
+        "write_event_jsonl": bool_config(config["write_event_jsonl"], "logging.write_event_jsonl"),
+    }
+
+
 def normalize_provider_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
     provider_id = str(profile.get("provider_id") or profile.get("provider") or "").strip()
     profile_id = str(profile.get("profile_id") or profile.get("id") or provider_id).strip()
@@ -553,6 +633,7 @@ def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
             "top_p": float(stochastic.get("top_p", DEFAULT_CONFIG["llm"]["stochastic"]["top_p"])),
             "samples": max(0, int(stochastic.get("samples", DEFAULT_CONFIG["llm"]["stochastic"]["samples"]))),
         },
+        "logging": normalize_run_logging_config(config.get("logging") if isinstance(config.get("logging"), Mapping) else None),
         "profiles": [normalize_provider_profile(profile) for profile in profiles_value],
     }
 
@@ -3231,10 +3312,14 @@ def complete_run_ids_from_progress(
 
 
 def completion_record_key(row: Mapping[str, Any]) -> tuple[str, str, str, str, int]:
+    item_id = row.get("item_id", "")
+    nested_item = row.get("item")
+    if not item_id and isinstance(nested_item, Mapping):
+        item_id = nested_item.get("item_id", "")
     return (
         str(row.get("model", "")),
         str(row.get("task", "")),
-        str(row.get("item_id", "")),
+        str(item_id),
         str(row.get("sample_kind", "")),
         int(row.get("sample_index", 0)),
     )
@@ -3359,6 +3444,145 @@ def upsert_run_registry_row(path: str | Path, row: Mapping[str, Any]) -> None:
     if not updated:
         output_rows.append(dict(row))
     write_csv_rows(path, output_rows, fieldnames=RUN_REGISTRY_FIELDS)
+
+
+def run_events_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
+    return artifact_path(Path(root) / "data/processed/run_events.jsonl", dataset_id, variant)
+
+
+def run_progress_live_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
+    return artifact_path(Path(root) / "data/processed/run_progress_live.csv", dataset_id, variant)
+
+
+def live_run_counters(
+    raw_rows: list[dict[str, Any]],
+    *,
+    expected_records: int,
+    expected_api_calls: int,
+    started_monotonic: float | None = None,
+    now_monotonic: float | None = None,
+) -> dict[str, Any]:
+    observed_records = len(raw_rows)
+    ok_records = sum(1 for row in raw_rows if str(row.get("parse_status", "")) == "ok")
+    request_error_records = sum(1 for row in raw_rows if str(row.get("parse_status", "")) == "request_error")
+    observed_api_calls = len(
+        {
+            str(row.get("batch_id") or f"single:{row.get('request_index', index)}")
+            for index, row in enumerate(raw_rows)
+        }
+    )
+    elapsed_s = 0.0
+    if started_monotonic is not None:
+        elapsed_s = max(0.0, float(now_monotonic if now_monotonic is not None else time.monotonic()) - float(started_monotonic))
+    records_per_s = observed_records / elapsed_s if elapsed_s > 0 else 0.0
+    remaining_records = max(0, int(expected_records) - observed_records)
+    eta_s = remaining_records / records_per_s if records_per_s > 0 else ""
+    parse_failure_records = observed_records - ok_records
+    return {
+        "expected_records": int(expected_records),
+        "observed_records": observed_records,
+        "record_completion_rate": observed_records / expected_records if expected_records else math.nan,
+        "ok_records": ok_records,
+        "parse_failure_records": parse_failure_records,
+        "parse_success_rate": ok_records / observed_records if observed_records else math.nan,
+        "parse_failure_rate": parse_failure_records / observed_records if observed_records else 0.0,
+        "request_error_records": request_error_records,
+        "request_error_rate": request_error_records / observed_records if observed_records else 0.0,
+        "expected_api_calls": int(expected_api_calls),
+        "observed_api_calls": observed_api_calls,
+        "api_call_completion_rate": observed_api_calls / expected_api_calls if expected_api_calls else math.nan,
+        "elapsed_s": elapsed_s,
+        "records_per_s": records_per_s,
+        "eta_s": eta_s,
+    }
+
+
+def _duration_label(seconds: Any) -> str:
+    if seconds == "" or seconds is None or (isinstance(seconds, float) and math.isnan(seconds)):
+        return "unknown"
+    total = int(max(0, float(seconds)))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
+def format_live_progress_line(run_id: str, counters: Mapping[str, Any]) -> str:
+    expected_records = int(counters.get("expected_records", 0) or 0)
+    observed_records = int(counters.get("observed_records", 0) or 0)
+    expected_api_calls = int(counters.get("expected_api_calls", 0) or 0)
+    observed_api_calls = int(counters.get("observed_api_calls", 0) or 0)
+    completion_pct = 100.0 * float(counters.get("record_completion_rate", 0.0) or 0.0)
+    parse_pct = 100.0 * float(counters.get("parse_success_rate", 0.0) or 0.0)
+    return (
+        f"{run_id}: records {observed_records}/{expected_records} ({completion_pct:.1f}%), "
+        f"api {observed_api_calls}/{expected_api_calls}, parse_ok {parse_pct:.1f}%, "
+        f"errors {int(counters.get('parse_failure_records', 0) or 0)}, "
+        f"elapsed {_duration_label(counters.get('elapsed_s'))}, eta {_duration_label(counters.get('eta_s'))}"
+    )
+
+
+def append_run_event(path: str | Path, event: Mapping[str, Any]) -> None:
+    append_jsonl(path, {"created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **dict(event)})
+
+
+def write_live_progress_csv(
+    path: str | Path,
+    benchmark_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+    expected_stochastic_samples: int,
+) -> None:
+    progress = run_progress_summary(
+        benchmark_rows,
+        raw_rows,
+        expected_stochastic_samples=expected_stochastic_samples,
+    )
+    write_csv_rows(path, progress, fieldnames=RUN_PROGRESS_FIELDS)
+
+
+def warning_events_for_counters(
+    counters: Mapping[str, Any],
+    logging_config: Mapping[str, Any],
+    emitted_warning_types: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    emitted_warning_types = emitted_warning_types or set()
+    observed_records = int(counters.get("observed_records", 0) or 0)
+    warn_after = int(logging_config.get("warn_after_records", DEFAULT_RUN_LOGGING["warn_after_records"]))
+    if observed_records < warn_after:
+        return []
+
+    events: list[dict[str, Any]] = []
+    parse_failure_rate = float(counters.get("parse_failure_rate", 0.0) or 0.0)
+    parse_threshold = float(logging_config.get("warn_parse_failure_rate", DEFAULT_RUN_LOGGING["warn_parse_failure_rate"]))
+    if "parse_failure_rate" not in emitted_warning_types and parse_failure_rate > parse_threshold:
+        events.append(
+            {
+                "event_type": "warning",
+                "warning_type": "parse_failure_rate",
+                "message": f"Parse failure rate {parse_failure_rate:.3f} exceeded threshold {parse_threshold:.3f}.",
+                "threshold": parse_threshold,
+                "observed_rate": parse_failure_rate,
+                **dict(counters),
+            }
+        )
+
+    request_error_rate = float(counters.get("request_error_rate", 0.0) or 0.0)
+    request_threshold = float(logging_config.get("warn_request_error_rate", DEFAULT_RUN_LOGGING["warn_request_error_rate"]))
+    if "request_error_rate" not in emitted_warning_types and request_error_rate > request_threshold:
+        events.append(
+            {
+                "event_type": "warning",
+                "warning_type": "request_error_rate",
+                "message": f"Request error rate {request_error_rate:.3f} exceeded threshold {request_threshold:.3f}.",
+                "threshold": request_threshold,
+                "observed_rate": request_error_rate,
+                **dict(counters),
+            }
+        )
+    return events
 
 
 def provider_preflight(
@@ -3500,26 +3724,9 @@ def write_preliminary_result_snapshot(
         "text_high_conf_overcommit_90",
         "parse_failure_rate",
     ]
-    progress_fields = [
-        "run_id",
-        "model",
-        "task",
-        "benchmark_items",
-        "expected_records",
-        "observed_records",
-        "record_completion_rate",
-        "parse_success_rate",
-        "deterministic_records",
-        "deterministic_ok",
-        "deterministic_item_coverage",
-        "stochastic_records",
-        "stochastic_ok",
-        "stochastic_item_coverage",
-        "stochastic_complete_item_rate",
-    ]
     write_csv_rows(paths["scores"], scores, fieldnames=score_fields)
     write_csv_rows(paths["summary"], summary, fieldnames=summary_fields)
-    write_csv_rows(paths["progress"], progress, fieldnames=progress_fields)
+    write_csv_rows(paths["progress"], progress, fieldnames=RUN_PROGRESS_FIELDS)
 
     table_lines = [
         "# Preliminary Results",
@@ -3527,7 +3734,7 @@ def write_preliminary_result_snapshot(
         "These results are computed from the currently cached raw outputs. Treat them as provisional until the run progress is complete.",
         "",
         "## Run Progress",
-        markdown_table(progress, progress_fields),
+        markdown_table(progress, RUN_PROGRESS_FIELDS),
         "",
         "## Metric Summary",
         markdown_table(summary, summary_fields),

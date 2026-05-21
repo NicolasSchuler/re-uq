@@ -16,6 +16,7 @@ data/raw/*
 # Run outputs are preserved locally but only promoted to Git when they become
 # curated paper artifacts.
 data/processed/model_outputs_raw*.jsonl
+data/processed/run_events*.jsonl
 data/processed/run_progress*.csv
 data/processed/run_registry*.csv
 data/processed/uq_scores*.csv

@@ -503,7 +503,7 @@ cp run_configs/full_matrix.example.json run_configs/current_run.json
 .venv/bin/python scripts/run_experiment_from_config.py --config run_configs/current_run.json --profile local_llama_cpp --model qwen/qwen3.5-9b --dataset nice --mode smoke
 ```
 
-The CLI preserves the same canonical raw-output files used by the notebooks and adds `run_registry*.csv` files so complete `RUN_ID`s can be audited and compared across providers. Set `batch_size` in a provider profile to evaluate multiple compatible benchmark items in one API request while keeping one raw JSONL row per item/sample.
+The CLI preserves the same canonical raw-output files used by the notebooks and adds `run_registry*.csv` files so complete `RUN_ID`s can be audited and compared across providers. Set `batch_size` in a provider profile to evaluate multiple compatible benchmark items in one API request while keeping one raw JSONL row per item/sample. During long runs, `run_progress_live*.csv` and `run_events*.jsonl` provide live progress and warning history; use `scripts/show_run_progress.py --dataset nice --run-id RUN_ID --watch 30` to inspect a run without mutating outputs. For Z.ai GLM Coding Plan keys, use `https://api.z.ai/api/coding/paas/v4`; the general endpoint is for standard API balance.
 
 ---
 
