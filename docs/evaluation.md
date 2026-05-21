@@ -496,6 +496,15 @@ prompts/
 config.yml
 ```
 
+For the implemented provider/model matrix workflow, prefer the CLI runner over manually editing notebook environment variables:
+
+```bash
+cp run_configs/full_matrix.example.json run_configs/current_run.json
+.venv/bin/python scripts/run_experiment_from_config.py --config run_configs/current_run.json --profile local_llama_cpp --model qwen/qwen3.5-9b --dataset nice --mode smoke
+```
+
+The CLI preserves the same canonical raw-output files used by the notebooks and adds `run_registry*.csv` files so complete `RUN_ID`s can be audited and compared across providers. Set `batch_size` in a provider profile to evaluate multiple compatible benchmark items in one API request while keeping one raw JSONL row per item/sample.
+
 ---
 
 # 4. Feasibility, risks, and time requirements ⏱️

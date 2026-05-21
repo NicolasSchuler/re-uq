@@ -209,6 +209,36 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
 }
 
+RUN_REGISTRY_FIELDS = [
+    "run_id",
+    "run_group_id",
+    "provider_id",
+    "profile_id",
+    "model",
+    "dataset_id",
+    "benchmark_variant",
+    "tasks",
+    "status",
+    "expected_records",
+    "observed_records",
+    "parse_success_rate",
+    "deterministic_item_coverage",
+    "stochastic_complete_item_rate",
+    "started_at_utc",
+    "finished_at_utc",
+    "base_url",
+    "api_key_env",
+    "concurrency",
+    "batch_size",
+    "expected_api_calls",
+    "observed_api_calls",
+    "timeout_s",
+    "json_mode",
+    "request_extra_body",
+    "server_model_probe",
+    "notes",
+]
+
 
 def project_root() -> Path:
     cwd = Path.cwd().resolve()
@@ -404,6 +434,169 @@ def seed_review_fields(dataset_id: str | None = None) -> list[str]:
     return list(BASE_SEED_REVIEW_FIELDS)
 
 
+def normalize_task_filter(task: str | Iterable[str] | None = None) -> list[str]:
+    if task is None:
+        return ["task1", "task2"]
+    if isinstance(task, str):
+        values = [task]
+    else:
+        values = [str(value) for value in task]
+    resolved: list[str] = []
+    for value in values:
+        normalized = str(value).strip().lower()
+        if normalized in {"", "both", "all"}:
+            candidates = ["task1", "task2"]
+        elif normalized in {"task1", "mandatory_entailment"}:
+            candidates = ["task1"]
+        elif normalized in {"task2", "modality_extraction"}:
+            candidates = ["task2"]
+        else:
+            raise ValueError(f"Unknown task filter: {value}")
+        for candidate in candidates:
+            if candidate not in resolved:
+                resolved.append(candidate)
+    return resolved or ["task1", "task2"]
+
+
+def normalize_benchmark_variant(variant: str | None) -> str:
+    normalized = str(variant or "must").strip().lower()
+    if normalized in {"", "main", "must"}:
+        return "must"
+    if normalized == "shall":
+        return "shall"
+    raise ValueError(f"Unknown benchmark variant: {variant}")
+
+
+def normalize_base_url(value: Any) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
+def _string_list(value: Any, name: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        values = [part.strip() for part in value.split(",")]
+    elif isinstance(value, Iterable):
+        values = [str(part).strip() for part in value]
+    else:
+        raise ValueError(f"{name} must be a string or list of strings.")
+    return [value for value in values if value]
+
+
+def normalize_provider_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
+    provider_id = str(profile.get("provider_id") or profile.get("provider") or "").strip()
+    profile_id = str(profile.get("profile_id") or profile.get("id") or provider_id).strip()
+    base_url = normalize_base_url(profile.get("base_url") or profile.get("host"))
+    models = _string_list(profile.get("models"), f"profiles.{profile_id}.models")
+    if not provider_id:
+        raise ValueError("Provider profile is missing provider_id.")
+    if not profile_id:
+        raise ValueError(f"Provider profile for {provider_id} is missing profile_id.")
+    if not base_url:
+        raise ValueError(f"Provider profile {profile_id} is missing base_url.")
+    if not models:
+        raise ValueError(f"Provider profile {profile_id} must list at least one model.")
+    extra_body = profile.get("extra_body") or {}
+    if not isinstance(extra_body, Mapping):
+        raise ValueError(f"Provider profile {profile_id} extra_body must be an object.")
+    json_mode = bool(profile.get("json_mode", False))
+    response_format = profile.get("response_format")
+    if response_format is None and json_mode and "response_format" not in extra_body:
+        response_format = {"type": "json_object"}
+    if response_format is not None and not isinstance(response_format, Mapping):
+        raise ValueError(f"Provider profile {profile_id} response_format must be an object.")
+    return {
+        "profile_id": profile_id,
+        "provider_id": provider_id,
+        "base_url": base_url,
+        "api_key_env": str(profile.get("api_key_env") or "LOCAL_OPENAI_API_KEY").strip(),
+        "models": models,
+        "concurrency": positive_int(profile.get("concurrency", DEFAULT_CONFIG["llm"]["concurrency"]), f"profiles.{profile_id}.concurrency"),
+        "batch_size": positive_int(profile.get("batch_size", 1), f"profiles.{profile_id}.batch_size"),
+        "timeout_s": positive_int(profile.get("timeout_s", DEFAULT_CONFIG["llm"]["timeout_s"]), f"profiles.{profile_id}.timeout_s"),
+        "max_tokens": positive_int(profile.get("max_tokens", DEFAULT_CONFIG["llm"]["max_tokens"]), f"profiles.{profile_id}.max_tokens"),
+        "json_mode": json_mode,
+        "response_format": dict(response_format) if response_format is not None else None,
+        "extra_body": dict(extra_body),
+        "requires_manual_server": bool(profile.get("requires_manual_server", False)),
+        "notes": str(profile.get("notes", "")).strip(),
+    }
+
+
+def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    run_group_id = str(config.get("run_group_id") or "").strip()
+    if not run_group_id:
+        raise ValueError("Run config must define run_group_id.")
+    profiles_value = config.get("profiles")
+    if not isinstance(profiles_value, list) or not profiles_value:
+        raise ValueError("Run config must define a non-empty profiles list.")
+    project_config = config.get("project", {}) if isinstance(config.get("project"), Mapping) else {}
+    llm_config = config.get("llm", {}) if isinstance(config.get("llm"), Mapping) else {}
+    deterministic = config.get("deterministic") or llm_config.get("deterministic") or DEFAULT_CONFIG["llm"]["deterministic"]
+    stochastic = config.get("stochastic") or llm_config.get("stochastic") or DEFAULT_CONFIG["llm"]["stochastic"]
+    datasets = [normalize_dataset_id(value) for value in _string_list(config.get("datasets", [DATASET_NICE]), "datasets")]
+    variants = [normalize_benchmark_variant(value) for value in _string_list(config.get("benchmark_variants", ["must"]), "benchmark_variants")]
+    tasks = normalize_task_filter(config.get("tasks", ["task1", "task2"]))
+    return {
+        "run_group_id": run_group_id,
+        "datasets": datasets,
+        "benchmark_variants": variants,
+        "tasks": tasks,
+        "prompt_version": str(config.get("prompt_version") or project_config.get("prompt_version") or DEFAULT_CONFIG["project"]["prompt_version"]),
+        "deterministic": {
+            "temperature": float(deterministic.get("temperature", DEFAULT_CONFIG["llm"]["deterministic"]["temperature"])),
+            "top_p": float(deterministic.get("top_p", DEFAULT_CONFIG["llm"]["deterministic"]["top_p"])),
+            "samples": positive_int(deterministic.get("samples", 1), "deterministic.samples"),
+        },
+        "stochastic": {
+            "temperature": float(stochastic.get("temperature", DEFAULT_CONFIG["llm"]["stochastic"]["temperature"])),
+            "top_p": float(stochastic.get("top_p", DEFAULT_CONFIG["llm"]["stochastic"]["top_p"])),
+            "samples": max(0, int(stochastic.get("samples", DEFAULT_CONFIG["llm"]["stochastic"]["samples"]))),
+        },
+        "profiles": [normalize_provider_profile(profile) for profile in profiles_value],
+    }
+
+
+def load_run_config(path: str | Path) -> dict[str, Any]:
+    with Path(path).open("r", encoding="utf-8") as handle:
+        return normalize_run_config(json.load(handle))
+
+
+def filter_run_profiles(
+    run_config: Mapping[str, Any],
+    profile_id: str | None = None,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    profiles = [dict(profile) for profile in run_config.get("profiles", [])]
+    if profile_id:
+        requested = str(profile_id).strip()
+        profiles = [profile for profile in profiles if profile["profile_id"] == requested or profile["provider_id"] == requested]
+    if model:
+        requested_model = str(model).strip()
+        selected: list[dict[str, Any]] = []
+        for profile in profiles:
+            if requested_model in profile["models"]:
+                profile = dict(profile)
+                profile["models"] = [requested_model]
+                selected.append(profile)
+        profiles = selected
+    if not profiles:
+        raise ValueError("No provider profiles match the requested filters.")
+    return profiles
+
+
+def validate_manual_server_profile(profile: Mapping[str, Any]) -> None:
+    if profile.get("requires_manual_server") and len(profile.get("models", [])) != 1:
+        raise ValueError(
+            f"Profile {profile.get('profile_id')} requires a manually restarted server; "
+            "select exactly one model with --model."
+        )
+
+
+def run_registry_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
+    return artifact_path(Path(root) / "data/processed/run_registry.csv", dataset_id, variant)
+
+
 def sha256_file(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -517,6 +710,12 @@ def write_json(path: str | Path, value: Any) -> None:
     with path.open("w", encoding="utf-8") as handle:
         json.dump(value, handle, ensure_ascii=True, indent=2, sort_keys=True)
         handle.write("\n")
+
+
+def compact_json(value: Any) -> str:
+    if value in (None, "", {}, []):
+        return ""
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
 def download_file(url: str, dest: str | Path, timeout_s: int = 120) -> Path:
@@ -1289,6 +1488,160 @@ def render_prompt(template: str, **values: Any) -> str:
     return template.format(**values)
 
 
+def prompt_for_benchmark_task(
+    task: str,
+    item: Mapping[str, Any],
+    task1_template: str,
+    task2_template: str,
+) -> str:
+    if task == "task1":
+        return render_prompt(
+            task1_template,
+            source_statement=item["source_statement"],
+            candidate_requirement=item["candidate_requirement"],
+        )
+    if task == "task2":
+        return render_prompt(task2_template, source_statement=item["source_statement"])
+    raise ValueError(f"Unsupported benchmark task: {task}")
+
+
+def completion_request_job(
+    *,
+    item: Mapping[str, Any],
+    task: str,
+    model: str,
+    host: str,
+    run_id: str,
+    sample_kind: str,
+    sample_index: int,
+    temperature: float,
+    top_p: float,
+    prompt: str,
+    prompt_version: str,
+    max_tokens: int,
+    timeout_s: int,
+    api_key_env: str,
+    request_index: int,
+    provider_id: str = "",
+    profile_id: str = "",
+    run_group_id: str = "",
+    json_mode: bool = False,
+    response_format: Mapping[str, Any] | None = None,
+    extra_body: Mapping[str, Any] | None = None,
+    server_model_probe: Mapping[str, Any] | str | None = None,
+) -> dict[str, Any]:
+    return {
+        "request_index": request_index,
+        "run_id": run_id,
+        "model": model,
+        "host": host,
+        "base_url": host,
+        "task": task,
+        "item": dict(item),
+        "sample_index": int(sample_index),
+        "sample_kind": sample_kind,
+        "temperature": float(temperature),
+        "top_p": float(top_p),
+        "prompt_version": prompt_version,
+        "prompt": prompt,
+        "max_tokens": int(max_tokens),
+        "timeout_s": int(timeout_s),
+        "api_key_env": api_key_env,
+        "provider_id": provider_id,
+        "profile_id": profile_id,
+        "run_group_id": run_group_id,
+        "json_mode": bool(json_mode),
+        "response_format": dict(response_format) if response_format else None,
+        "extra_body": dict(extra_body) if extra_body else None,
+        "server_model_probe": server_model_probe,
+    }
+
+
+def planned_completion_jobs(
+    benchmark_rows: list[dict[str, Any]],
+    *,
+    tasks: Iterable[str],
+    model: str,
+    host: str,
+    run_id: str,
+    prompt_version: str,
+    task1_template: str,
+    task2_template: str,
+    deterministic: Mapping[str, Any],
+    stochastic: Mapping[str, Any],
+    max_tokens: int,
+    timeout_s: int,
+    api_key_env: str,
+    provider_id: str = "",
+    profile_id: str = "",
+    run_group_id: str = "",
+    json_mode: bool = False,
+    response_format: Mapping[str, Any] | None = None,
+    extra_body: Mapping[str, Any] | None = None,
+    server_model_probe: Mapping[str, Any] | str | None = None,
+) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    task_list = normalize_task_filter(tasks)
+    stochastic_samples = max(0, int(stochastic.get("samples", 0)))
+    for item in benchmark_rows:
+        for task in task_list:
+            prompt = prompt_for_benchmark_task(task, item, task1_template, task2_template)
+            jobs.append(
+                completion_request_job(
+                    item=item,
+                    task=task,
+                    model=model,
+                    host=host,
+                    run_id=run_id,
+                    sample_kind="deterministic",
+                    sample_index=0,
+                    temperature=float(deterministic["temperature"]),
+                    top_p=float(deterministic["top_p"]),
+                    prompt=prompt,
+                    prompt_version=prompt_version,
+                    max_tokens=max_tokens,
+                    timeout_s=timeout_s,
+                    api_key_env=api_key_env,
+                    request_index=len(jobs),
+                    provider_id=provider_id,
+                    profile_id=profile_id,
+                    run_group_id=run_group_id,
+                    json_mode=json_mode,
+                    response_format=response_format,
+                    extra_body=extra_body,
+                    server_model_probe=server_model_probe,
+                )
+            )
+            for sample_index in range(stochastic_samples):
+                jobs.append(
+                    completion_request_job(
+                        item=item,
+                        task=task,
+                        model=model,
+                        host=host,
+                        run_id=run_id,
+                        sample_kind="stochastic",
+                        sample_index=sample_index,
+                        temperature=float(stochastic["temperature"]),
+                        top_p=float(stochastic["top_p"]),
+                        prompt=prompt,
+                        prompt_version=prompt_version,
+                        max_tokens=max_tokens,
+                        timeout_s=timeout_s,
+                        api_key_env=api_key_env,
+                        request_index=len(jobs),
+                        provider_id=provider_id,
+                        profile_id=profile_id,
+                        run_group_id=run_group_id,
+                        json_mode=json_mode,
+                        response_format=response_format,
+                        extra_body=extra_body,
+                        server_model_probe=server_model_probe,
+                    )
+                )
+    return jobs
+
+
 def extract_json_object(text: str) -> str | None:
     if not text:
         return None
@@ -1316,6 +1669,21 @@ def extract_json_object(text: str) -> str | None:
             depth -= 1
             if depth == 0:
                 return text[start : index + 1]
+    return None
+
+
+def extract_json_value(text: str) -> Any | None:
+    if not text:
+        return None
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char not in "{[":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+            return value
+        except json.JSONDecodeError:
+            continue
     return None
 
 
@@ -1581,6 +1949,82 @@ def parse_task_response(task: str, raw_text: str) -> tuple[dict[str, Any] | None
     raise ValueError(f"Unknown task: {task}")
 
 
+def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
+    if not jobs:
+        raise ValueError("Cannot build a batch prompt for an empty job list.")
+    task = str(jobs[0]["task"])
+    if any(str(job["task"]) != task for job in jobs):
+        raise ValueError("Batch prompts must contain jobs for exactly one task.")
+
+    if task == "task1":
+        items = [
+            {
+                "request_index": int(job["request_index"]),
+                "source_statement": str(job["item"]["source_statement"]),
+                "candidate_requirement": str(job["item"]["candidate_requirement"]),
+            }
+            for job in jobs
+        ]
+        return (
+            "You are reviewing software requirements.\n"
+            "Evaluate each item independently. Do not infer an answer for one item from another item.\n\n"
+            'Use "yes" or "no" for decision.\n'
+            "Return JSON only as this object:\n"
+            '{"results":[{"request_index":0,"decision":"yes","confidence":0,"brief_reason":"<max 12 words>"}]}\n\n'
+            "Items:\n"
+            f"{json.dumps(items, ensure_ascii=False, indent=2)}"
+        )
+
+    if task == "task2":
+        items = [
+            {
+                "request_index": int(job["request_index"]),
+                "source_statement": str(job["item"]["source_statement"]),
+            }
+            for job in jobs
+        ]
+        return (
+            "Extract exactly one requirement from each source statement.\n"
+            "Preserve the modality of each source. Evaluate each item independently.\n\n"
+            'Use one of: "mandatory", "recommended", "optional", "nice_to_have".\n'
+            "Return JSON only as this object:\n"
+            '{"results":[{"request_index":0,"requirement":"...","modality":"mandatory","confidence":0}]}\n\n'
+            "Items:\n"
+            f"{json.dumps(items, ensure_ascii=False, indent=2)}"
+        )
+
+    raise ValueError(f"Unsupported benchmark task for batching: {task}")
+
+
+def parse_batch_completion_results(raw_text: str) -> tuple[dict[int, dict[str, Any]], str]:
+    payload = extract_json_value(raw_text)
+    if payload is None:
+        return {}, "invalid_json"
+    if isinstance(payload, dict):
+        results = payload.get("results")
+    elif isinstance(payload, list):
+        results = payload
+    else:
+        return {}, "invalid_json"
+    if not isinstance(results, list):
+        return {}, "missing_results"
+
+    parsed: dict[int, dict[str, Any]] = {}
+    for position, result in enumerate(results):
+        if not isinstance(result, Mapping):
+            continue
+        if "request_index" in result or "id" in result:
+            request_index = result.get("request_index", result.get("id"))
+            try:
+                request_index_int = int(request_index)
+            except (TypeError, ValueError):
+                request_index_int = -(position + 1)
+        else:
+            request_index_int = -(position + 1)
+        parsed[request_index_int] = dict(result)
+    return parsed, "ok"
+
+
 def chat_completion(
     host: str,
     model: str,
@@ -1592,6 +2036,8 @@ def chat_completion(
     api_key_env: str = "LOCAL_OPENAI_API_KEY",
     logprobs: bool = False,
     top_logprobs: int | None = None,
+    response_format: Mapping[str, Any] | None = None,
+    extra_body: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     api_key = os.getenv(api_key_env, "EMPTY")
     client = OpenAI(base_url=host.rstrip("/") + "/", api_key=api_key, timeout=timeout_s)
@@ -1608,6 +2054,10 @@ def chat_completion(
             request_kwargs["logprobs"] = True
             if top_logprobs is not None:
                 request_kwargs["top_logprobs"] = int(top_logprobs)
+        if response_format:
+            request_kwargs["response_format"] = dict(response_format)
+        if extra_body:
+            request_kwargs["extra_body"] = dict(extra_body)
         response = client.chat.completions.create(
             **request_kwargs,
         )
@@ -1789,9 +2239,25 @@ def build_raw_record(
     prompt: str,
     completion: dict[str, Any],
     request_index: int | None = None,
+    provider_id: str = "",
+    profile_id: str = "",
+    run_group_id: str = "",
+    base_url: str = "",
+    api_key_env: str = "",
+    json_mode: bool = False,
+    request_extra_body: Mapping[str, Any] | None = None,
+    server_model_probe: Mapping[str, Any] | str | None = None,
+    batch_id: str = "",
+    batch_size: int | str = "",
+    batch_item_count: int | str = "",
+    batch_prompt_hash: str = "",
 ) -> dict[str, Any]:
     parsed_json, parse_status = parse_task_response(task, completion.get("raw_text", ""))
-    if not completion.get("ok"):
+    parse_status_override = str(completion.get("parse_status_override", "")).strip()
+    if parse_status_override:
+        parsed_json = None
+        parse_status = parse_status_override
+    elif not completion.get("ok"):
         parse_status = "request_error"
     record = {
         "run_id": run_id,
@@ -1813,6 +2279,30 @@ def build_raw_record(
         "latency_s": completion.get("latency_s", ""),
         "error": completion.get("error", ""),
     }
+    if provider_id:
+        record["provider_id"] = provider_id
+    if profile_id:
+        record["profile_id"] = profile_id
+    if run_group_id:
+        record["run_group_id"] = run_group_id
+    if base_url:
+        record["base_url"] = base_url
+    if api_key_env:
+        record["api_key_env"] = api_key_env
+    if json_mode:
+        record["json_mode"] = True
+    if request_extra_body:
+        record["request_extra_body"] = dict(request_extra_body)
+    if server_model_probe:
+        record["server_model_probe"] = server_model_probe
+    if batch_id:
+        record["batch_id"] = batch_id
+    if batch_size != "":
+        record["batch_size"] = int(batch_size)
+    if batch_item_count != "":
+        record["batch_item_count"] = int(batch_item_count)
+    if batch_prompt_hash:
+        record["batch_prompt_hash"] = batch_prompt_hash
     if "template_id" in item:
         record["template_id"] = item["template_id"]
     for key in [
@@ -1842,6 +2332,8 @@ def run_completion_job(
         max_tokens=int(job.get("max_tokens", 256)),
         timeout_s=int(job.get("timeout_s", 120)),
         api_key_env=str(job.get("api_key_env", "LOCAL_OPENAI_API_KEY")),
+        response_format=job.get("response_format"),
+        extra_body=job.get("extra_body"),
     )
     request_index = job.get("request_index")
     return build_raw_record(
@@ -1858,31 +2350,177 @@ def run_completion_job(
         prompt=str(job["prompt"]),
         completion=completion,
         request_index=int(request_index) if request_index is not None else None,
+        provider_id=str(job.get("provider_id", "")),
+        profile_id=str(job.get("profile_id", "")),
+        run_group_id=str(job.get("run_group_id", "")),
+        base_url=str(job.get("base_url", job.get("host", ""))),
+        api_key_env=str(job.get("api_key_env", "")),
+        json_mode=bool(job.get("json_mode", False)),
+        request_extra_body=job.get("extra_body"),
+        server_model_probe=job.get("server_model_probe"),
     )
+
+
+def completion_batch_key(job: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        str(job.get("host", "")),
+        str(job.get("model", "")),
+        str(job.get("run_id", "")),
+        str(job.get("task", "")),
+        str(job.get("sample_kind", "")),
+        int(job.get("sample_index", 0)),
+        float(job.get("temperature", 0.0)),
+        float(job.get("top_p", 1.0)),
+        str(job.get("prompt_version", "")),
+        int(job.get("max_tokens", 256)),
+        int(job.get("timeout_s", 120)),
+        str(job.get("api_key_env", "")),
+        str(job.get("provider_id", "")),
+        str(job.get("profile_id", "")),
+        str(job.get("run_group_id", "")),
+        bool(job.get("json_mode", False)),
+        compact_json(job.get("response_format")),
+        compact_json(job.get("extra_body")),
+    )
+
+
+def completion_job_batches(jobs: Iterable[Mapping[str, Any]], batch_size: int) -> list[list[dict[str, Any]]]:
+    job_list = [dict(job) for job in jobs]
+    if not job_list:
+        return []
+    resolved_batch_size = positive_int(batch_size, "batch_size")
+    if resolved_batch_size <= 1:
+        return [[job] for job in job_list]
+
+    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for job in job_list:
+        grouped.setdefault(completion_batch_key(job), []).append(job)
+
+    batches: list[list[dict[str, Any]]] = []
+    for group_jobs in sorted(grouped.values(), key=lambda rows: min(int(row.get("request_index", 0)) for row in rows)):
+        ordered = sorted(group_jobs, key=lambda row: int(row.get("request_index", 0)))
+        for start in range(0, len(ordered), resolved_batch_size):
+            batches.append(ordered[start : start + resolved_batch_size])
+    return batches
+
+
+def run_completion_batch(
+    jobs: list[Mapping[str, Any]],
+    completion_fn: Callable[..., dict[str, Any]] = chat_completion,
+) -> list[dict[str, Any]]:
+    if not jobs:
+        return []
+    if len(jobs) == 1:
+        return [run_completion_job(jobs[0], completion_fn=completion_fn)]
+
+    first = jobs[0]
+    batch_prompt = batch_prompt_for_completion_jobs(jobs)
+    batch_prompt_hash = hashlib.sha256(batch_prompt.encode("utf-8")).hexdigest()
+    completion = completion_fn(
+        host=str(first["host"]),
+        model=str(first["model"]),
+        prompt=batch_prompt,
+        temperature=float(first["temperature"]),
+        top_p=float(first["top_p"]),
+        max_tokens=int(first.get("max_tokens", 256)) * len(jobs),
+        timeout_s=int(first.get("timeout_s", 120)),
+        api_key_env=str(first.get("api_key_env", "LOCAL_OPENAI_API_KEY")),
+        response_format=first.get("response_format"),
+        extra_body=first.get("extra_body"),
+    )
+    batch_id = (
+        f"{first['run_id']}:{first['model']}:{first['task']}:"
+        f"{first['sample_kind']}:{first['sample_index']}:"
+        f"{min(int(job.get('request_index', 0)) for job in jobs)}-"
+        f"{max(int(job.get('request_index', 0)) for job in jobs)}"
+    )
+    parsed_results, batch_parse_status = parse_batch_completion_results(completion.get("raw_text", ""))
+    ordered_fallback_results = list(parsed_results.values())
+    use_order_fallback = (
+        len(ordered_fallback_results) == len(jobs)
+        and not any(int(job["request_index"]) in parsed_results for job in jobs)
+    )
+    records: list[dict[str, Any]] = []
+    for position, job in enumerate(jobs):
+        request_index = int(job["request_index"])
+        result = parsed_results.get(request_index)
+        if result is None and use_order_fallback:
+            result = ordered_fallback_results[position]
+        if completion.get("ok") and result is not None:
+            item_completion = {
+                "ok": True,
+                "raw_text": json.dumps(result, ensure_ascii=False),
+                "response_json": completion.get("response_json"),
+                "latency_s": completion.get("latency_s", ""),
+                "error": "",
+            }
+        elif completion.get("ok"):
+            item_completion = {
+                "ok": True,
+                "raw_text": completion.get("raw_text", ""),
+                "response_json": completion.get("response_json"),
+                "latency_s": completion.get("latency_s", ""),
+                "error": f"batch_parse_status={batch_parse_status}; missing request_index={request_index}",
+                "parse_status_override": "missing_batch_result",
+            }
+        else:
+            item_completion = completion
+
+        records.append(
+            build_raw_record(
+                run_id=str(job["run_id"]),
+                model=str(job["model"]),
+                host=str(job["host"]),
+                task=str(job["task"]),
+                item=dict(job["item"]),
+                sample_index=int(job["sample_index"]),
+                sample_kind=str(job["sample_kind"]),
+                temperature=float(job["temperature"]),
+                top_p=float(job["top_p"]),
+                prompt_version=str(job["prompt_version"]),
+                prompt=str(job["prompt"]),
+                completion=item_completion,
+                request_index=request_index,
+                provider_id=str(job.get("provider_id", "")),
+                profile_id=str(job.get("profile_id", "")),
+                run_group_id=str(job.get("run_group_id", "")),
+                base_url=str(job.get("base_url", job.get("host", ""))),
+                api_key_env=str(job.get("api_key_env", "")),
+                json_mode=bool(job.get("json_mode", False)),
+                request_extra_body=job.get("extra_body"),
+                server_model_probe=job.get("server_model_probe"),
+                batch_id=batch_id,
+                batch_size=len(jobs),
+                batch_item_count=len(jobs),
+                batch_prompt_hash=batch_prompt_hash,
+            )
+        )
+    return records
 
 
 def run_completion_jobs(
     jobs: Iterable[Mapping[str, Any]],
     max_workers: int,
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
+    batch_size: int = 1,
 ) -> Iterable[dict[str, Any]]:
-    job_list = list(jobs)
-    if not job_list:
+    batches = completion_job_batches(jobs, batch_size=batch_size)
+    if not batches:
         return
 
-    worker_count = min(positive_int(max_workers, "max_workers"), len(job_list))
+    worker_count = min(positive_int(max_workers, "max_workers"), len(batches))
     if worker_count == 1:
-        for job in job_list:
-            yield run_completion_job(job, completion_fn=completion_fn)
+        for batch in batches:
+            yield from run_completion_batch(batch, completion_fn=completion_fn)
         return
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = [
-            executor.submit(run_completion_job, job, completion_fn=completion_fn)
-            for job in job_list
+            executor.submit(run_completion_batch, batch, completion_fn=completion_fn)
+            for batch in batches
         ]
         for future in as_completed(futures):
-            yield future.result()
+            yield from future.result()
 
 
 def accuracy_score(y_true: list[Any], y_pred: list[Any]) -> float:
@@ -2323,6 +2961,59 @@ def build_ensemble_disagreement_scores(
     return scores
 
 
+def build_run_group_ensemble_disagreement_scores(
+    benchmark_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+    run_group_id: str | None = None,
+) -> list[dict[str, Any]]:
+    benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
+    raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, raw_rows)
+    raw_frame = pd.DataFrame.from_records(raw_rows)
+    required_columns = {"sample_kind", "run_group_id", "task", "item_id", "model"}
+    if raw_frame.empty or not required_columns.issubset(raw_frame.columns):
+        return []
+    deterministic_frame = raw_frame[raw_frame["sample_kind"] == "deterministic"]
+    if run_group_id:
+        deterministic_frame = deterministic_frame[deterministic_frame["run_group_id"].astype(str) == str(run_group_id)]
+    if deterministic_frame.empty:
+        return []
+
+    scores: list[dict[str, Any]] = []
+    for (group_id, task, item_id), group_frame in deterministic_frame.groupby(["run_group_id", "task", "item_id"], sort=False):
+        item = benchmark_by_item.get(item_id)
+        if not item:
+            continue
+        total_models = group_frame.apply(
+            lambda row: f"{row.get('provider_id', '')}:{row.get('model', '')}:{row.get('run_id', '')}",
+            axis=1,
+        ).nunique()
+        valid_by_member: dict[str, dict[str, Any]] = {}
+        for row in group_frame.to_dict(orient="records"):
+            if row.get("parse_status") != "ok" or not isinstance(row.get("parsed_json"), dict):
+                continue
+            member = f"{row.get('provider_id', '')}:{row.get('model', '')}:{row.get('run_id', '')}"
+            valid_by_member.setdefault(member, row)
+        if len(valid_by_member) < 2:
+            continue
+        valid_rows = list(valid_by_member.values())
+        distribution = label_distribution_from_rows(str(task), valid_rows)
+        model_name = f"{ENSEMBLE_MODEL_PREFIX}:run_group:{group_id}:{len(valid_by_member)}_models"
+        scores.append(
+            score_from_distribution(
+                valid_rows[0],
+                item,
+                "model_ensemble_disagreement_run_group",
+                distribution,
+                valid_n=len(valid_by_member),
+                total_n=total_models,
+                uncertainty_measure="variation_ratio",
+                uncertainty_score=variation_ratio(distribution),
+                model_name=model_name,
+            )
+        )
+    return scores
+
+
 def build_uq_scores(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
     raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, raw_rows)
@@ -2539,6 +3230,174 @@ def complete_run_ids_from_progress(
     return complete
 
 
+def completion_record_key(row: Mapping[str, Any]) -> tuple[str, str, str, str, int]:
+    return (
+        str(row.get("model", "")),
+        str(row.get("task", "")),
+        str(row.get("item_id", "")),
+        str(row.get("sample_kind", "")),
+        int(row.get("sample_index", 0)),
+    )
+
+
+def pending_completion_jobs(jobs: Iterable[Mapping[str, Any]], raw_rows: Iterable[Mapping[str, Any]], run_id: str) -> list[dict[str, Any]]:
+    completed = {
+        completion_record_key(row)
+        for row in raw_rows
+        if str(row.get("run_id", "")) == str(run_id) and str(row.get("parse_status", "")) == "ok"
+    }
+    return [dict(job) for job in jobs if completion_record_key(job) not in completed]
+
+
+def run_registry_summary(
+    benchmark_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+    *,
+    run_id: str,
+    run_group_id: str,
+    provider_id: str,
+    profile_id: str,
+    model: str,
+    dataset_id: str,
+    variant: str,
+    tasks: Iterable[str],
+    expected_stochastic_samples: int,
+    started_at_utc: str,
+    finished_at_utc: str = "",
+    status: str | None = None,
+    base_url: str = "",
+    api_key_env: str = "",
+    concurrency: int | str = "",
+    batch_size: int | str = 1,
+    timeout_s: int | str = "",
+    json_mode: bool = False,
+    request_extra_body: Mapping[str, Any] | None = None,
+    server_model_probe: Mapping[str, Any] | str | None = None,
+    notes: str = "",
+) -> dict[str, Any]:
+    task_list = normalize_task_filter(tasks)
+    run_rows = [
+        row
+        for row in raw_rows
+        if str(row.get("run_id", "")) == str(run_id)
+        and str(row.get("model", "")) == str(model)
+        and str(row.get("task", "")) in set(task_list)
+    ]
+    progress = run_progress_summary(benchmark_rows, run_rows, expected_stochastic_samples=expected_stochastic_samples)
+    task_progress = [row for row in progress if str(row.get("task", "")) in set(task_list)]
+    benchmark_item_count = len({str(row["item_id"]) for row in benchmark_rows})
+    expected_records = benchmark_item_count * len(task_list) * (1 + max(0, int(expected_stochastic_samples)))
+    resolved_batch_size = positive_int(batch_size, "batch_size")
+    expected_api_calls = (
+        len(task_list)
+        * (1 + max(0, int(expected_stochastic_samples)))
+        * math.ceil(benchmark_item_count / resolved_batch_size)
+        if benchmark_item_count
+        else 0
+    )
+    observed_records = len(run_rows)
+    observed_api_calls = len(
+        {
+            str(row.get("batch_id") or f"single:{row.get('request_index', index)}")
+            for index, row in enumerate(run_rows)
+        }
+    )
+    ok_records = sum(1 for row in run_rows if str(row.get("parse_status", "")) == "ok")
+    deterministic_coverages = [float(row.get("deterministic_item_coverage", 0) or 0) for row in task_progress]
+    stochastic_coverages = [float(row.get("stochastic_complete_item_rate", 0) or 0) for row in task_progress]
+    complete = (
+        observed_records >= expected_records
+        and len(task_progress) >= len(task_list)
+        and all(value >= 1.0 for value in deterministic_coverages)
+        and all(value >= 1.0 for value in stochastic_coverages)
+    )
+    resolved_status = status or ("complete" if complete else "partial")
+    return {
+        "run_id": run_id,
+        "run_group_id": run_group_id,
+        "provider_id": provider_id,
+        "profile_id": profile_id,
+        "model": model,
+        "dataset_id": normalize_dataset_id(dataset_id),
+        "benchmark_variant": normalize_benchmark_variant(variant),
+        "tasks": ",".join(task_list),
+        "status": resolved_status,
+        "expected_records": expected_records,
+        "observed_records": observed_records,
+        "parse_success_rate": ok_records / observed_records if observed_records else "",
+        "deterministic_item_coverage": min(deterministic_coverages) if deterministic_coverages else "",
+        "stochastic_complete_item_rate": min(stochastic_coverages) if stochastic_coverages else "",
+        "started_at_utc": started_at_utc,
+        "finished_at_utc": finished_at_utc,
+        "base_url": base_url,
+        "api_key_env": api_key_env,
+        "concurrency": concurrency,
+        "batch_size": resolved_batch_size,
+        "expected_api_calls": expected_api_calls,
+        "observed_api_calls": observed_api_calls,
+        "timeout_s": timeout_s,
+        "json_mode": "yes" if json_mode else "no",
+        "request_extra_body": compact_json(request_extra_body),
+        "server_model_probe": compact_json(server_model_probe),
+        "notes": notes,
+    }
+
+
+def upsert_run_registry_row(path: str | Path, row: Mapping[str, Any]) -> None:
+    path = Path(path)
+    rows = read_csv_rows(path) if path.exists() else []
+    key_fields = ["run_id", "profile_id", "model", "dataset_id", "benchmark_variant"]
+    row_key = tuple(str(row.get(field, "")) for field in key_fields)
+    updated = False
+    output_rows: list[dict[str, Any]] = []
+    for existing in rows:
+        if tuple(str(existing.get(field, "")) for field in key_fields) == row_key:
+            output_rows.append(dict(row))
+            updated = True
+        else:
+            output_rows.append(existing)
+    if not updated:
+        output_rows.append(dict(row))
+    write_csv_rows(path, output_rows, fieldnames=RUN_REGISTRY_FIELDS)
+
+
+def provider_preflight(
+    *,
+    host: str,
+    model: str,
+    api_key_env: str,
+    timeout_s: int,
+    json_mode: bool = False,
+    response_format: Mapping[str, Any] | None = None,
+    extra_body: Mapping[str, Any] | None = None,
+    completion_fn: Callable[..., dict[str, Any]] = chat_completion,
+) -> dict[str, Any]:
+    extra_body_response_format = isinstance(extra_body, Mapping) and "response_format" in extra_body
+    resolved_response_format = response_format
+    if resolved_response_format is None and json_mode and not extra_body_response_format:
+        resolved_response_format = {"type": "json_object"}
+    completion = completion_fn(
+        host=host,
+        model=model,
+        prompt=LOGPROB_PROBE_PROMPT,
+        temperature=0.0,
+        top_p=1.0,
+        max_tokens=48,
+        timeout_s=timeout_s,
+        api_key_env=api_key_env,
+        response_format=resolved_response_format,
+        extra_body=extra_body,
+    )
+    _, parse_status = parse_task_response("task1", completion.get("raw_text", ""))
+    return {
+        "ok": bool(completion.get("ok")) and parse_status == "ok",
+        "parse_status": parse_status,
+        "error": completion.get("error", ""),
+        "latency_s": completion.get("latency_s", ""),
+        "raw_text": str(completion.get("raw_text", ""))[:240],
+    }
+
+
 def preliminary_result_paths(root: str | Path, variant: str | None = None, dataset_id: str | None = None) -> dict[str, Path]:
     root = Path(root)
     return {
@@ -2687,6 +3546,9 @@ def write_preliminary_result_snapshot(
 def score_base(raw: dict[str, Any], item: dict[str, Any], uq_method: str, valid_n: int, total_n: int) -> dict[str, Any]:
     return {
         "run_id": raw.get("run_id", ""),
+        "run_group_id": raw.get("run_group_id", ""),
+        "provider_id": raw.get("provider_id", ""),
+        "profile_id": raw.get("profile_id", ""),
         "model": raw.get("model", ""),
         "task": raw.get("task", ""),
         "uq_method": uq_method,

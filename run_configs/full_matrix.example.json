@@ -1,0 +1,84 @@
+{
+  "run_group_id": "provider-matrix-2026-05",
+  "datasets": [
+    "nice",
+    "mlm_tapt"
+  ],
+  "benchmark_variants": [
+    "must"
+  ],
+  "tasks": [
+    "task1",
+    "task2"
+  ],
+  "prompt_version": "v1",
+  "deterministic": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "samples": 1
+  },
+  "stochastic": {
+    "temperature": 0.7,
+    "top_p": 1.0,
+    "samples": 5
+  },
+  "profiles": [
+    {
+      "profile_id": "local_llama_cpp",
+      "provider_id": "llama_cpp",
+      "base_url": "http://127.0.0.1:1234/v1",
+      "api_key_env": "LOCAL_OPENAI_API_KEY",
+      "models": [
+        "qwen/qwen3.5-9b"
+      ],
+      "concurrency": 4,
+      "batch_size": 4,
+      "timeout_s": 120,
+      "max_tokens": 256,
+      "json_mode": false,
+      "requires_manual_server": true,
+      "notes": "Start llama.cpp with exactly this model before running this profile."
+    },
+    {
+      "profile_id": "kit_toolbox",
+      "provider_id": "kit_toolbox",
+      "base_url": "https://ki-toolbox.scc.kit.edu/api/v1",
+      "api_key_env": "KIT_TOOLBOX_API_KEY",
+      "models": [
+        "azure.gpt-4.1-mini"
+      ],
+      "concurrency": 2,
+      "batch_size": 8,
+      "timeout_s": 180,
+      "max_tokens": 256,
+      "json_mode": true,
+      "requires_manual_server": false,
+      "notes": "Coordinate large automated runs with ki-toolbox@scc.kit.edu."
+    },
+    {
+      "profile_id": "zai",
+      "provider_id": "zai",
+      "base_url": "https://api.z.ai/api/paas/v4",
+      "api_key_env": "ZAI_API_KEY",
+      "models": [
+        "glm-5.1",
+        "glm-5-turbo",
+        "glm-4.7"
+      ],
+      "concurrency": 2,
+      "batch_size": 8,
+      "timeout_s": 180,
+      "max_tokens": 256,
+      "json_mode": true,
+      "extra_body": {
+        "thinking": {
+          "type": "disabled"
+        },
+        "response_format": {
+          "type": "json_object"
+        }
+      },
+      "requires_manual_server": false
+    }
+  ]
+}

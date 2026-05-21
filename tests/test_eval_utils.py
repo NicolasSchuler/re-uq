@@ -1,11 +1,15 @@
 import json
 import math
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import eval_utils as eu
+from scripts import compare_run_matrix as compare_matrix
 from scripts import evaluate_external_ai_probe as external_eval
+from scripts import run_experiment_from_config as run_config_cli
 
 
 class EvalUtilsTest(unittest.TestCase):
@@ -1327,6 +1331,454 @@ class EvalUtilsTest(unittest.TestCase):
             eu.resolve_llm_concurrency({"llm": {"concurrency": 3}}, env={"LLM_CONCURRENCY": "0"})
         with self.assertRaises(ValueError):
             eu.resolve_llm_concurrency({"llm": {"concurrency": "nope"}}, env={})
+
+    def test_run_config_parsing_and_manual_server_guard(self):
+        config = eu.normalize_run_config(
+            {
+                "run_group_id": "group1",
+                "datasets": ["nice", "mlm_tapt"],
+                "benchmark_variants": ["must"],
+                "profiles": [
+                    {
+                        "profile_id": "local",
+                        "provider_id": "llama_cpp",
+                        "base_url": "http://127.0.0.1:1234/v1/",
+                        "api_key_env": "LOCAL_OPENAI_API_KEY",
+                        "models": ["m1", "m2"],
+                        "requires_manual_server": True,
+                        "batch_size": 4,
+                    },
+                    {
+                        "profile_id": "zai",
+                        "provider_id": "zai",
+                        "base_url": "https://api.z.ai/api/paas/v4/",
+                        "api_key_env": "ZAI_API_KEY",
+                        "models": ["glm-5.1"],
+                        "json_mode": True,
+                        "extra_body": {"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(config["profiles"][0]["base_url"], "http://127.0.0.1:1234/v1")
+        self.assertEqual(config["profiles"][0]["batch_size"], 4)
+        self.assertEqual(config["profiles"][1]["response_format"], None)
+        self.assertEqual(config["profiles"][1]["extra_body"]["thinking"]["type"], "disabled")
+        with self.assertRaises(ValueError):
+            eu.validate_manual_server_profile(config["profiles"][0])
+
+        selected = eu.filter_run_profiles(config, profile_id="local", model="m2")
+        eu.validate_manual_server_profile(selected[0])
+        self.assertEqual(selected[0]["models"], ["m2"])
+
+    def test_provider_request_metadata_and_extra_body_are_preserved(self):
+        seeds = [
+            {
+                "seed_id": "S0001",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall export reports.",
+                "capability_text_final": "export reports",
+            }
+        ]
+        benchmark = eu.build_benchmark_items(seeds)
+        captured = {}
+        jobs = eu.planned_completion_jobs(
+            benchmark[:1],
+            tasks=["task1"],
+            model="glm-5.1",
+            host="https://api.z.ai/api/paas/v4",
+            run_id="full-1",
+            prompt_version="v1",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="ZAI_API_KEY",
+            provider_id="zai",
+            profile_id="zai",
+            run_group_id="group1",
+            json_mode=True,
+            extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+        )
+
+        def fake_completion(**kwargs):
+            captured.update(kwargs)
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 80, "brief_reason": "ok"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        record = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
+
+        self.assertEqual(captured["extra_body"]["thinking"]["type"], "disabled")
+        self.assertEqual(record["provider_id"], "zai")
+        self.assertEqual(record["profile_id"], "zai")
+        self.assertEqual(record["run_group_id"], "group1")
+        self.assertTrue(record["json_mode"])
+        self.assertEqual(record["request_extra_body"]["response_format"]["type"], "json_object")
+
+    def test_provider_preflight_does_not_duplicate_extra_body_response_format(self):
+        captured = {}
+
+        def fake_completion(**kwargs):
+            captured.update(kwargs)
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 100, "brief_reason": "probe"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        preflight = eu.provider_preflight(
+            host="https://api.z.ai/api/paas/v4",
+            model="glm-5.1",
+            api_key_env="ZAI_API_KEY",
+            timeout_s=30,
+            json_mode=True,
+            extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+            completion_fn=fake_completion,
+        )
+
+        self.assertTrue(preflight["ok"])
+        self.assertIsNone(captured["response_format"])
+        self.assertEqual(captured["extra_body"]["response_format"]["type"], "json_object")
+
+    def test_batched_completion_splits_results_to_raw_records(self):
+        seeds = [
+            {
+                "seed_id": "S0001",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall export reports.",
+                "capability_text_final": "export reports",
+            },
+            {
+                "seed_id": "S0002",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall print invoices.",
+                "capability_text_final": "print invoices",
+            },
+        ]
+        benchmark = eu.build_benchmark_items(seeds)
+        jobs = eu.planned_completion_jobs(
+            [row for row in benchmark if row["source_modality"] == "mandatory"],
+            tasks=["task1"],
+            model="m1",
+            host="http://localhost:1234/v1",
+            run_id="full-1",
+            prompt_version="v1",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+        )
+        calls = []
+
+        def fake_batch_completion(**kwargs):
+            calls.append(kwargs)
+            items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+            return {
+                "ok": True,
+                "raw_text": json.dumps(
+                    {
+                        "results": [
+                            {
+                                "request_index": item["request_index"],
+                                "decision": "yes",
+                                "confidence": 80,
+                                "brief_reason": "batched",
+                            }
+                            for item in items
+                        ]
+                    }
+                ),
+                "response_json": {"batched": True},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_batch_completion, batch_size=2))
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["max_tokens"], 128)
+        self.assertEqual(len(records), 2)
+        self.assertEqual({row["parse_status"] for row in records}, {"ok"})
+        self.assertEqual(len({row["batch_id"] for row in records}), 1)
+        self.assertTrue(all(row["batch_size"] == 2 for row in records))
+
+    def test_batched_completion_missing_results_are_not_marked_ok(self):
+        seeds = [
+            {
+                "seed_id": "S0001",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall export reports.",
+                "capability_text_final": "export reports",
+            },
+            {
+                "seed_id": "S0002",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall print invoices.",
+                "capability_text_final": "print invoices",
+            },
+        ]
+        benchmark = eu.build_benchmark_items(seeds)
+        jobs = eu.planned_completion_jobs(
+            [row for row in benchmark if row["source_modality"] == "mandatory"],
+            tasks=["task1"],
+            model="m1",
+            host="http://localhost:1234/v1",
+            run_id="full-1",
+            prompt_version="v1",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+        )
+
+        def fake_ignored_batch_completion(**kwargs):
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 80, "brief_reason": "single"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_ignored_batch_completion, batch_size=2))
+
+        self.assertEqual({row["parse_status"] for row in records}, {"missing_batch_result"})
+        self.assertTrue(all(row["parsed_json"] is None for row in records))
+        self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs))
+
+    def test_resume_planning_skips_completed_records(self):
+        job = {
+            "run_id": "full-1",
+            "model": "m1",
+            "task": "task1",
+            "item_id": "S0001_mandatory",
+            "sample_kind": "deterministic",
+            "sample_index": 0,
+        }
+        completed = [{**job, "parse_status": "ok"}]
+        failed = [{**job, "parse_status": "request_error"}]
+
+        self.assertEqual(eu.pending_completion_jobs([job], completed, "full-1"), [])
+        self.assertEqual(len(eu.pending_completion_jobs([job], failed, "full-1")), 1)
+
+    def test_run_registry_summary_and_upsert(self):
+        benchmark = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0001",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall export reports.",
+                    "capability_text_final": "export reports",
+                }
+            ]
+        )[:1]
+        raw_rows = []
+        for task in ["task1", "task2"]:
+            item = benchmark[0]
+            raw_rows.append(
+                {
+                    "run_id": "full-1",
+                    "model": "m1",
+                    "task": task,
+                    "item_id": item["item_id"],
+                    "seed_id": item["seed_id"],
+                    "source_modality": item["source_modality"],
+                    "sample_kind": "deterministic",
+                    "sample_index": 0,
+                    "parse_status": "ok",
+                    "parsed_json": {"decision": "yes", "confidence": 90} if task == "task1" else {"requirement": "The system MUST export reports.", "modality": "mandatory", "confidence": 90},
+                    "prompt": item["source_statement"],
+                }
+            )
+        row = eu.run_registry_summary(
+            benchmark,
+            raw_rows,
+            run_id="full-1",
+            run_group_id="group1",
+            provider_id="local",
+            profile_id="local",
+            model="m1",
+            dataset_id="nice",
+            variant="must",
+            tasks=["task1", "task2"],
+            expected_stochastic_samples=0,
+            started_at_utc="2026-05-21T00:00:00Z",
+            finished_at_utc="2026-05-21T00:01:00Z",
+        )
+
+        self.assertEqual(row["status"], "complete")
+        self.assertEqual(row["expected_records"], 2)
+        self.assertEqual(row["observed_records"], 2)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "run_registry.csv"
+            eu.upsert_run_registry_row(path, row)
+            eu.upsert_run_registry_row(path, {**row, "status": "partial"})
+            rows = eu.read_csv_rows(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["status"], "partial")
+
+    def test_run_group_ensemble_disagreement_across_run_ids(self):
+        benchmark = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0001",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall export reports.",
+                    "capability_text_final": "export reports",
+                }
+            ]
+        )
+        item = benchmark[0]
+        raw_rows = [
+            {
+                "run_id": "full-a",
+                "run_group_id": "group1",
+                "provider_id": "p1",
+                "model": "m1",
+                "task": "task2",
+                "item_id": item["item_id"],
+                "seed_id": item["seed_id"],
+                "source_modality": item["source_modality"],
+                "sample_kind": "deterministic",
+                "sample_index": 0,
+                "parse_status": "ok",
+                "parsed_json": {"requirement": item["source_statement"], "modality": "mandatory", "confidence": 90},
+                "prompt": item["source_statement"],
+            },
+            {
+                "run_id": "full-b",
+                "run_group_id": "group1",
+                "provider_id": "p2",
+                "model": "m2",
+                "task": "task2",
+                "item_id": item["item_id"],
+                "seed_id": item["seed_id"],
+                "source_modality": item["source_modality"],
+                "sample_kind": "deterministic",
+                "sample_index": 0,
+                "parse_status": "ok",
+                "parsed_json": {"requirement": item["source_statement"], "modality": "recommended", "confidence": 90},
+                "prompt": item["source_statement"],
+            },
+        ]
+
+        scores = eu.build_run_group_ensemble_disagreement_scores(benchmark, raw_rows, run_group_id="group1")
+
+        self.assertEqual(len(scores), 1)
+        self.assertEqual(scores[0]["uq_method"], "model_ensemble_disagreement_run_group")
+        self.assertEqual(scores[0]["valid_n"], 2)
+
+    def test_run_matrix_completed_rows_filter_excludes_smoke_by_default(self):
+        rows = [
+            {"run_group_id": "group1", "run_id": "full-1", "status": "complete"},
+            {"run_group_id": "group1", "run_id": "smoke-1", "status": "complete"},
+            {"run_group_id": "group1", "run_id": "full-2", "status": "partial"},
+            {"run_group_id": "other", "run_id": "full-3", "status": "complete"},
+        ]
+
+        selected = compare_matrix.completed_registry_rows(rows, "group1", include_smoke=False)
+        selected_with_smoke = compare_matrix.completed_registry_rows(rows, "group1", include_smoke=True)
+
+        self.assertEqual([row["run_id"] for row in selected], ["full-1"])
+        self.assertEqual([row["run_id"] for row in selected_with_smoke], ["full-1", "smoke-1"])
+
+    def test_fake_cli_smoke_writes_canonical_jsonl_and_registry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "prompts").mkdir(parents=True)
+            (root / "data/processed").mkdir(parents=True)
+            (root / "AGENTS.md").write_text("", encoding="utf-8")
+            (root / "docs").mkdir()
+            (root / "docs/evaluation.md").write_text("", encoding="utf-8")
+            (root / "prompts/mandatory_entailment.txt").write_text(
+                Path("prompts/mandatory_entailment.txt").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (root / "prompts/modality_extraction.txt").write_text(
+                Path("prompts/modality_extraction.txt").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            benchmark = eu.build_benchmark_items(
+                [
+                    {
+                        "seed_id": "S0001",
+                        "source_dataset": "NICE",
+                        "original_requirement": "The system shall export reports.",
+                        "capability_text_final": "export reports",
+                    },
+                    {
+                        "seed_id": "S0002",
+                        "source_dataset": "NICE",
+                        "original_requirement": "The system shall print invoices.",
+                        "capability_text_final": "print invoices",
+                    }
+                ]
+            )
+            eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
+            config_path = root / "run_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "run_group_id": "smoke-group",
+                        "datasets": ["nice"],
+                        "benchmark_variants": ["must"],
+                        "stochastic": {"temperature": 0.7, "top_p": 1.0, "samples": 1},
+                        "profiles": [
+                            {
+                                "profile_id": "fake",
+                                "provider_id": "fake",
+                                "base_url": "http://127.0.0.1:1234/v1",
+                                "api_key_env": "LOCAL_OPENAI_API_KEY",
+                                "models": ["fake-model"],
+                                "concurrency": 1,
+                                "batch_size": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            argv = [
+                "run_experiment_from_config.py",
+                "--config",
+                str(config_path),
+                "--profile",
+                "fake",
+                "--mode",
+                "smoke",
+                "--smoke-items",
+                "2",
+                "--fake-completion",
+            ]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(run_config_cli.eu, "project_root", return_value=root):
+                run_config_cli.main()
+
+            rows = eu.read_jsonl(root / "data/processed/model_outputs_raw.jsonl")
+            registry = eu.read_csv_rows(root / "data/processed/run_registry.csv")
+            self.assertEqual(len(rows), 8)
+            self.assertEqual(len({row["batch_id"] for row in rows}), 4)
+            self.assertEqual(registry[0]["status"], "complete")
+            self.assertEqual(registry[0]["run_group_id"], "smoke-group")
+            self.assertEqual(registry[0]["batch_size"], "2")
+            self.assertEqual(registry[0]["expected_api_calls"], "4")
+            self.assertEqual(registry[0]["observed_api_calls"], "4")
 
     def test_run_completion_jobs_returns_records_from_fake_completion(self):
         item = {

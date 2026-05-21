@@ -96,10 +96,23 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 
 ## Phase 4: Run Full Experiments
 
-- Run `notebooks/03_run_experiments.ipynb`.
-- Configure `MODELS` for the locally provided model IDs.
-- Set `RUN_FULL_EXPERIMENT=true` after the pilot passes.
-- Cache every raw response in `data/processed/model_outputs_raw.jsonl`.
+- Prefer the provider-aware CLI for GPU/server runs: copy `run_configs/full_matrix.example.json` to the ignored `run_configs/current_run.json`, edit provider profiles, then run `scripts/run_experiment_from_config.py`.
+- Start each provider/model with `--mode smoke`; proceed to `--mode full` only after provider preflight and smoke parsing succeed.
+- For llama.cpp, run one model at a time because the server must be restarted manually for each loaded model; pass `--model` for the currently loaded model.
+- Use profile-level `batch_size` to reduce API-call overhead. Batches only combine compatible jobs for the same task, sample kind, sample index, model, and provider settings, then split the response back into one JSONL row per item/sample.
+- Cache every raw response in the canonical `data/processed/model_outputs_raw*.jsonl` files and track completion in `data/processed/run_registry*.csv`.
+- `notebooks/03_run_experiments.ipynb` remains available for direct env-var driven local runs, but the CLI is the reproducible path for provider matrices.
+
+Example:
+
+```bash
+.venv/bin/python scripts/run_experiment_from_config.py \
+  --config run_configs/current_run.json \
+  --profile local_llama_cpp \
+  --model qwen/qwen3.5-9b \
+  --dataset nice \
+  --mode smoke
+```
 
 ## Phase 4b: Run Source-Grounded Modality Verification
 
@@ -112,6 +125,7 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 
 - Run `notebooks/04_compute_uq_and_metrics.ipynb`.
 - Analyze one full experiment run at a time. The notebook selects the latest `full-*` run by default; set `RUN_ID` or `ANALYSIS_RUN_ID` to reproduce an earlier run.
+- For provider/model matrix comparison, run `scripts/compare_run_matrix.py --config run_configs/current_run.json` after the registry marks the relevant runs complete.
 - Compute verbalized confidence, label self-consistency, modality consistency, relation consistency, predictive entropy, variation ratio, and model-ensemble disagreement when available.
 - Export UQ scores, metric summaries, rule-baseline rows, bootstrap confidence intervals, high-confidence risk rates, error-detection AUROC, and the recommended-strength sensitivity check.
 - Use precise denominator-specific names for high-confidence risks:

@@ -853,12 +853,47 @@ def notebook_03() -> list[nbf.NotebookNode]:
             """
             # 03 Run Experiments
 
-            Objective: run both tasks for each locally provided model, cache every raw response, and preserve invalid outputs for auditability.
+            Objective: run both tasks for selected models, cache every raw response, and preserve invalid outputs for auditability.
 
-            This notebook runs the full experiment by default. Set `RUN_FULL_EXPERIMENT=false` to skip requests.
+            The provider-aware CLI runner is the recommended path for GPU/server runs. The notebook cells below remain available for direct OpenAI-compatible local runs.
             """
         ),
         code(COMMON_SETUP),
+        md("## Provider-Aware CLI Runner"),
+        code(
+            r"""
+            import shlex
+
+            RUN_CONFIG = Path(os.getenv("RUN_CONFIG", PROJECT_ROOT / "run_configs/current_run.json"))
+            profile_hint = os.getenv("RUN_PROFILE", "local_llama_cpp")
+            model_hint = os.getenv("RUN_MODEL", "")
+            mode_hint = os.getenv("RUN_MODE", "smoke")
+
+            command = [
+                ".venv/bin/python",
+                "scripts/run_experiment_from_config.py",
+                "--config",
+                str(RUN_CONFIG),
+                "--profile",
+                profile_hint,
+                "--dataset",
+                DATASET_ID,
+                "--variant",
+                BENCHMARK_VARIANT,
+                "--mode",
+                mode_hint,
+            ]
+            if model_hint:
+                command.extend(["--model", model_hint])
+
+            print("Recommended server command:")
+            print(" ".join(shlex.quote(part) for part in command))
+            print()
+            print("Copy run_configs/full_matrix.example.json to run_configs/current_run.json and edit it for the provider/model matrix.")
+            print("For llama.cpp, start the server with one model, then pass --model for that loaded model.")
+            print("Set batch_size in the selected provider profile to reduce API calls while preserving one JSONL row per item/sample.")
+            """
+        ),
         md("## Configure Run"),
         code(
             r"""
