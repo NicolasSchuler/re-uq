@@ -167,6 +167,7 @@ The command writes a local analysis directory under `outputs/evaluation_<dataset
 - `metrics_summary.csv`
 - `metrics_summary.md`
 - `bootstrap_seed_ci.csv`
+- `bootstrap_seed_ci.md`
 - `paper_results_table.md`
 - `task1_p_yes_by_modality.svg`
 - `qualitative_overcommitment_examples.csv`
@@ -176,7 +177,9 @@ The command writes a local analysis directory under `outputs/evaluation_<dataset
 - `provenance_manifest.json`
 - `result_notes_template.md`
 
-Use diagnostic flags such as `--allow-partial`, `--skip-registry-check`, or `--skip-construct-review-check` only for local investigation, not for paper-ready results.
+See `docs/results_mapping.md` for how each artifact backs a specific paper figure, table, or claim.
+
+Use diagnostic flags such as `--allow-partial`, `--skip-registry-check`, `--skip-construct-review-check`, `--max-parse-failure-rate`, `--bootstrap-iterations`, or `--expected-stochastic-samples` only for local investigation, not for paper-ready results.
 
 ## 7. Publication Verification Gate
 
