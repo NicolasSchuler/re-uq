@@ -35,7 +35,7 @@
     {
       "profile_id": "kit_toolbox",
       "provider_id": "kit_toolbox",
-      "base_url": "https://ki-toolbox.scc.kit.edu/api/v1",
+      "base_url": "https://institutional-llm.example.invalid/api/v1",
       "api_key_env": "KIT_TOOLBOX_API_KEY",
       "models": [
         "azure.gpt-4.1-mini",
@@ -51,7 +51,7 @@
       "instructor_mode": "json",
       "validation_retries": 2,
       "requires_manual_server": false,
-      "notes": "Instructor/Pydantic v2 output contract with confidence in [0,1]. Coordinate large automated runs with ki-toolbox@scc.kit.edu."
+      "notes": "Instructor/Pydantic v2 output contract with confidence in [0,1]. Coordinate large automated runs with the institutional LLM endpoint operator."
     },
     {
       "profile_id": "zai",

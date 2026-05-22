@@ -1927,7 +1927,7 @@ class EvalUtilsTest(unittest.TestCase):
             {
                 "profile_id": "kit",
                 "provider_id": "kit_toolbox",
-                "base_url": "https://ki-toolbox.scc.kit.edu/api/v1",
+                "base_url": "https://institutional-llm.example.invalid/api/v1",
                 "api_key_env": "KIT_TOOLBOX_API_KEY",
                 "models": ["azure.gpt-4.1-mini"],
                 "json_schema": True,

@@ -17,7 +17,7 @@ A reviewer who downloads or clones the public artifact must not be able to ident
 All tracked files have been audited for real names, institutional identifiers, and personal handles. The audit uses the following preflight grep, which must return zero matches before the artifact is shared:
 
 ```bash
-git grep -nE -i 'nicolas|schuler|kit\.edu|@nicol' -- ':!uv.lock'
+git grep -nE -i 'nicolas|schuler|kit\.edu|@nicol|ki-toolbox' -- ':!uv.lock' ':!docs/anonymization.md'
 git grep -nE 'Co-authored|Signed-off-by' -- ':!uv.lock'
 ```
 
@@ -92,7 +92,7 @@ Run this immediately before pushing the submission branch:
 git status --short
 
 # 2. Content sanitization.
-git grep -nE -i 'nicolas|schuler|kit\.edu|@nicol' -- ':!uv.lock'
+git grep -nE -i 'nicolas|schuler|kit\.edu|@nicol|ki-toolbox' -- ':!uv.lock' ':!docs/anonymization.md'
 git grep -nE 'Co-authored|Signed-off-by' -- ':!uv.lock'
 
 # 3. History sanitization (after the filter-repo rewrite).
