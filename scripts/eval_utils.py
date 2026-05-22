@@ -286,6 +286,15 @@ RUN_PROGRESS_FIELDS = [
 ]
 
 
+# =============================================================================
+# Section 1: Configuration loading, validation, and run-config normalization
+# =============================================================================
+# Helpers for reading config.example.json / run_configs/*.json, validating
+# scalar and structured fields, normalizing provider profiles, and applying
+# command-line overrides. The downstream pipeline consumes only normalized
+# dictionaries produced here.
+
+
 def project_root() -> Path:
     cwd = Path.cwd().resolve()
     for candidate in [cwd, *cwd.parents]:
@@ -792,6 +801,13 @@ def validate_manual_server_profile(profile: Mapping[str, Any]) -> None:
         )
 
 
+# =============================================================================
+# Section 2: Artifact paths, manifests, and JSON/JSONL IO
+# =============================================================================
+# Path resolution for run registries, SHA-256 hashing for provenance, the
+# benchmark manifest writer, and append-only JSONL/JSON readers and writers.
+
+
 def run_registry_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
     return artifact_path(Path(root) / "data/processed/run_registry.csv", dataset_id, variant)
 
@@ -936,6 +952,14 @@ STRANDED_PREPOSITION_RE = re.compile(
     r"^(?:with|to|from|for|of|in|on|at|by|about|into|onto|through|across|under|over|between|among)\b",
     re.I,
 )
+
+
+# =============================================================================
+# Section 3: Text normalization and seed-candidate construction
+# =============================================================================
+# Low-level text helpers (quote stripping, capability extraction, modality cue
+# regexes) and the dataset-specific seed candidate pipelines for NICE/PROMISE
+# and the `limsc/mlm-tapt-requirements` Hugging Face dataset.
 
 
 def normalize_space(text: str) -> str:
@@ -1286,6 +1310,14 @@ def load_reviewed_seeds(
     if strict and len(selected) != target_count:
         raise ValueError(f"Expected exactly {target_count} included seeds, found {len(selected)}.")
     return selected
+
+
+# =============================================================================
+# Section 4: Capability review and modality-benchmark construction
+# =============================================================================
+# Manual-review tables for included capabilities, the controlled MUST /
+# SHOULD / MAY / nice_to_have variant generators, weak-modality probe and
+# Task 3 verifier item builders, and the benchmark-statement review export.
 
 
 def included_capability_review_frame(path: str | Path) -> pd.DataFrame:
@@ -1679,6 +1711,14 @@ def write_benchmark_statement_review(
     return {"markdown": markdown_path, "csv": csv_path}
 
 
+# =============================================================================
+# Section 5: Prompts, request planning, and JSON-schema response formats
+# =============================================================================
+# Frozen prompt loading and rendering, per-task JSON schemas, structured
+# response-format objects for json_object / json_schema / instructor modes,
+# and the planner that turns benchmark rows into provider completion jobs.
+
+
 def load_prompt(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8")
 
@@ -1955,6 +1995,14 @@ def planned_completion_jobs(
                     )
                 )
     return jobs
+
+
+# =============================================================================
+# Section 6: Response parsing, confidence handling, and modality normalization
+# =============================================================================
+# Tolerant JSON object extraction, confidence-scale detection and parsing for
+# the v2 0-1 contract, decision/modality/relation normalization, gold-relation
+# computation for Task 3, and the per-task response parser used downstream.
 
 
 def extract_json_object(text: str) -> str | None:
@@ -2458,6 +2506,14 @@ def parse_batch_completion_results(raw_text: str) -> tuple[dict[int, dict[str, A
     if duplicate_request_index:
         return parsed, "duplicate_request_index"
     return parsed, "ok"
+
+
+# =============================================================================
+# Section 7: Provider completion drivers (OpenAI-compatible, Instructor, logprobs)
+# =============================================================================
+# Wrappers over the OpenAI-compatible chat-completion path, the Instructor
+# Pydantic-validated path, logprob capability probing via /v1/responses, and
+# the run-ID and raw-record builders used during benchmark execution.
 
 
 def chat_completion(
@@ -3290,6 +3346,15 @@ def run_completion_jobs(
             yield from future.result()
 
 
+# =============================================================================
+# Section 8: Metrics and UQ scoring
+# =============================================================================
+# Classification metrics (accuracy, F1, macro-F1, Brier, ECE, AUROC),
+# rank correlations, distributional UQ (predictive entropy, variation ratio,
+# self-consistency, ensemble disagreement), monotonicity diagnostics, and
+# bootstrap confidence intervals used by the paper-facing summaries.
+
+
 def accuracy_score(y_true: list[Any], y_pred: list[Any]) -> float:
     if not y_true:
         return math.nan
@@ -3916,6 +3981,14 @@ def build_task3_scores(task3_items: list[dict[str, Any]], raw_rows: list[dict[st
     return scores
 
 
+# =============================================================================
+# Section 9: Run status, registries, progress, and provider preflight
+# =============================================================================
+# Bookkeeping for resumable runs: progress summaries, registry upserts, live
+# progress CSV/event JSONL writers, warning event derivation, and the
+# provider preflight probe.
+
+
 def run_progress_summary(
     benchmark_rows: list[dict[str, Any]],
     raw_rows: list[dict[str, Any]],
@@ -4333,6 +4406,15 @@ def provider_preflight(
         "latency_s": completion.get("latency_s", ""),
         "raw_text": str(completion.get("raw_text", ""))[:240],
     }
+
+
+# =============================================================================
+# Section 10: Paper-facing exports, summaries, and figures
+# =============================================================================
+# Preliminary and final result snapshots, prompt-sensitivity summaries, weak
+# modality probe summaries, over-commitment metrics at the 0.80 / 0.90
+# thresholds, calibration / selective-deferral metrics, qualitative example
+# extraction, the UQ method inventory, and figure rendering.
 
 
 def preliminary_result_paths(root: str | Path, variant: str | None = None, dataset_id: str | None = None) -> dict[str, Path]:
