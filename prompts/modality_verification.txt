@@ -21,7 +21,10 @@ Use these labels:
 Return JSON only:
 {{
   "relation": "preserves" | "strengthens" | "weakens" | "content_changed",
-  "confidence": 0-100,
+  "confidence": 0.0-1.0,
   "evidence_phrase": "<exact phrase from the source that supports the relation>",
   "brief_reason": "<max 16 words>"
 }}
+
+Use confidence as a decimal probability for confidence in the selected relation.
+Do not return percentages such as 95 or strings such as "95%".

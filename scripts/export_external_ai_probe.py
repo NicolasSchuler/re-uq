@@ -100,6 +100,8 @@ def prompt_markdown(input_filename: str) -> str:
         f"""\
         # External High-Capacity Model Probe: Modality-Preserving Extraction
 
+        Prompt version: `external-task2-v2-conf01`
+
         Please process the uploaded file `{input_filename}`.
 
         ## Task
@@ -129,7 +131,7 @@ def prompt_markdown(input_filename: str) -> str:
         {{
           "requirement": "...",
           "modality": "mandatory" | "recommended" | "optional" | "nice_to_have",
-          "confidence": 0-100
+          "confidence": 0.0-1.0
         }}
         ```
 
@@ -145,7 +147,7 @@ def prompt_markdown(input_filename: str) -> str:
           "external_item_id": "EXT0001",
           "requirement": "...",
           "modality": "mandatory",
-          "confidence": 95
+          "confidence": 0.95
         }}
         ```
 
@@ -153,7 +155,8 @@ def prompt_markdown(input_filename: str) -> str:
 
         - Preserve every `external_item_id` exactly as given.
         - Produce exactly one JSONL object for every row in the uploaded file.
-        - Use numeric confidence from `0` to `100`.
+        - Use numeric confidence from `0.0` to `1.0`.
+        - Confidence is for the selected modality label; do not return percentages such as `95` or strings such as `"95%"`.
         - Do not add any labels beyond the four allowed modality labels.
         - Treat the external IDs as opaque identifiers; do not infer labels from them.
         """
@@ -175,6 +178,7 @@ def readme_markdown() -> str:
         - `external_task2_inputs.csv`: upload this file to the service.
         - `external_task2_inputs.jsonl`: same inputs in JSONL form, useful for services that prefer JSONL.
         - `external_task2_gold_key.csv`: keep this local; it contains the gold labels and should not be shown to the model.
+        - `*_evaluation.md`: curated evaluation reports only when they include provenance and pass the current confidence-scale contract.
 
         Design:
 
@@ -191,6 +195,17 @@ def readme_markdown() -> str:
 
         Save the returned JSONL from the service as something like
         `external_model_outputs_<model-name>.jsonl` in this folder.
+
+        Current confidence contract:
+
+        - The prompt asks for numeric confidence from `0.0` to `1.0`.
+        - Percentages such as `95` and strings such as `"95%"` are invalid.
+        - Raw `*_outputs.jsonl` and row-level `*_scored_items.csv` files stay ignored locally by default.
+        - Curated reports require zero invalid confidence values plus prompt version, confidence scale, raw-output SHA-256, gold-key SHA-256, and prompt SHA-256.
+
+        Legacy note:
+
+        Reports produced from old `0-100` confidence outputs are diagnostics only. Regenerate them with the current prompt before using them as paper-facing evidence.
         """
     )
 

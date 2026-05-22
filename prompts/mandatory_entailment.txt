@@ -12,6 +12,9 @@ Is the candidate a faithful mandatory requirement entailed by the source?
 Return JSON only:
 {{
   "decision": "yes" | "no",
-  "confidence": 0-100,
+  "confidence": 0.0-1.0,
   "brief_reason": "<max 12 words>"
 }}
+
+Use confidence as a decimal probability for confidence in the selected decision.
+Do not return percentages such as 95 or strings such as "95%".

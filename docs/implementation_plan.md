@@ -53,6 +53,7 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 
 - Add a deterministic rule-based modality baseline as a sanity comparator, not a competing ML method.
 - Add high-confidence over-commitment metrics at thresholds `0.80` and `0.90`.
+- Treat all `v2-conf01` and `v2-instructor-conf01` model outputs as probability-scale confidence in `[0.0, 1.0]`; new v2 raw rows must carry `confidence_scale=0_1`.
 - Add Task 3 source-grounded modality verification after the full run, using `prompts/modality_verification.txt` and writing `data/processed/model_outputs_raw_task3_verification.jsonl`.
 - Add one Task 1 prompt-sensitivity check on the pilot subset using `prompts/mandatory_entailment_strict.txt`.
 - Add one focused Task 2 prompt-validity check for `nice_to_have` sources using `prompts/modality_extraction_labels_only.txt`, which states the allowed output labels without giving deterministic mapping rules or examples.
@@ -102,6 +103,7 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 - For Z.ai GLM Coding Plan keys, use `https://api.z.ai/api/coding/paas/v4`; the general `https://api.z.ai/api/paas/v4` endpoint requires standard API balance.
 - Use profile-level `batch_size` to reduce API-call overhead. Batches only combine compatible jobs for the same task, sample kind, sample index, model, and provider settings, then split the response back into one JSONL row per item/sample.
 - Use `structured_output=json_schema` for providers that accept strict OpenAI-style structured outputs; use `json_object` for loose JSON mode and `none` for local endpoints that do not support response formatting.
+- For current v2 prompts, reject percentage-style confidence values such as `95` or `"95%"` during smoke checks instead of treating them as successful parses.
 - Cache every raw response in the canonical `data/processed/model_outputs_raw*.jsonl` files and track completion in `data/processed/run_registry*.csv`.
 - Use the live progress artifacts during long runs: `data/processed/run_progress_live*.csv` for current task coverage and `data/processed/run_events*.jsonl` for structured start/progress/warning/finish events. Monitor with `scripts/show_run_progress.py --dataset nice --run-id RUN_ID --watch 30`.
 - `notebooks/03_run_experiments.ipynb` remains available for direct env-var driven local runs, but the CLI is the reproducible path for provider matrices.
@@ -131,6 +133,8 @@ Example:
 - For provider/model matrix comparison, run `scripts/compare_run_matrix.py --config run_configs/current_run.json` after the registry marks the relevant runs complete.
 - Compute verbalized confidence, label self-consistency, modality consistency, relation consistency, predictive entropy, variation ratio, and model-ensemble disagreement when available.
 - Export UQ scores, metric summaries, rule-baseline rows, bootstrap confidence intervals, high-confidence risk rates, error-detection AUROC, and the recommended-strength sensitivity check.
+- Export seed-level bootstrap intervals for headline risks: unsupported mandatory acceptance, `HC-OC_overcommittable`, and `weak_strengthening`.
+- Report selective error after deferring the most uncertain 10% and 20% of predictions as a compact triage diagnostic.
 - Use precise denominator-specific names for high-confidence risks:
   - Task 1 `unsupported_mandatory_acceptance@tau`: among non-mandatory sources, the fraction assigned `p_yes >= tau` for the mandatory candidate.
   - Task 2 `HC-OC_all@tau`: among all valid Task 2 outputs, the fraction that strengthen the source and have confidence at least `tau`.
@@ -144,9 +148,11 @@ Example:
 - Run `notebooks/05_analyze_and_export_results.ipynb`.
 - Export the compact paper-facing result table, modality figure, qualitative examples, and UQ method inventory under `outputs/`.
 - Inspect the figure and result notes before using them in the IST manuscript.
+- Treat checked-in 468-row metric snapshots as stale until a clean post-fix full run replaces them.
 
 ## Verification
 
 - Use `.venv/bin/python -m unittest discover -s tests -v` for utility tests.
+- Use coverage before finalizing a code/data contract change: `.venv/bin/python -m coverage run --branch --source=scripts -m unittest discover -s tests -v` followed by `.venv/bin/python -m coverage report -m`.
 - Validate notebook JSON after changes.
 - Treat model results as paper-ready only after inspecting benchmark items, parse failures, metric summaries, and generated plots.

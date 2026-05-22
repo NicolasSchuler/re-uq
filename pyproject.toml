@@ -5,11 +5,13 @@ description = "Notebook-based evaluation pipeline for modality-conditioned uncer
 requires-python = ">=3.13"
 dependencies = [
     "datasets>=2.20.0",
+    "instructor>=1.15,<2",
     "matplotlib>=3.10.0",
     "nbformat>=5.10.0",
     "numpy>=2.0.0",
     "openai>=1.0.0",
     "pandas>=2.2.0",
+    "pydantic>=2",
     "requests>=2.32.0",
     "scikit-learn>=1.5.0",
     "scipy>=1.14.0",
@@ -18,9 +20,18 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "coverage[toml]>=7",
     "ipykernel>=6.29.0",
     "jupyterlab>=4.2.0",
 ]
 
 [tool.uv]
 package = false
+
+[tool.coverage.run]
+branch = true
+source = ["scripts"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

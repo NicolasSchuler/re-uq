@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .venv/
 .cache/
+.coverage
+.coverage.*
 .DS_Store
 tmp/
 

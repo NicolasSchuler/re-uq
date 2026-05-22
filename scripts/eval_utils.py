@@ -13,6 +13,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+try:
+    from scripts import structured_outputs as so
+except ModuleNotFoundError:  # pragma: no cover
+    import structured_outputs as so
+
 _CACHE_DIR = Path(os.environ.get("RE_UQ_CACHE_DIR", Path(__file__).resolve().parents[1] / ".cache"))
 os.environ.setdefault("MPLCONFIGDIR", str(_CACHE_DIR / "matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", str(_CACHE_DIR))
@@ -145,7 +150,10 @@ HIGH_CONFIDENCE_THRESHOLDS = (0.80, 0.90)
 RULE_BASELINE_MODEL = "rule_based_baseline"
 RULE_BASELINE_METHOD = "deterministic_rules"
 ENSEMBLE_MODEL_PREFIX = "ensemble"
-LOGPROB_PROBE_PROMPT = 'Return exactly this JSON object: {"decision":"yes","confidence":100,"brief_reason":"probe"}'
+CONFIDENCE_SCALE_0_100 = "0_100"
+CONFIDENCE_SCALE_0_1 = so.CONFIDENCE_SCALE_0_1
+CONFIDENCE_0_1_PROMPT_VERSIONS = {"v2-conf01", "v2-instructor-conf01"}
+LOGPROB_PROBE_PROMPT = 'Return exactly this JSON object: {"decision":"yes","confidence":1.0,"brief_reason":"probe"}'
 DATASET_NICE = "nice"
 DATASET_MLM_TAPT = "mlm_tapt"
 DATASET_IDS = {DATASET_NICE, DATASET_MLM_TAPT}
@@ -186,7 +194,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "seed": 20260518,
         "target_seed_count": 180,
         "pilot_seed_count": 20,
-        "prompt_version": "v1",
+        "prompt_version": "v2-conf01",
     },
     "llm": {
         "host": "http://localhost:8000/v1",
@@ -249,7 +257,7 @@ DEFAULT_RUN_LOGGING: dict[str, Any] = {
     "write_progress_csv": True,
     "write_event_jsonl": True,
 }
-STRUCTURED_OUTPUT_MODES = {"none", "json_object", "json_schema"}
+STRUCTURED_OUTPUT_MODES = {"none", "json_object", "json_schema", "instructor"}
 
 RUN_PROGRESS_FIELDS = [
     "run_id",
@@ -589,6 +597,9 @@ def normalize_structured_output_mode(value: Any, *, json_mode: bool = False, jso
         "strict_json": "json_schema",
         "strict_json_schema": "json_schema",
         "json_schema": "json_schema",
+        "instructor": "instructor",
+        "pydantic": "instructor",
+        "validated": "instructor",
     }
     if normalized not in aliases:
         raise ValueError(f"Unknown structured output mode: {value}")
@@ -617,10 +628,14 @@ def normalize_provider_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
         json_mode=json_mode,
         json_schema=bool(profile.get("json_schema", False)),
     )
-    json_mode = json_mode or structured_output in {"json_object", "json_schema"}
+    json_mode = json_mode or structured_output in {"json_object", "json_schema", "instructor"}
     response_format = profile.get("response_format")
+    if structured_output == "instructor" and "response_format" in extra_body:
+        extra_body = {key: value for key, value in extra_body.items() if key != "response_format"}
     if response_format is None and structured_output == "json_object" and "response_format" not in extra_body:
         response_format = {"type": "json_object"}
+    if structured_output == "instructor":
+        response_format = None
     if response_format is not None and not isinstance(response_format, Mapping):
         raise ValueError(f"Provider profile {profile_id} response_format must be an object.")
     return {
@@ -637,6 +652,9 @@ def normalize_provider_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
         "structured_output": structured_output,
         "response_format": dict(response_format) if response_format is not None else None,
         "extra_body": dict(extra_body),
+        "instructor_mode": normalize_instructor_mode_name(profile.get("instructor_mode") or "json"),
+        "validation_retries": nonnegative_int(profile.get("validation_retries", 2), f"profiles.{profile_id}.validation_retries"),
+        "fallback_batch_size": positive_int(profile.get("fallback_batch_size", 1), f"profiles.{profile_id}.fallback_batch_size"),
         "requires_manual_server": bool(profile.get("requires_manual_server", False)),
         "notes": str(profile.get("notes", "")).strip(),
     }
@@ -1376,7 +1394,7 @@ def build_task3_verification_items(
             continue
         seen.add(dedupe_key)
         relation = task3_gold_relation(source_item["source_modality"], extracted_modality)
-        confidence = parse_confidence(parsed.get("confidence"))
+        confidence = confidence_probability(raw, parsed)
         items.append(
             {
                 "item_id": f"{source_item_id}__task3__{safe_identifier(model)}",
@@ -1686,7 +1704,7 @@ def _json_schema_object(properties: Mapping[str, Any], required: list[str]) -> d
 
 
 def task_response_schema(task: str, *, batched: bool = False) -> dict[str, Any]:
-    confidence = {"type": "number", "minimum": 0, "maximum": 100}
+    confidence = {"type": "number", "minimum": 0, "maximum": 1}
     if task == "task1":
         properties: dict[str, Any] = {
             "decision": {"type": "string", "enum": ["yes", "no"]},
@@ -1724,7 +1742,7 @@ def task_response_schema(task: str, *, batched: bool = False) -> dict[str, Any]:
 
 def response_format_for_task(task: str, structured_output: str, *, batched: bool = False) -> dict[str, Any] | None:
     mode = normalize_structured_output_mode(structured_output)
-    if mode == "none":
+    if mode in {"none", "instructor"}:
         return None
     if mode == "json_object":
         return {"type": "json_object"}
@@ -1750,6 +1768,10 @@ def resolve_response_format_args(
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     extra = dict(extra_body) if extra_body else None
     mode = normalize_structured_output_mode(structured_output, json_mode=json_mode)
+    if mode == "instructor":
+        if extra is not None and "response_format" in extra:
+            extra = {key: value for key, value in extra.items() if key != "response_format"}
+        return None, extra
     if mode == "none":
         return (dict(response_format) if response_format else None), extra
 
@@ -1784,6 +1806,9 @@ def completion_request_job(
     structured_output: str | None = None,
     response_format: Mapping[str, Any] | None = None,
     extra_body: Mapping[str, Any] | None = None,
+    instructor_mode: str = "json",
+    validation_retries: int = 2,
+    fallback_batch_size: int = 1,
     server_model_probe: Mapping[str, Any] | str | None = None,
 ) -> dict[str, Any]:
     resolved_response_format, resolved_extra_body = resolve_response_format_args(
@@ -1818,6 +1843,9 @@ def completion_request_job(
         "structured_output": normalize_structured_output_mode(structured_output, json_mode=json_mode),
         "response_format": dict(resolved_response_format) if resolved_response_format else None,
         "extra_body": dict(resolved_extra_body) if resolved_extra_body else None,
+        "instructor_mode": normalize_instructor_mode_name(instructor_mode),
+        "validation_retries": nonnegative_int(validation_retries, "validation_retries"),
+        "fallback_batch_size": positive_int(fallback_batch_size, "fallback_batch_size"),
         "server_model_probe": server_model_probe,
     }
 
@@ -1844,6 +1872,9 @@ def planned_completion_jobs(
     structured_output: str | None = None,
     response_format: Mapping[str, Any] | None = None,
     extra_body: Mapping[str, Any] | None = None,
+    instructor_mode: str = "json",
+    validation_retries: int = 2,
+    fallback_batch_size: int = 1,
     server_model_probe: Mapping[str, Any] | str | None = None,
 ) -> list[dict[str, Any]]:
     jobs: list[dict[str, Any]] = []
@@ -1876,6 +1907,9 @@ def planned_completion_jobs(
                     structured_output=structured_output,
                     response_format=response_format,
                     extra_body=extra_body,
+                    instructor_mode=instructor_mode,
+                    validation_retries=validation_retries,
+                    fallback_batch_size=fallback_batch_size,
                     server_model_probe=server_model_probe,
                 )
             )
@@ -1904,6 +1938,9 @@ def planned_completion_jobs(
                         structured_output=structured_output,
                         response_format=response_format,
                         extra_body=extra_body,
+                        instructor_mode=instructor_mode,
+                        validation_retries=validation_retries,
+                        fallback_batch_size=fallback_batch_size,
                         server_model_probe=server_model_probe,
                     )
                 )
@@ -1955,14 +1992,87 @@ def extract_json_value(text: str) -> Any | None:
     return None
 
 
-def parse_confidence(value: Any) -> float | None:
+def normalize_confidence_scale(value: Any, default: str = CONFIDENCE_SCALE_0_100) -> str:
+    if value in {"", None}:
+        return default
+    normalized = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "0_1": CONFIDENCE_SCALE_0_1,
+        "01": CONFIDENCE_SCALE_0_1,
+        "probability": CONFIDENCE_SCALE_0_1,
+        "prob": CONFIDENCE_SCALE_0_1,
+        "decimal": CONFIDENCE_SCALE_0_1,
+        "0_100": CONFIDENCE_SCALE_0_100,
+        "0100": CONFIDENCE_SCALE_0_100,
+        "percent": CONFIDENCE_SCALE_0_100,
+        "percentage": CONFIDENCE_SCALE_0_100,
+        "legacy": CONFIDENCE_SCALE_0_100,
+    }
+    if normalized not in aliases:
+        raise ValueError(f"Unknown confidence scale: {value}")
+    return aliases[normalized]
+
+
+def prompt_version_uses_confidence_0_1(prompt_version: Any) -> bool:
+    normalized = str(prompt_version or "").strip().lower()
+    return normalized in CONFIDENCE_0_1_PROMPT_VERSIONS or normalized.startswith("v2-")
+
+
+def prompt_text_uses_confidence_0_1(prompt: Any) -> bool:
+    text = normalize_space(str(prompt or "")).lower()
+    if not text:
+        return False
+    probability_markers = (
+        "0.0-1.0",
+        "0.0 to 1.0",
+        "0.0 and 1.0",
+        "decimal probability",
+    )
+    return any(marker in text for marker in probability_markers)
+
+
+def output_contract_uses_confidence_0_1(output_contract_version: Any) -> bool:
+    return str(output_contract_version or "") in so.CONFIDENCE_0_1_OUTPUT_CONTRACT_VERSIONS
+
+
+def confidence_scale_for_record(record: Mapping[str, Any]) -> str:
+    explicit = str(record.get("confidence_scale", "")).strip()
+    if explicit:
+        return normalize_confidence_scale(explicit)
+    if output_contract_uses_confidence_0_1(record.get("output_contract_version")):
+        return CONFIDENCE_SCALE_0_1
+    if prompt_version_uses_confidence_0_1(record.get("prompt_version")):
+        return CONFIDENCE_SCALE_0_1
+    if prompt_text_uses_confidence_0_1(record.get("prompt")):
+        return CONFIDENCE_SCALE_0_1
+    return CONFIDENCE_SCALE_0_100
+
+
+def parse_confidence(value: Any, confidence_scale: str = CONFIDENCE_SCALE_0_100) -> float | None:
+    scale = normalize_confidence_scale(confidence_scale)
+    if isinstance(value, bool) or (scale == CONFIDENCE_SCALE_0_1 and isinstance(value, str)):
+        return None
     try:
         confidence = float(value)
     except (TypeError, ValueError):
         return None
-    if 0.0 <= confidence <= 100.0:
+    if scale == CONFIDENCE_SCALE_0_1 and 0.0 <= confidence <= 1.0:
+        return confidence
+    if scale == CONFIDENCE_SCALE_0_100 and 0.0 <= confidence <= 100.0:
         return confidence
     return None
+
+
+def row_uses_confidence_0_1(row: Mapping[str, Any]) -> bool:
+    return confidence_scale_for_record(row) == CONFIDENCE_SCALE_0_1
+
+
+def confidence_probability(row_or_parsed: Mapping[str, Any], parsed: Mapping[str, Any] | None = None) -> float:
+    if parsed is None and isinstance(row_or_parsed.get("parsed_json"), Mapping):
+        parsed = row_or_parsed["parsed_json"]  # type: ignore[index]
+    value_source = parsed if parsed is not None else row_or_parsed
+    confidence = float(value_source.get("confidence", 0.0))
+    return confidence if row_uses_confidence_0_1(row_or_parsed) else confidence / 100.0
 
 
 def normalize_decision(value: Any) -> str | None:
@@ -2171,7 +2281,11 @@ def text_modality_fields(
     }
 
 
-def parse_task_response(task: str, raw_text: str) -> tuple[dict[str, Any] | None, str]:
+def parse_task_response(
+    task: str,
+    raw_text: str,
+    confidence_scale: str = CONFIDENCE_SCALE_0_100,
+) -> tuple[dict[str, Any] | None, str]:
     json_text = extract_json_object(raw_text)
     if json_text is None:
         return None, "invalid_json"
@@ -2180,7 +2294,7 @@ def parse_task_response(task: str, raw_text: str) -> tuple[dict[str, Any] | None
     except json.JSONDecodeError:
         return None, "invalid_json"
 
-    confidence = parse_confidence(parsed.get("confidence"))
+    confidence = parse_confidence(parsed.get("confidence"), confidence_scale)
     if confidence is None:
         return parsed, "invalid_confidence"
     parsed["confidence"] = confidence
@@ -2217,6 +2331,16 @@ def parse_task_response(task: str, raw_text: str) -> tuple[dict[str, Any] | None
     raise ValueError(f"Unknown task: {task}")
 
 
+def parse_instructor_task_response(task: str, raw_text: str) -> tuple[dict[str, Any] | None, str]:
+    json_text = extract_json_object(raw_text)
+    if json_text is None:
+        return None, "invalid_json"
+    try:
+        return so.validated_json_for_task(task, json_text), "ok"
+    except Exception:
+        return None, "instructor_validation_error"
+
+
 def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
     if not jobs:
         raise ValueError("Cannot build a batch prompt for an empty job list.")
@@ -2237,8 +2361,10 @@ def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
             "You are reviewing software requirements.\n"
             "Evaluate each item independently. Do not infer an answer for one item from another item.\n\n"
             'Use "yes" or "no" for decision.\n'
+            "Use confidence as a decimal from 0.0 to 1.0 for confidence in the selected decision.\n"
+            'Do not return percentages such as 95 or strings such as "95%".\n'
             "Return JSON only as this object:\n"
-            '{"results":[{"request_index":0,"decision":"yes","confidence":0,"brief_reason":"<max 12 words>"}]}\n\n'
+            '{"results":[{"request_index":0,"decision":"yes","confidence":0.95,"brief_reason":"<max 12 words>"}]}\n\n'
             "Items:\n"
             f"{json.dumps(items, ensure_ascii=False, indent=2)}"
         )
@@ -2255,8 +2381,10 @@ def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
             "Extract exactly one requirement from each source statement.\n"
             "Preserve the modality of each source. Evaluate each item independently.\n\n"
             'Use one of: "mandatory", "recommended", "optional", "nice_to_have".\n'
+            "Use confidence as a decimal from 0.0 to 1.0 for confidence in the selected modality.\n"
+            'Do not return percentages such as 95 or strings such as "95%".\n'
             "Return JSON only as this object:\n"
-            '{"results":[{"request_index":0,"requirement":"...","modality":"mandatory","confidence":0}]}\n\n'
+            '{"results":[{"request_index":0,"requirement":"...","modality":"mandatory","confidence":0.95}]}\n\n'
             "Items:\n"
             f"{json.dumps(items, ensure_ascii=False, indent=2)}"
         )
@@ -2278,6 +2406,7 @@ def parse_batch_completion_results(raw_text: str) -> tuple[dict[int, dict[str, A
         return {}, "missing_results"
 
     parsed: dict[int, dict[str, Any]] = {}
+    duplicate_request_index = False
     for position, result in enumerate(results):
         if not isinstance(result, Mapping):
             continue
@@ -2289,7 +2418,12 @@ def parse_batch_completion_results(raw_text: str) -> tuple[dict[int, dict[str, A
                 request_index_int = -(position + 1)
         else:
             request_index_int = -(position + 1)
+        if request_index_int in parsed:
+            duplicate_request_index = True
+            continue
         parsed[request_index_int] = dict(result)
+    if duplicate_request_index:
+        return parsed, "duplicate_request_index"
     return parsed, "ok"
 
 
@@ -2345,6 +2479,111 @@ def chat_completion(
             "response_json": None,
             "latency_s": time.perf_counter() - start,
             "error": repr(exc),
+        }
+
+
+def normalize_instructor_mode_name(value: Any) -> str:
+    normalized = str(value or "json").strip().lower().replace("-", "_")
+    aliases = {
+        "json": "json",
+        "json_mode": "json",
+        "mode_json": "json",
+        "tools": "tools",
+        "tool": "tools",
+        "tools_strict": "tools_strict",
+        "strict": "tools_strict",
+        "md_json": "md_json",
+        "markdown_json": "md_json",
+    }
+    if normalized not in aliases:
+        raise ValueError(f"Unknown Instructor mode: {value}")
+    return aliases[normalized]
+
+
+def instructor_mode_value(value: Any) -> Any:
+    import instructor
+
+    mode = normalize_instructor_mode_name(value)
+    if mode == "json":
+        return instructor.Mode.JSON
+    if mode == "tools":
+        return instructor.Mode.TOOLS
+    if mode == "tools_strict":
+        return instructor.Mode.TOOLS_STRICT
+    if mode == "md_json":
+        return instructor.Mode.MD_JSON
+    raise ValueError(f"Unknown Instructor mode: {value}")
+
+
+def instructor_extra_body(extra_body: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not extra_body:
+        return None
+    cleaned = {key: value for key, value in extra_body.items() if key != "response_format"}
+    return cleaned or None
+
+
+def instructor_completion(
+    host: str,
+    model: str,
+    prompt: str,
+    temperature: float,
+    top_p: float,
+    max_tokens: int = 256,
+    timeout_s: int = 120,
+    api_key_env: str = "LOCAL_OPENAI_API_KEY",
+    response_format: Mapping[str, Any] | None = None,
+    extra_body: Mapping[str, Any] | None = None,
+    task: str = "task1",
+    batched: bool = False,
+    instructor_mode: str = "json",
+    validation_retries: int = 2,
+    response_model: Any | None = None,
+) -> dict[str, Any]:
+    del response_format
+    import instructor
+
+    api_key = os.getenv(api_key_env, "EMPTY")
+    base_client = OpenAI(base_url=host.rstrip("/") + "/", api_key=api_key, timeout=timeout_s)
+    client = instructor.from_openai(base_client, mode=instructor_mode_value(instructor_mode))
+    model_type = response_model or so.response_model_for_task(task, batched=batched)
+    start = time.perf_counter()
+    try:
+        request_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "response_model": model_type,
+            "max_retries": nonnegative_int(validation_retries, "validation_retries"),
+        }
+        cleaned_extra_body = instructor_extra_body(extra_body)
+        if cleaned_extra_body:
+            request_kwargs["extra_body"] = cleaned_extra_body
+        parsed = client.chat.completions.create(**request_kwargs)
+        payload = parsed.model_dump(mode="json")
+        return {
+            "ok": True,
+            "raw_text": json.dumps(payload, ensure_ascii=False),
+            "response_json": {"instructor_validated": payload},
+            "latency_s": time.perf_counter() - start,
+            "error": "",
+        }
+    except Exception as exc:
+        error_name = exc.__class__.__name__
+        parse_status_override = (
+            "instructor_validation_error"
+            if "Retry" in error_name or "Validation" in error_name or "Instructor" in error_name
+            else ""
+        )
+        raw_text = str(getattr(exc, "last_completion", "") or "")
+        return {
+            "ok": False,
+            "raw_text": raw_text,
+            "response_json": None,
+            "latency_s": time.perf_counter() - start,
+            "error": repr(exc),
+            "parse_status_override": parse_status_override,
         }
 
 
@@ -2521,8 +2760,31 @@ def build_raw_record(
     batch_size: int | str = "",
     batch_item_count: int | str = "",
     batch_prompt_hash: str = "",
+    output_contract_version: str = "",
+    confidence_scale: str = "",
 ) -> dict[str, Any]:
-    parsed_json, parse_status = parse_task_response(task, completion.get("raw_text", ""))
+    record_contract_version = output_contract_version
+    record_confidence_scale = confidence_scale
+    if not record_contract_version and (
+        prompt_version_uses_confidence_0_1(prompt_version) or prompt_text_uses_confidence_0_1(prompt)
+    ):
+        record_contract_version = so.PROMPT_OUTPUT_CONTRACT_VERSION
+    if not record_confidence_scale:
+        record_confidence_scale = confidence_scale_for_record(
+            {
+                "prompt_version": prompt_version,
+                "output_contract_version": record_contract_version,
+                "prompt": prompt,
+            }
+        )
+    if output_contract_version == so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION:
+        parsed_json, parse_status = parse_instructor_task_response(task, completion.get("raw_text", ""))
+    else:
+        parsed_json, parse_status = parse_task_response(
+            task,
+            completion.get("raw_text", ""),
+            confidence_scale=record_confidence_scale,
+        )
     parse_status_override = str(completion.get("parse_status_override", "")).strip()
     if parse_status_override:
         parsed_json = None
@@ -2578,6 +2840,10 @@ def build_raw_record(
         record["batch_item_count"] = int(batch_item_count)
     if batch_prompt_hash:
         record["batch_prompt_hash"] = batch_prompt_hash
+    if record_contract_version:
+        record["output_contract_version"] = record_contract_version
+    if record_confidence_scale != CONFIDENCE_SCALE_0_100:
+        record["confidence_scale"] = record_confidence_scale
     if "template_id" in item:
         record["template_id"] = item["template_id"]
     for key in [
@@ -2594,21 +2860,82 @@ def build_raw_record(
     return record
 
 
+def job_uses_instructor(job: Mapping[str, Any]) -> bool:
+    return normalize_structured_output_mode(job.get("structured_output")) == "instructor"
+
+
+def output_contract_version_for_job(job: Mapping[str, Any]) -> str:
+    if job_uses_instructor(job):
+        return so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION
+    if prompt_version_uses_confidence_0_1(job.get("prompt_version")):
+        return so.PROMPT_OUTPUT_CONTRACT_VERSION
+    return ""
+
+
+def confidence_scale_for_job(job: Mapping[str, Any]) -> str:
+    if job_uses_instructor(job) or prompt_version_uses_confidence_0_1(job.get("prompt_version")):
+        return CONFIDENCE_SCALE_0_1
+    return ""
+
+
+def completion_runner_for_job(
+    job: Mapping[str, Any],
+    completion_fn: Callable[..., dict[str, Any]],
+) -> Callable[..., dict[str, Any]]:
+    if job_uses_instructor(job) and completion_fn is chat_completion:
+        return instructor_completion
+    return completion_fn
+
+
+def completion_kwargs_for_job(
+    job: Mapping[str, Any],
+    *,
+    prompt: str,
+    max_tokens: int,
+    response_format: Mapping[str, Any] | None,
+    extra_body: Mapping[str, Any] | None,
+    batched: bool,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "host": str(job["host"]),
+        "model": str(job["model"]),
+        "prompt": prompt,
+        "temperature": float(job["temperature"]),
+        "top_p": float(job["top_p"]),
+        "max_tokens": int(max_tokens),
+        "timeout_s": int(job.get("timeout_s", 120)),
+        "api_key_env": str(job.get("api_key_env", "LOCAL_OPENAI_API_KEY")),
+        "response_format": response_format,
+        "extra_body": extra_body,
+    }
+    if job_uses_instructor(job):
+        task = str(job["task"])
+        kwargs.update(
+            {
+                "task": task,
+                "batched": batched,
+                "instructor_mode": str(job.get("instructor_mode", "json")),
+                "validation_retries": int(job.get("validation_retries", 2)),
+                "response_model": so.response_model_for_task(task, batched=batched),
+            }
+        )
+    return kwargs
+
+
 def run_completion_job(
     job: Mapping[str, Any],
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
 ) -> dict[str, Any]:
-    completion = completion_fn(
-        host=str(job["host"]),
-        model=str(job["model"]),
-        prompt=str(job["prompt"]),
-        temperature=float(job["temperature"]),
-        top_p=float(job["top_p"]),
-        max_tokens=int(job.get("max_tokens", 256)),
-        timeout_s=int(job.get("timeout_s", 120)),
-        api_key_env=str(job.get("api_key_env", "LOCAL_OPENAI_API_KEY")),
-        response_format=job.get("response_format"),
-        extra_body=job.get("extra_body"),
+    runner = completion_runner_for_job(job, completion_fn)
+    completion = runner(
+        **completion_kwargs_for_job(
+            job,
+            prompt=str(job["prompt"]),
+            max_tokens=int(job.get("max_tokens", 256)),
+            response_format=job.get("response_format"),
+            extra_body=job.get("extra_body"),
+            batched=False,
+        )
     )
     request_index = job.get("request_index")
     return build_raw_record(
@@ -2633,8 +2960,10 @@ def run_completion_job(
         json_mode=bool(job.get("json_mode", False)),
         structured_output=str(job.get("structured_output", "none")),
         response_format=job.get("response_format"),
-        request_extra_body=job.get("extra_body"),
+        request_extra_body=instructor_extra_body(job.get("extra_body")) if job_uses_instructor(job) else job.get("extra_body"),
         server_model_probe=job.get("server_model_probe"),
+        output_contract_version=output_contract_version_for_job(job),
+        confidence_scale=confidence_scale_for_job(job),
     )
 
 
@@ -2659,6 +2988,9 @@ def completion_batch_key(job: Mapping[str, Any]) -> tuple[Any, ...]:
         str(job.get("structured_output", "")),
         compact_json(job.get("response_format")),
         compact_json(job.get("extra_body")),
+        str(job.get("instructor_mode", "")),
+        int(job.get("validation_retries", 0)),
+        int(job.get("fallback_batch_size", 1)),
     )
 
 
@@ -2682,6 +3014,116 @@ def completion_job_batches(jobs: Iterable[Mapping[str, Any]], batch_size: int) -
     return batches
 
 
+def valid_instructor_batch_results(
+    task: str,
+    parsed_results: Mapping[int, Mapping[str, Any]],
+    jobs: list[Mapping[str, Any]],
+) -> tuple[dict[int, dict[str, Any]], list[dict[str, Any]]]:
+    expected = {int(job["request_index"]) for job in jobs}
+    valid: dict[int, dict[str, Any]] = {}
+    fallback_jobs: list[dict[str, Any]] = []
+    for job in jobs:
+        request_index = int(job["request_index"])
+        result = parsed_results.get(request_index)
+        if result is None:
+            fallback_jobs.append(dict(job))
+            continue
+        item_result = {key: value for key, value in result.items() if key != "request_index"}
+        _, parse_status = parse_instructor_task_response(task, json.dumps(item_result, ensure_ascii=False))
+        if parse_status == "ok" and set(parsed_results).issubset(expected):
+            valid[request_index] = item_result
+        else:
+            fallback_jobs.append(dict(job))
+    return valid, fallback_jobs
+
+
+def run_instructor_completion_batch(
+    jobs: list[Mapping[str, Any]],
+    completion_fn: Callable[..., dict[str, Any]] = chat_completion,
+) -> list[dict[str, Any]]:
+    if not jobs:
+        return []
+    if len(jobs) == 1:
+        return [run_completion_job(jobs[0], completion_fn=completion_fn)]
+
+    first = jobs[0]
+    task = str(first["task"])
+    batch_prompt = batch_prompt_for_completion_jobs(jobs)
+    batch_prompt_hash = hashlib.sha256(batch_prompt.encode("utf-8")).hexdigest()
+    batch_id = (
+        f"{first['run_id']}:{first['model']}:{first['task']}:"
+        f"{first['sample_kind']}:{first['sample_index']}:"
+        f"{min(int(job.get('request_index', 0)) for job in jobs)}-"
+        f"{max(int(job.get('request_index', 0)) for job in jobs)}"
+    )
+    runner = completion_runner_for_job(first, completion_fn)
+    completion = runner(
+        **completion_kwargs_for_job(
+            first,
+            prompt=batch_prompt,
+            max_tokens=int(first.get("max_tokens", 256)) * len(jobs),
+            response_format=None,
+            extra_body=first.get("extra_body"),
+            batched=True,
+        )
+    )
+
+    records_by_request_index: dict[int, dict[str, Any]] = {}
+    fallback_jobs = [dict(job) for job in jobs]
+    if completion.get("ok"):
+        parsed_results, batch_parse_status = parse_batch_completion_results(completion.get("raw_text", ""))
+        if batch_parse_status == "ok":
+            valid_results, fallback_jobs = valid_instructor_batch_results(task, parsed_results, jobs)
+            for job in jobs:
+                request_index = int(job["request_index"])
+                result = valid_results.get(request_index)
+                if result is None:
+                    continue
+                item_completion = {
+                    "ok": True,
+                    "raw_text": json.dumps(result, ensure_ascii=False),
+                    "response_json": completion.get("response_json"),
+                    "latency_s": completion.get("latency_s", ""),
+                    "error": "",
+                }
+                records_by_request_index[request_index] = build_raw_record(
+                    run_id=str(job["run_id"]),
+                    model=str(job["model"]),
+                    host=str(job["host"]),
+                    task=str(job["task"]),
+                    item=dict(job["item"]),
+                    sample_index=int(job["sample_index"]),
+                    sample_kind=str(job["sample_kind"]),
+                    temperature=float(job["temperature"]),
+                    top_p=float(job["top_p"]),
+                    prompt_version=str(job["prompt_version"]),
+                    prompt=str(job["prompt"]),
+                    completion=item_completion,
+                    request_index=request_index,
+                    provider_id=str(job.get("provider_id", "")),
+                    profile_id=str(job.get("profile_id", "")),
+                    run_group_id=str(job.get("run_group_id", "")),
+                    base_url=str(job.get("base_url", job.get("host", ""))),
+                    api_key_env=str(job.get("api_key_env", "")),
+                    json_mode=bool(job.get("json_mode", False)),
+                    structured_output=str(job.get("structured_output", "none")),
+                    response_format=None,
+                    request_extra_body=instructor_extra_body(job.get("extra_body")),
+                    server_model_probe=job.get("server_model_probe"),
+                    batch_id=batch_id,
+                    batch_size=len(jobs),
+                    batch_item_count=len(jobs),
+                    batch_prompt_hash=batch_prompt_hash,
+                    output_contract_version=output_contract_version_for_job(job),
+                    confidence_scale=confidence_scale_for_job(job),
+                )
+
+    for fallback_job in fallback_jobs:
+        fallback_record = run_completion_job(fallback_job, completion_fn=completion_fn)
+        records_by_request_index[int(fallback_job["request_index"])] = fallback_record
+    return [records_by_request_index[int(job["request_index"])] for job in jobs]
+
+
 def run_completion_batch(
     jobs: list[Mapping[str, Any]],
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
@@ -2690,6 +3132,8 @@ def run_completion_batch(
         return []
     if len(jobs) == 1:
         return [run_completion_job(jobs[0], completion_fn=completion_fn)]
+    if job_uses_instructor(jobs[0]):
+        return run_instructor_completion_batch(jobs, completion_fn=completion_fn)
 
     first = jobs[0]
     batch_prompt = batch_prompt_for_completion_jobs(jobs)
@@ -2721,6 +3165,8 @@ def run_completion_batch(
         f"{max(int(job.get('request_index', 0)) for job in jobs)}"
     )
     parsed_results, batch_parse_status = parse_batch_completion_results(completion.get("raw_text", ""))
+    if batch_parse_status != "ok":
+        parsed_results = {}
     ordered_fallback_results = list(parsed_results.values())
     use_order_fallback = (
         len(ordered_fallback_results) == len(jobs)
@@ -3315,7 +3761,7 @@ def build_uq_scores(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[st
         if raw.get("sample_kind") != "deterministic":
             continue
         base = score_base(raw, item, "verbalized_confidence", valid_n=1, total_n=1)
-        confidence = float(parsed["confidence"]) / 100.0
+        confidence = confidence_probability(raw, parsed)
         if raw["task"] == "task1":
             pred_yes = 1 if parsed["decision"] == "yes" else 0
             p_yes = confidence if pred_yes else 1.0 - confidence
@@ -3395,7 +3841,7 @@ def build_task3_scores(task3_items: list[dict[str, Any]], raw_rows: list[dict[st
         pred_relation = normalize_relation(parsed.get("relation"))
         if pred_relation is None:
             continue
-        confidence = float(parsed["confidence"]) / 100.0
+        confidence = confidence_probability(raw, parsed)
         gold_relation = item["task3_gold_relation"]
         correct = 1 if pred_relation == gold_relation else 0
         base = score_base(raw, item, "verbalized_confidence", valid_n=1, total_n=1)
@@ -3804,6 +4250,8 @@ def provider_preflight(
     structured_output: str = "none",
     response_format: Mapping[str, Any] | None = None,
     extra_body: Mapping[str, Any] | None = None,
+    instructor_mode: str = "json",
+    validation_retries: int = 2,
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
 ) -> dict[str, Any]:
     resolved_response_format, resolved_extra_body = resolve_response_format_args(
@@ -3818,19 +4266,33 @@ def provider_preflight(
         isinstance(resolved_extra_body, Mapping) and "response_format" in resolved_extra_body
     ):
         resolved_response_format = {"type": "json_object"}
-    completion = completion_fn(
-        host=host,
-        model=model,
-        prompt=LOGPROB_PROBE_PROMPT,
-        temperature=0.0,
-        top_p=1.0,
-        max_tokens=48,
-        timeout_s=timeout_s,
-        api_key_env=api_key_env,
-        response_format=resolved_response_format,
-        extra_body=resolved_extra_body,
+    preflight_job = {
+        "host": host,
+        "model": model,
+        "task": "task1",
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "timeout_s": timeout_s,
+        "api_key_env": api_key_env,
+        "structured_output": structured_output,
+        "instructor_mode": instructor_mode,
+        "validation_retries": validation_retries,
+    }
+    runner = completion_runner_for_job(preflight_job, completion_fn)
+    completion = runner(
+        **completion_kwargs_for_job(
+            preflight_job,
+            prompt=LOGPROB_PROBE_PROMPT,
+            max_tokens=48,
+            response_format=resolved_response_format,
+            extra_body=resolved_extra_body,
+            batched=False,
+        )
     )
-    _, parse_status = parse_task_response("task1", completion.get("raw_text", ""))
+    if normalize_structured_output_mode(structured_output, json_mode=json_mode) == "instructor":
+        _, parse_status = parse_instructor_task_response("task1", completion.get("raw_text", ""))
+    else:
+        _, parse_status = parse_task_response("task1", completion.get("raw_text", ""))
     return {
         "ok": bool(completion.get("ok")) and parse_status == "ok",
         "parse_status": parse_status,
@@ -4097,7 +4559,7 @@ def task2_prompt_sensitivity_summary(benchmark_rows: list[dict[str, Any]], raw_r
             pred_modality = normalize_modality(parsed.get("modality"))
             if pred_modality is None:
                 continue
-            confidence = float(parsed.get("confidence", 0.0)) / 100.0
+            confidence = confidence_probability(raw, parsed)
             gold_modality = item["task2_gold_modality"]
             correct = 1 if pred_modality == gold_modality else 0
             score_rows.append(
@@ -4176,7 +4638,7 @@ def weak_modality_probe_summary(probe_items: list[dict[str, Any]], raw_rows: lis
             pred_modality = normalize_modality(parsed.get("modality"))
             if pred_modality is None:
                 continue
-            confidence = float(parsed.get("confidence", 0.0)) / 100.0
+            confidence = confidence_probability(raw, parsed)
             gold_modality = item["task2_gold_modality"]
             valid_predictions.append(
                 {
@@ -4544,6 +5006,79 @@ def error_detection_auroc(rows: list[dict[str, Any]], task: str) -> float:
     return auroc_score(errors, uncertainty_scores)
 
 
+def selective_deferral_metrics(
+    rows: list[dict[str, Any]],
+    task: str,
+    defer_fractions: Iterable[float] = (0.10, 0.20),
+) -> dict[str, float]:
+    pairs: list[tuple[float, int]] = []
+    for row, error in zip(rows, prediction_error_labels(rows, task)):
+        value = row.get("uncertainty_score", "")
+        if value in {"", None}:
+            continue
+        try:
+            uncertainty = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(uncertainty):
+            continue
+        pairs.append((uncertainty, error))
+
+    metrics: dict[str, float] = {}
+    pairs = sorted(pairs, key=lambda pair: pair[0], reverse=True)
+    total = len(pairs)
+    for fraction in defer_fractions:
+        suffix = f"{int(round(float(fraction) * 100)):02d}"
+        if total == 0:
+            metrics[f"selective_coverage_defer_{suffix}"] = math.nan
+            metrics[f"selective_error_defer_{suffix}"] = math.nan
+            continue
+        defer_n = min(total, int(math.ceil(total * float(fraction))))
+        retained = pairs[defer_n:]
+        metrics[f"selective_coverage_defer_{suffix}"] = len(retained) / total
+        metrics[f"selective_error_defer_{suffix}"] = (
+            sum(error for _, error in retained) / len(retained) if retained else math.nan
+        )
+    return metrics
+
+
+def headline_risk_ci_fields(
+    rows: list[dict[str, Any]],
+    task: str,
+    iterations: int = 1000,
+) -> dict[str, float | str]:
+    fields: dict[str, float | str] = {}
+    for threshold in HIGH_CONFIDENCE_THRESHOLDS:
+        suffix = f"{int(threshold * 100):02d}"
+        if task == "task1":
+            metric_name = f"unsupported_mandatory_acceptance_{suffix}"
+
+            def metric(sample_rows, threshold=threshold):
+                return unsupported_mandatory_acceptance_rate(sample_rows, threshold)
+
+            _, low, high = bootstrap_seed_metric(rows, metric, iterations=iterations)
+            fields[f"{metric_name}_ci_low"] = low
+            fields[f"{metric_name}_ci_high"] = high
+        elif task == "task2":
+            metric_specs = {
+                f"high_conf_overcommit_overcommittable_{suffix}": (
+                    lambda sample_rows, threshold=threshold: task2_high_confidence_overcommitment_rate(
+                        sample_rows,
+                        threshold,
+                        denominator="overcommittable",
+                    )
+                ),
+                f"weak_strengthening_{suffix}": (
+                    lambda sample_rows, threshold=threshold: weak_strengthening_rate(sample_rows, threshold)
+                ),
+            }
+            for metric_name, metric in metric_specs.items():
+                _, low, high = bootstrap_seed_metric(rows, metric, iterations=iterations)
+                fields[f"{metric_name}_ci_low"] = low
+                fields[f"{metric_name}_ci_high"] = high
+    return fields
+
+
 def task3_strengthening_recall(rows: list[dict[str, Any]]) -> float:
     strengthened = [row for row in rows if str(row.get("gold_relation", "")) == "strengthens"]
     if not strengthened:
@@ -4611,6 +5146,7 @@ def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[di
             "brier": brier_score(y_true, calibration_scores),
             "ece": ece_score(y_true, calibration_scores),
             "error_detection_auroc": error_detection_auroc(rows, str(task)),
+            **selective_deferral_metrics(rows, str(task)),
             "parse_failure_rate": float(
                 group_frame["parse_failures"].astype(int).sum()
                 / max(1, int(group_frame["total_n"].astype(int).sum()))

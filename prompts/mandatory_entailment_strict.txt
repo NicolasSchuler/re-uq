@@ -13,6 +13,9 @@ MUST and SHALL are mandatory. SHOULD, MAY, and nice-to-have wording do not entai
 Return JSON only:
 {{
   "decision": "yes" | "no",
-  "confidence": 0-100,
+  "confidence": 0.0-1.0,
   "brief_reason": "<max 12 words>"
 }}
+
+Use confidence as a decimal probability for confidence in the selected decision.
+Do not return percentages such as 95 or strings such as "95%".

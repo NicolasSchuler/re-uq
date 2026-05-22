@@ -1,5 +1,5 @@
 {
-  "run_group_id": "provider-matrix-v2-2026-05",
+  "run_group_id": "provider-matrix-instructor-v2-2026-05",
   "datasets": [
     "nice",
     "mlm_tapt"
@@ -11,7 +11,7 @@
     "task1",
     "task2"
   ],
-  "prompt_version": "v2-conf01",
+  "prompt_version": "v2-instructor-conf01",
   "deterministic": {
     "temperature": 0.0,
     "top_p": 1.0,
@@ -33,38 +33,25 @@
   },
   "profiles": [
     {
-      "profile_id": "local_llama_cpp",
-      "provider_id": "llama_cpp",
-      "base_url": "http://127.0.0.1:1234/v1",
-      "api_key_env": "LOCAL_OPENAI_API_KEY",
-      "models": [
-        "qwen/qwen3.5-9b"
-      ],
-      "concurrency": 4,
-      "batch_size": 4,
-      "timeout_s": 120,
-      "max_tokens": 256,
-      "json_mode": false,
-      "structured_output": "none",
-      "requires_manual_server": true,
-      "notes": "Start llama.cpp with exactly this model before running this profile."
-    },
-    {
       "profile_id": "kit_toolbox",
       "provider_id": "kit_toolbox",
       "base_url": "https://ki-toolbox.scc.kit.edu/api/v1",
       "api_key_env": "KIT_TOOLBOX_API_KEY",
       "models": [
-        "azure.gpt-4.1-mini"
+        "azure.gpt-4.1-mini",
+        "kit.gemma4-31b-it"
       ],
       "concurrency": 2,
       "batch_size": 8,
+      "fallback_batch_size": 1,
       "timeout_s": 180,
       "max_tokens": 256,
       "json_mode": true,
-      "structured_output": "json_schema",
+      "structured_output": "instructor",
+      "instructor_mode": "json",
+      "validation_retries": 2,
       "requires_manual_server": false,
-      "notes": "Coordinate large automated runs with ki-toolbox@scc.kit.edu."
+      "notes": "Instructor/Pydantic v2 output contract with confidence in [0,1]. Coordinate large automated runs with ki-toolbox@scc.kit.edu."
     },
     {
       "profile_id": "zai",
@@ -73,25 +60,27 @@
       "api_key_env": "ZAI_API_KEY",
       "models": [
         "glm-5.1",
+        "glm-5",
         "glm-5-turbo",
-        "glm-4.7"
+        "glm-4.7",
+        "glm-4.5-air"
       ],
       "concurrency": 2,
       "batch_size": 8,
+      "fallback_batch_size": 1,
       "timeout_s": 180,
       "max_tokens": 256,
       "json_mode": true,
-      "structured_output": "json_object",
+      "structured_output": "instructor",
+      "instructor_mode": "json",
+      "validation_retries": 2,
       "extra_body": {
         "thinking": {
           "type": "disabled"
-        },
-        "response_format": {
-          "type": "json_object"
         }
       },
       "requires_manual_server": false,
-      "notes": "GLM Coding Plan endpoint. Standard paid API users should switch this to https://api.z.ai/api/paas/v4."
+      "notes": "GLM Coding Plan endpoint with Instructor validation; standard paid API users should switch this to https://api.z.ai/api/paas/v4."
     }
   ]
 }

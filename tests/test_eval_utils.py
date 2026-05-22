@@ -13,9 +13,41 @@ from scripts import compare_run_matrix as compare_matrix
 from scripts import evaluate_external_ai_probe as external_eval
 from scripts import run_experiment_from_config as run_config_cli
 from scripts import show_run_progress
+from scripts import structured_outputs as so
 
 
 class EvalUtilsTest(unittest.TestCase):
+    def _instructor_task1_jobs(self, seed_count=1):
+        seeds = [
+            {
+                "seed_id": f"S{index + 1:04d}",
+                "source_dataset": "NICE",
+                "original_requirement": f"The system shall export report {index + 1}.",
+                "capability_text_final": f"export report {index + 1}",
+            }
+            for index in range(seed_count)
+        ]
+        benchmark = eu.build_benchmark_items(seeds)
+        mandatory_items = [row for row in benchmark if row["source_modality"] == "mandatory"]
+        return eu.planned_completion_jobs(
+            mandatory_items,
+            tasks=["task1"],
+            model="m1",
+            host="http://localhost:1234/v1",
+            run_id="full-1",
+            prompt_version="v2-instructor-conf01",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+            structured_output="instructor",
+            extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+            validation_retries=3,
+        )
+
     def test_benchmark_labels(self):
         seeds = [
             {
@@ -223,6 +255,211 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(status, "ok")
         self.assertEqual(parsed["decision"], "yes")
         self.assertEqual(parsed["confidence"], 87.0)
+
+    def test_instructor_response_models_enforce_confidence_probability(self):
+        parsed = so.Task2Response.model_validate(
+            {"requirement": "The system MAY export reports.", "modality": "optional", "confidence": 0.95}
+        )
+
+        self.assertEqual(parsed.confidence, 0.95)
+        for bad_confidence in ["0.95", -0.1, 1.1, 95]:
+            with self.subTest(confidence=bad_confidence):
+                with self.assertRaises(Exception):
+                    so.Task2Response.model_validate(
+                        {
+                            "requirement": "The system MAY export reports.",
+                            "modality": "optional",
+                            "confidence": bad_confidence,
+                        }
+                    )
+
+    def test_confidence_probability_handles_legacy_and_instructor_rows(self):
+        legacy = {"parsed_json": {"confidence": 90.0}}
+        prompt_v2_row = {
+            "prompt_version": "v2-conf01",
+            "parsed_json": {"confidence": 0.9},
+        }
+        prompt_contract_row = {
+            "parsed_json": {"confidence": 0.85},
+            "output_contract_version": so.PROMPT_OUTPUT_CONTRACT_VERSION,
+        }
+        instructor_row = {
+            "parsed_json": {"confidence": 0.9},
+            "output_contract_version": so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION,
+            "confidence_scale": so.INSTRUCTOR_CONFIDENCE_SCALE,
+        }
+        instructor_contract_only = {
+            "parsed_json": {"confidence": 0.8},
+            "output_contract_version": so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION,
+        }
+        instructor_scale_only = {
+            "parsed_json": {"confidence": 0.7},
+            "confidence_scale": so.INSTRUCTOR_CONFIDENCE_SCALE,
+        }
+
+        self.assertEqual(eu.confidence_probability(legacy), 0.9)
+        self.assertEqual(eu.confidence_probability(prompt_v2_row), 0.9)
+        self.assertEqual(eu.confidence_probability(prompt_contract_row), 0.85)
+        self.assertEqual(eu.confidence_probability(instructor_row), 0.9)
+        self.assertEqual(eu.confidence_probability(instructor_contract_only), 0.8)
+        self.assertEqual(eu.confidence_probability(instructor_scale_only), 0.7)
+
+    def test_v2_raw_records_mark_probability_confidence_for_non_instructor_runs(self):
+        item = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0001",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall export reports.",
+                    "capability_text_final": "export reports",
+                }
+            ]
+        )[0]
+
+        record = eu.build_raw_record(
+            run_id="full-1",
+            model="m1",
+            host="http://localhost:8000/v1",
+            task="task1",
+            item=item,
+            sample_index=0,
+            sample_kind="deterministic",
+            temperature=0.0,
+            top_p=1.0,
+            prompt_version="v2-conf01",
+            prompt="prompt",
+            completion={
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 0.9, "brief_reason": "ok"}',
+                "latency_s": 0.01,
+                "error": "",
+            },
+            structured_output="json_schema",
+        )
+
+        self.assertEqual(record["parse_status"], "ok")
+        self.assertEqual(record["confidence_scale"], eu.CONFIDENCE_SCALE_0_1)
+        self.assertEqual(record["output_contract_version"], so.PROMPT_OUTPUT_CONTRACT_VERSION)
+        self.assertEqual(eu.confidence_probability(record), 0.9)
+
+    def test_raw_records_infer_probability_scale_from_prompt_contract(self):
+        item = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0001",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall export reports.",
+                    "capability_text_final": "export reports",
+                }
+            ]
+        )[0]
+
+        record = eu.build_raw_record(
+            run_id="full-1",
+            model="m1",
+            host="http://localhost:8000/v1",
+            task="task1",
+            item=item,
+            sample_index=0,
+            sample_kind="deterministic",
+            temperature=0.0,
+            top_p=1.0,
+            prompt_version="v1",
+            prompt='Return JSON only: {"confidence": 0.0-1.0}\nUse confidence as a decimal probability.',
+            completion={
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 0.9, "brief_reason": "ok"}',
+                "latency_s": 0.01,
+                "error": "",
+            },
+        )
+
+        self.assertEqual(record["parse_status"], "ok")
+        self.assertEqual(record["confidence_scale"], eu.CONFIDENCE_SCALE_0_1)
+        self.assertEqual(record["output_contract_version"], so.PROMPT_OUTPUT_CONTRACT_VERSION)
+        self.assertEqual(eu.confidence_probability(record), 0.9)
+
+    def test_v2_raw_records_reject_percentage_confidence_without_legacy_marker(self):
+        item = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0001",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall export reports.",
+                    "capability_text_final": "export reports",
+                }
+            ]
+        )[0]
+
+        record = eu.build_raw_record(
+            run_id="full-1",
+            model="m1",
+            host="http://localhost:8000/v1",
+            task="task1",
+            item=item,
+            sample_index=0,
+            sample_kind="deterministic",
+            temperature=0.0,
+            top_p=1.0,
+            prompt_version="v2-conf01",
+            prompt="prompt",
+            completion={
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 95, "brief_reason": "bad scale"}',
+                "latency_s": 0.01,
+                "error": "",
+            },
+        )
+
+        self.assertEqual(record["parse_status"], "invalid_confidence")
+        self.assertIsNotNone(record["parsed_json"])
+
+    def test_task1_selected_label_confidence_sets_p_yes_for_yes_and_no(self):
+        benchmark = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0001",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall export reports.",
+                    "capability_text_final": "export reports",
+                }
+            ]
+        )
+        item_by_modality = {row["source_modality"]: row for row in benchmark}
+        raw_rows = [
+            {
+                "run_id": "full-1",
+                "model": "m1",
+                "task": "task1",
+                "item_id": item_by_modality["mandatory"]["item_id"],
+                "sample_kind": "deterministic",
+                "sample_index": 0,
+                "parse_status": "ok",
+                "parsed_json": {"decision": "yes", "confidence": 0.8, "brief_reason": "mandatory"},
+                "output_contract_version": so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION,
+                "confidence_scale": so.INSTRUCTOR_CONFIDENCE_SCALE,
+            },
+            {
+                "run_id": "full-1",
+                "model": "m1",
+                "task": "task1",
+                "item_id": item_by_modality["optional"]["item_id"],
+                "sample_kind": "deterministic",
+                "sample_index": 0,
+                "parse_status": "ok",
+                "parsed_json": {"decision": "no", "confidence": 0.7, "brief_reason": "optional"},
+                "output_contract_version": so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION,
+                "confidence_scale": so.INSTRUCTOR_CONFIDENCE_SCALE,
+            },
+        ]
+
+        scores = eu.build_uq_scores(benchmark, raw_rows)
+        score_by_item = {row["item_id"]: row for row in scores}
+
+        self.assertEqual(score_by_item[item_by_modality["mandatory"]["item_id"]]["confidence"], 0.8)
+        self.assertEqual(score_by_item[item_by_modality["mandatory"]["item_id"]]["p_yes"], 0.8)
+        self.assertEqual(score_by_item[item_by_modality["optional"]["item_id"]]["confidence"], 0.7)
+        self.assertAlmostEqual(score_by_item[item_by_modality["optional"]["item_id"]]["p_yes"], 0.3)
 
     def test_auto_capability_text_strips_quotes_and_boilerplate(self):
         self.assertEqual(
@@ -589,6 +826,41 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(summary[0]["over_commitment"], 1.0)
         self.assertEqual(summary[0]["high_conf_overcommit_90"], 1.0)
 
+    def test_weak_modality_probe_summary_uses_instructor_confidence_scale(self):
+        seeds = [
+            {
+                "seed_id": "S0001",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall export reports.",
+                "capability_text_final": "export reports",
+            }
+        ]
+        items = eu.build_weak_modality_probe_items(seeds)
+        item = [row for row in items if row["template_id"] == "useful_if"][0]
+        raw_record = {
+            "run_id": "weak-probe-r1",
+            "model": "m1",
+            "task": "task2",
+            "item_id": item["item_id"],
+            "seed_id": item["seed_id"],
+            "source_modality": item["source_modality"],
+            "sample_kind": "deterministic",
+            "sample_index": 0,
+            "parse_status": "ok",
+            "parsed_json": {
+                "requirement": "The system should export reports.",
+                "modality": "recommended",
+                "confidence": 0.95,
+            },
+            "output_contract_version": so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION,
+            "confidence_scale": so.INSTRUCTOR_CONFIDENCE_SCALE,
+        }
+
+        summary = eu.weak_modality_probe_summary(items, [raw_record])
+
+        self.assertEqual(summary[0]["high_conf_overcommit_90"], 1.0)
+        self.assertEqual(summary[0]["mean_confidence"], 0.95)
+
     def test_qualitative_examples_sorted_by_risk(self):
         benchmark = eu.build_benchmark_items(
             [
@@ -769,13 +1041,15 @@ class EvalUtilsTest(unittest.TestCase):
                 "raw_text": "",
                 "parsed_json": {
                     "relation": "preserves",
-                    "confidence": 90.0,
+                    "confidence": 0.9,
                     "evidence_phrase": "It would be useful if",
                     "brief_reason": "missed upgrade",
                 },
                 "parse_status": "ok",
                 "latency_s": 0.1,
                 "error": "",
+                "output_contract_version": so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION,
+                "confidence_scale": so.INSTRUCTOR_CONFIDENCE_SCALE,
             },
             {
                 "run_id": "task3-r1",
@@ -841,6 +1115,8 @@ class EvalUtilsTest(unittest.TestCase):
         by_method = {row["uq_method"]: row for row in summary}
 
         self.assertEqual({row["task"] for row in scores}, {"task3"})
+        verbalized_score = [row for row in scores if row["uq_method"] == "verbalized_confidence"][0]
+        self.assertEqual(verbalized_score["confidence"], 0.9)
         self.assertEqual(by_method["verbalized_confidence"]["accuracy"], 0.0)
         self.assertEqual(by_method["verbalized_confidence"]["f1_or_macro_f1"], 0.0)
         self.assertEqual(by_method["verbalized_confidence"]["strengthening_recall"], 0.0)
@@ -1041,7 +1317,7 @@ class EvalUtilsTest(unittest.TestCase):
                         "external_item_id": "EXT0001",
                         "requirement": "The system SHALL export reports.",
                         "modality": "optional",
-                        "confidence": 98,
+                        "confidence": 0.98,
                     }
                 )
                 + "\n",
@@ -1052,6 +1328,9 @@ class EvalUtilsTest(unittest.TestCase):
             summary = external_eval.source_condition_summary(scored)
 
             self.assertEqual(validation["parse_errors"], 0)
+            self.assertEqual(validation["confidence_scale"], eu.CONFIDENCE_SCALE_0_1)
+            self.assertTrue(validation["paper_ready"])
+            self.assertIn("raw_output_sha256", validation)
             self.assertTrue(bool(scored.iloc[0]["correct"]))
             self.assertFalse(bool(scored.iloc[0]["label_text_consistent"]))
             self.assertFalse(bool(scored.iloc[0]["text_modality_correct"]))
@@ -1084,15 +1363,112 @@ class EvalUtilsTest(unittest.TestCase):
                 "external_item_id": "EXT0001",
                 "requirement": "The system MAY export reports.",
                 "modality": "optional",
-                "confidence": 90,
+                "confidence": 0.9,
             }
             output_path.write_text(
-                json.dumps(duplicate_row) + "\n" + json.dumps({**duplicate_row, "confidence": 80}) + "\n",
+                json.dumps(duplicate_row) + "\n" + json.dumps({**duplicate_row, "confidence": 0.8}) + "\n",
                 encoding="utf-8",
             )
 
             with self.assertRaisesRegex(ValueError, "duplicate external_item_id.*EXT0001"):
                 external_eval.evaluate_outputs(output_path, gold_path)
+
+    def test_external_comparison_skips_scored_items_without_current_report(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            rows = [
+                {
+                    "correct": True,
+                    "overcommit": False,
+                    "high_conf_overcommit_90": False,
+                    "text_modality_correct": True,
+                    "label_text_consistency": True,
+                    "text_overcommit": False,
+                    "text_high_conf_overcommit_90": False,
+                }
+            ]
+            eu.write_csv_rows(root / "current_model_scored_items.csv", rows)
+            eu.write_csv_rows(root / "stale_model_scored_items.csv", rows)
+            (root / "current_model_evaluation.md").write_text(
+                "- Paper-ready under current contract: no\n",
+                encoding="utf-8",
+            )
+
+            report_path = external_eval.write_external_comparison_report(root)
+
+            self.assertIsNotNone(report_path)
+            text = report_path.read_text(encoding="utf-8")
+            self.assertIn("current_model", text)
+            self.assertIn("paper_ready", text)
+            self.assertNotIn("stale_model", text)
+
+    def test_external_evaluator_uses_confidence_probability_scale(self):
+        self.assertTrue(external_eval.valid_probability_confidence(0.95))
+        self.assertFalse(external_eval.valid_probability_confidence(95))
+        self.assertFalse(external_eval.valid_probability_confidence("95%"))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            gold_path = root / "gold.csv"
+            output_path = root / "outputs.jsonl"
+            eu.write_csv_rows(
+                gold_path,
+                [
+                    {
+                        "external_item_id": "EXT0001",
+                        "source_kind": "main_benchmark",
+                        "original_item_id": "S0001_optional",
+                        "seed_id": "S0001",
+                        "source_condition": "optional",
+                        "source_modality": "optional",
+                        "task2_gold_modality": "optional",
+                        "capability_text": "export reports",
+                        "source_statement": "The system MAY export reports.",
+                    },
+                    {
+                        "external_item_id": "EXT0002",
+                        "source_kind": "main_benchmark",
+                        "original_item_id": "S0001_recommended",
+                        "seed_id": "S0001",
+                        "source_condition": "recommended",
+                        "source_modality": "recommended",
+                        "task2_gold_modality": "recommended",
+                        "capability_text": "export reports",
+                        "source_statement": "The system SHOULD export reports.",
+                    },
+                ],
+            )
+            output_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "external_item_id": "EXT0001",
+                                "requirement": "The system MAY export reports.",
+                                "modality": "optional",
+                                "confidence": 0.95,
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "external_item_id": "EXT0002",
+                                "requirement": "The system SHOULD export reports.",
+                                "modality": "recommended",
+                                "confidence": 95,
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            scored, validation = external_eval.evaluate_outputs(output_path, gold_path)
+
+            self.assertEqual(validation["invalid_confidence_count"], 1)
+            self.assertFalse(validation["paper_ready"])
+            self.assertIn("invalid_confidence", validation["paper_ready_blockers"])
+            self.assertEqual(float(scored.loc[scored["external_item_id"].eq("EXT0001"), "confidence_num"].iloc[0]), 0.95)
 
     def test_stochastic_uq_scores(self):
         benchmark = eu.build_benchmark_items(
@@ -1278,6 +1654,50 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual(eu.error_detection_auroc(rows, "task1"), 1.0)
 
+    def test_selective_deferral_reports_retained_error_rate(self):
+        rows = [
+            {"task": "task1", "y_true": 1, "y_pred": 1, "uncertainty_score": 0.1},
+            {"task": "task1", "y_true": 0, "y_pred": 1, "uncertainty_score": 0.9},
+            {"task": "task1", "y_true": 0, "y_pred": 0, "uncertainty_score": 0.2},
+            {"task": "task1", "y_true": 1, "y_pred": 1, "uncertainty_score": 0.3},
+        ]
+
+        metrics = eu.selective_deferral_metrics(rows, "task1", defer_fractions=(0.25,))
+
+        self.assertEqual(metrics["selective_coverage_defer_25"], 0.75)
+        self.assertEqual(metrics["selective_error_defer_25"], 0.0)
+
+    def test_headline_risk_ci_fields_cover_task1_and_task2_metrics(self):
+        task1_rows = [
+            {"seed_id": "S0001", "task": "task1", "y_true": 0, "p_yes": 0.95},
+            {"seed_id": "S0002", "task": "task1", "y_true": 0, "p_yes": 0.40},
+            {"seed_id": "S0003", "task": "task1", "y_true": 1, "p_yes": 0.99},
+        ]
+        task2_rows = [
+            {
+                "seed_id": "S0001",
+                "task": "task2",
+                "gold_modality": "nice_to_have",
+                "pred_modality": "recommended",
+                "confidence": 0.95,
+            },
+            {
+                "seed_id": "S0002",
+                "task": "task2",
+                "gold_modality": "optional",
+                "pred_modality": "optional",
+                "confidence": 0.95,
+            },
+        ]
+
+        task1_fields = eu.headline_risk_ci_fields(task1_rows, "task1", iterations=10)
+        task2_fields = eu.headline_risk_ci_fields(task2_rows, "task2", iterations=10)
+
+        self.assertIn("unsupported_mandatory_acceptance_90_ci_low", task1_fields)
+        self.assertIn("unsupported_mandatory_acceptance_90_ci_high", task1_fields)
+        self.assertIn("high_conf_overcommit_overcommittable_90_ci_low", task2_fields)
+        self.assertIn("weak_strengthening_90_ci_high", task2_fields)
+
     def test_response_logprob_tokens_are_detected(self):
         response_json = {
             "choices": [
@@ -1458,7 +1878,7 @@ class EvalUtilsTest(unittest.TestCase):
             captured.update(kwargs)
             return {
                 "ok": True,
-                "raw_text": '{"decision": "yes", "confidence": 80, "brief_reason": "ok"}',
+                "raw_text": '{"decision": "yes", "confidence": 0.8, "brief_reason": "ok"}',
                 "response_json": {},
                 "latency_s": 0.01,
                 "error": "",
@@ -1593,7 +2013,7 @@ class EvalUtilsTest(unittest.TestCase):
                             {
                                 "request_index": item["request_index"],
                                 "decision": "yes",
-                                "confidence": 80,
+                                "confidence": 0.8,
                                 "brief_reason": "batched",
                             }
                             for item in items
@@ -1623,6 +2043,445 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertIsNone(response_format)
         self.assertEqual(extra_body["thinking"]["type"], "disabled")
         self.assertEqual(extra_body["response_format"]["type"], "json_schema")
+
+    def test_instructor_profile_strips_response_format_and_sets_defaults(self):
+        profile = eu.normalize_provider_profile(
+            {
+                "profile_id": "zai",
+                "provider_id": "zai",
+                "base_url": "https://api.z.ai/api/coding/paas/v4",
+                "models": ["glm-5.1"],
+                "structured_output": "instructor",
+                "extra_body": {"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+            }
+        )
+
+        self.assertEqual(profile["structured_output"], "instructor")
+        self.assertEqual(profile["instructor_mode"], "json")
+        self.assertEqual(profile["validation_retries"], 2)
+        self.assertEqual(profile["fallback_batch_size"], 1)
+        self.assertEqual(profile["extra_body"], {"thinking": {"type": "disabled"}})
+        self.assertIsNone(profile["response_format"])
+
+    def test_instructor_completion_passes_response_model_retries_mode_and_clean_extra_body(self):
+        import instructor
+
+        captured = {}
+
+        class ParsedResponse:
+            def model_dump(self, mode):
+                captured["dump_mode"] = mode
+                return {"decision": "yes", "confidence": 0.82, "brief_reason": "valid"}
+
+        class DummyCompletions:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+                return ParsedResponse()
+
+        class DummyChat:
+            completions = DummyCompletions()
+
+        class DummyInstructorClient:
+            chat = DummyChat()
+
+        with mock.patch("scripts.eval_utils.OpenAI") as openai_cls, mock.patch(
+            "instructor.from_openai", return_value=DummyInstructorClient()
+        ) as from_openai:
+            result = eu.instructor_completion(
+                host="http://localhost:1234/v1",
+                model="m1",
+                prompt="prompt",
+                temperature=0.0,
+                top_p=1.0,
+                max_tokens=64,
+                timeout_s=30,
+                api_key_env="LOCAL_OPENAI_API_KEY",
+                response_format={"type": "json_object"},
+                extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+                task="task1",
+                instructor_mode="json",
+                validation_retries=3,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(json.loads(result["raw_text"])["confidence"], 0.82)
+        self.assertEqual(captured["response_model"], so.Task1Response)
+        self.assertEqual(captured["max_retries"], 3)
+        self.assertEqual(captured["extra_body"], {"thinking": {"type": "disabled"}})
+        self.assertNotIn("response_format", captured)
+        self.assertEqual(captured["dump_mode"], "json")
+        openai_cls.assert_called_once()
+        self.assertEqual(from_openai.call_args.kwargs["mode"], instructor.Mode.JSON)
+
+    def test_instructor_completion_validation_retry_failure_is_marked_for_parser(self):
+        class InstructorValidationFailure(Exception):
+            pass
+
+        class DummyCompletions:
+            def create(self, **kwargs):
+                exc = InstructorValidationFailure("bad model output")
+                exc.last_completion = '{"decision":"yes","confidence":95,"brief_reason":"bad scale"}'
+                raise exc
+
+        class DummyChat:
+            completions = DummyCompletions()
+
+        class DummyInstructorClient:
+            chat = DummyChat()
+
+        with mock.patch("scripts.eval_utils.OpenAI"), mock.patch(
+            "instructor.from_openai", return_value=DummyInstructorClient()
+        ):
+            result = eu.instructor_completion(
+                host="http://localhost:1234/v1",
+                model="m1",
+                prompt="prompt",
+                temperature=0.0,
+                top_p=1.0,
+                task="task1",
+                validation_retries=2,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["parse_status_override"], "instructor_validation_error")
+        self.assertIn("confidence", result["raw_text"])
+
+    def test_instructor_single_item_writes_validated_contract_markers(self):
+        benchmark = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0001",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall export reports.",
+                    "capability_text_final": "export reports",
+                }
+            ]
+        )
+        jobs = eu.planned_completion_jobs(
+            benchmark[:1],
+            tasks=["task1"],
+            model="m1",
+            host="http://localhost:1234/v1",
+            run_id="full-1",
+            prompt_version="v2-instructor-conf01",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+            structured_output="instructor",
+            extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+        )
+        captured = {}
+
+        def fake_completion(**kwargs):
+            captured.update(kwargs)
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 0.8, "brief_reason": "ok"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        record = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
+
+        self.assertEqual(captured["task"], "task1")
+        self.assertFalse(captured["batched"])
+        self.assertEqual(captured["extra_body"], {"thinking": {"type": "disabled"}})
+        self.assertEqual(record["parse_status"], "ok")
+        self.assertEqual(record["parsed_json"]["confidence"], 0.8)
+        self.assertEqual(record["output_contract_version"], so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION)
+        self.assertEqual(record["confidence_scale"], so.INSTRUCTOR_CONFIDENCE_SCALE)
+
+    def test_instructor_batch_partial_results_fall_back_unbatched(self):
+        seeds = [
+            {
+                "seed_id": "S0001",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall export reports.",
+                "capability_text_final": "export reports",
+            },
+            {
+                "seed_id": "S0002",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall print invoices.",
+                "capability_text_final": "print invoices",
+            },
+        ]
+        benchmark = eu.build_benchmark_items(seeds)
+        jobs = eu.planned_completion_jobs(
+            [row for row in benchmark if row["source_modality"] == "mandatory"],
+            tasks=["task1"],
+            model="m1",
+            host="http://localhost:1234/v1",
+            run_id="full-1",
+            prompt_version="v2-instructor-conf01",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+            structured_output="instructor",
+        )
+        calls = []
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            if kwargs["batched"]:
+                items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+                return {
+                    "ok": True,
+                    "raw_text": json.dumps(
+                        {
+                            "results": [
+                                {
+                                    "request_index": items[0]["request_index"],
+                                    "decision": "yes",
+                                    "confidence": 0.8,
+                                    "brief_reason": "batched",
+                                }
+                            ]
+                        }
+                    ),
+                    "response_json": {},
+                    "latency_s": 0.01,
+                    "error": "",
+                }
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 0.9, "brief_reason": "fallback"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=2))
+
+        self.assertEqual([call["batched"] for call in calls], [True, False])
+        self.assertEqual(len(records), 2)
+        self.assertEqual({record["parse_status"] for record in records}, {"ok"})
+        self.assertEqual(records[0]["parsed_json"]["confidence"], 0.8)
+        self.assertEqual(records[1]["parsed_json"]["confidence"], 0.9)
+
+    def test_instructor_batch_invalid_item_falls_back_unbatched(self):
+        jobs = self._instructor_task1_jobs(seed_count=2)
+        calls = []
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            if kwargs["batched"]:
+                items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+                return {
+                    "ok": True,
+                    "raw_text": json.dumps(
+                        {
+                            "results": [
+                                {
+                                    "request_index": items[0]["request_index"],
+                                    "decision": "yes",
+                                    "confidence": 0.8,
+                                    "brief_reason": "valid batch item",
+                                },
+                                {
+                                    "request_index": items[1]["request_index"],
+                                    "decision": "yes",
+                                    "confidence": 95,
+                                    "brief_reason": "bad scale",
+                                },
+                            ]
+                        }
+                    ),
+                    "response_json": {},
+                    "latency_s": 0.01,
+                    "error": "",
+                }
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 0.91, "brief_reason": "fallback"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=2))
+
+        self.assertEqual([call["batched"] for call in calls], [True, False])
+        self.assertEqual({record["parse_status"] for record in records}, {"ok"})
+        self.assertEqual(records[0]["parsed_json"]["confidence"], 0.8)
+        self.assertEqual(records[1]["parsed_json"]["confidence"], 0.91)
+
+    def test_instructor_batch_unknown_request_index_falls_back_unbatched(self):
+        jobs = self._instructor_task1_jobs(seed_count=2)
+        calls = []
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            if kwargs["batched"]:
+                return {
+                    "ok": True,
+                    "raw_text": json.dumps(
+                        {
+                            "results": [
+                                {
+                                    "request_index": 999,
+                                    "decision": "yes",
+                                    "confidence": 0.8,
+                                    "brief_reason": "unknown index",
+                                }
+                            ]
+                        }
+                    ),
+                    "response_json": {},
+                    "latency_s": 0.01,
+                    "error": "",
+                }
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 0.77, "brief_reason": "fallback"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=2))
+
+        self.assertEqual([call["batched"] for call in calls], [True, False, False])
+        self.assertEqual({record["parse_status"] for record in records}, {"ok"})
+        self.assertEqual([record["parsed_json"]["confidence"] for record in records], [0.77, 0.77])
+
+    def test_instructor_batch_duplicate_request_index_falls_back_unbatched(self):
+        jobs = self._instructor_task1_jobs(seed_count=2)
+        calls = []
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            if kwargs["batched"]:
+                items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+                duplicate_index = items[0]["request_index"]
+                return {
+                    "ok": True,
+                    "raw_text": json.dumps(
+                        {
+                            "results": [
+                                {
+                                    "request_index": duplicate_index,
+                                    "decision": "yes",
+                                    "confidence": 0.8,
+                                    "brief_reason": "first copy",
+                                },
+                                {
+                                    "request_index": duplicate_index,
+                                    "decision": "yes",
+                                    "confidence": 0.9,
+                                    "brief_reason": "duplicate copy",
+                                },
+                            ]
+                        }
+                    ),
+                    "response_json": {},
+                    "latency_s": 0.01,
+                    "error": "",
+                }
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 0.76, "brief_reason": "fallback"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=2))
+
+        parsed_results, parse_status = eu.parse_batch_completion_results(
+            json.dumps(
+                {
+                    "results": [
+                        {"request_index": 1, "decision": "yes", "confidence": 0.8, "brief_reason": "a"},
+                        {"request_index": 1, "decision": "yes", "confidence": 0.9, "brief_reason": "b"},
+                    ]
+                }
+            )
+        )
+        self.assertEqual(parse_status, "duplicate_request_index")
+        self.assertEqual(set(parsed_results), {1})
+        self.assertEqual([call["batched"] for call in calls], [True, False, False])
+        self.assertEqual({record["parse_status"] for record in records}, {"ok"})
+        self.assertEqual([record["parsed_json"]["confidence"] for record in records], [0.76, 0.76])
+
+    def test_instructor_malformed_batch_and_failed_fallback_remain_pending(self):
+        jobs = self._instructor_task1_jobs(seed_count=2)
+        calls = []
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            if kwargs["batched"]:
+                return {
+                    "ok": True,
+                    "raw_text": "not json",
+                    "response_json": {},
+                    "latency_s": 0.01,
+                    "error": "",
+                }
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 95, "brief_reason": "bad scale"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=2))
+
+        self.assertEqual([call["batched"] for call in calls], [True, False, False])
+        self.assertEqual({record["parse_status"] for record in records}, {"instructor_validation_error"})
+        self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs))
+
+    def test_instructor_failed_fallback_stays_pending(self):
+        benchmark = eu.build_benchmark_items(
+            [
+                {
+                    "seed_id": "S0001",
+                    "source_dataset": "NICE",
+                    "original_requirement": "The system shall export reports.",
+                    "capability_text_final": "export reports",
+                }
+            ]
+        )
+        jobs = eu.planned_completion_jobs(
+            benchmark[:1],
+            tasks=["task1"],
+            model="m1",
+            host="http://localhost:1234/v1",
+            run_id="full-1",
+            prompt_version="v2-instructor-conf01",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+            structured_output="instructor",
+        )
+
+        def fake_completion(**kwargs):
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 95, "brief_reason": "bad scale"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=1))
+
+        self.assertEqual(records[0]["parse_status"], "instructor_validation_error")
+        self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), 1)
 
     def test_zai_example_uses_coding_plan_endpoint(self):
         config = eu.load_run_config("run_configs/full_matrix.example.json")
@@ -1675,7 +2534,7 @@ class EvalUtilsTest(unittest.TestCase):
                             {
                                 "request_index": item["request_index"],
                                 "decision": "yes",
-                                "confidence": 80,
+                                "confidence": 0.8,
                                 "brief_reason": "batched",
                             }
                             for item in items

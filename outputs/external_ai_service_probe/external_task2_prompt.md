@@ -1,5 +1,7 @@
 # External High-Capacity Model Probe: Modality-Preserving Extraction
 
+Prompt version: `external-task2-v2-conf01`
+
 Please process the uploaded file `external_task2_inputs.csv`.
 
 ## Task
@@ -29,7 +31,7 @@ Return JSON only:
 {
   "requirement": "...",
   "modality": "mandatory" | "recommended" | "optional" | "nice_to_have",
-  "confidence": 0-100
+  "confidence": 0.0-1.0
 }
 ```
 
@@ -45,7 +47,7 @@ Each JSONL object must have exactly these fields:
   "external_item_id": "EXT0001",
   "requirement": "...",
   "modality": "mandatory",
-  "confidence": 95
+  "confidence": 0.95
 }
 ```
 
@@ -53,6 +55,7 @@ Requirements:
 
 - Preserve every `external_item_id` exactly as given.
 - Produce exactly one JSONL object for every row in the uploaded file.
-- Use numeric confidence from `0` to `100`.
+- Use numeric confidence from `0.0` to `1.0`.
+- Confidence is for the selected modality label; do not return percentages such as `95` or strings such as `"95%"`.
 - Do not add any labels beyond the four allowed modality labels.
 - Treat the external IDs as opaque identifiers; do not infer labels from them.

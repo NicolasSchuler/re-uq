@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import re
 from pathlib import Path
@@ -15,6 +16,34 @@ except ModuleNotFoundError:  # pragma: no cover - exercised when imported as pac
 
 
 ALLOWED_MODALITIES = set(eu.MODALITIES)
+EXTERNAL_CONFIDENCE_SCALE = eu.CONFIDENCE_SCALE_0_1
+
+
+def validation_blockers(validation: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    if validation.get("parse_errors"):
+        blockers.append("parse_errors")
+    if validation.get("missing_ids"):
+        blockers.append("missing_ids")
+    if validation.get("extra_ids"):
+        blockers.append("extra_ids")
+    if validation.get("invalid_label_count"):
+        blockers.append("invalid_labels")
+    if validation.get("invalid_confidence_count"):
+        blockers.append("invalid_confidence")
+    if validation.get("output_rows") != validation.get("gold_rows"):
+        blockers.append("row_count_mismatch")
+    return blockers
+
+
+def valid_probability_confidence(value: Any) -> bool:
+    if isinstance(value, bool) or isinstance(value, str):
+        return False
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return False
+    return 0.0 <= confidence <= 1.0
 
 
 def slugify(value: str) -> str:
@@ -55,7 +84,7 @@ def evaluate_outputs(output_path: Path, gold_key_path: Path) -> tuple[pd.DataFra
 
     outputs["confidence_num"] = pd.to_numeric(outputs["confidence"], errors="coerce")
     outputs["valid_label"] = outputs["modality"].isin(ALLOWED_MODALITIES)
-    outputs["valid_confidence"] = outputs["confidence_num"].between(0, 100, inclusive="both")
+    outputs["valid_confidence"] = outputs["confidence"].map(valid_probability_confidence)
 
     duplicate_ids = int(outputs["external_item_id"].duplicated().sum())
     if duplicate_ids:
@@ -80,14 +109,14 @@ def evaluate_outputs(output_path: Path, gold_key_path: Path) -> tuple[pd.DataFra
     merged["pred_strength"] = merged["modality"].map(eu.ORDINAL_STRENGTH)
     merged["overcommit"] = merged["pred_strength"] > merged["gold_strength"]
     merged["undercommit"] = merged["pred_strength"] < merged["gold_strength"]
-    merged["high_conf_overcommit_80"] = merged["overcommit"] & (merged["confidence_num"] >= 80)
-    merged["high_conf_overcommit_90"] = merged["overcommit"] & (merged["confidence_num"] >= 90)
+    merged["high_conf_overcommit_80"] = merged["overcommit"] & (merged["confidence_num"] >= 0.80)
+    merged["high_conf_overcommit_90"] = merged["overcommit"] & (merged["confidence_num"] >= 0.90)
     text_rows = [
         eu.text_modality_fields(
             row.get("requirement", ""),
             row.get("task2_gold_modality", ""),
             row.get("modality", ""),
-            float(row.get("confidence_num") or 0.0) / 100.0,
+            float(row.get("confidence_num") or 0.0),
         )
         for row in merged.to_dict(orient="records")
     ]
@@ -104,7 +133,13 @@ def evaluate_outputs(output_path: Path, gold_key_path: Path) -> tuple[pd.DataFra
         "extra_ids": extra_ids,
         "invalid_label_count": int((~outputs["valid_label"]).sum()),
         "invalid_confidence_count": int((~outputs["valid_confidence"]).sum()),
+        "confidence_scale": EXTERNAL_CONFIDENCE_SCALE,
+        "raw_output_sha256": eu.sha256_file(output_path),
+        "gold_key_sha256": eu.sha256_file(gold_key_path),
     }
+    blockers = validation_blockers(validation)
+    validation["paper_ready"] = not blockers
+    validation["paper_ready_blockers"] = blockers
     return merged, validation
 
 
@@ -167,9 +202,21 @@ def markdown_report(
     lines = [
         f"# External Probe Evaluation: {model_name}",
         "",
-        "## Validation",
-        "",
-        f"- Output rows: {validation['output_rows']}",
+    ]
+    if not validation.get("paper_ready"):
+        blockers = ", ".join(validation.get("paper_ready_blockers", [])) or "unknown"
+        lines.extend(
+            [
+                "Legacy/non-paper-ready status: this report does not satisfy the current external-probe contract.",
+                f"Blockers: {blockers}.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Validation",
+            "",
+            f"- Output rows: {validation['output_rows']}",
         f"- Gold rows: {validation['gold_rows']}",
         f"- Parse errors: {validation['parse_errors']}",
         f"- Duplicate IDs: {validation['duplicate_ids']}",
@@ -177,6 +224,14 @@ def markdown_report(
         f"- Extra IDs: {len(validation['extra_ids'])}",
         f"- Invalid labels: {validation['invalid_label_count']}",
         f"- Invalid confidence values: {validation['invalid_confidence_count']}",
+        f"- Confidence scale: {validation.get('confidence_scale', '')}",
+        f"- Prompt version: {validation.get('prompt_version', '')}",
+        f"- Evaluated at UTC: {validation.get('evaluated_at_utc', '')}",
+        f"- Raw output SHA-256: {validation.get('raw_output_sha256', '')}",
+        f"- Gold key SHA-256: {validation.get('gold_key_sha256', '')}",
+        f"- Prompt SHA-256: {validation.get('prompt_sha256', '')}",
+        f"- Paper-ready under current contract: {'yes' if validation.get('paper_ready') else 'no'}",
+        f"- Paper-ready blockers: {', '.join(validation.get('paper_ready_blockers', [])) or 'none'}",
         "",
         "## Overall",
         "",
@@ -185,7 +240,7 @@ def markdown_report(
         f"- Under-commitment rate: {overall['undercommit_rate']:.3f}",
         f"- High-confidence over-commitment >= 0.80: {overall['high_conf_overcommit_80']:.3f}",
         f"- High-confidence over-commitment >= 0.90: {overall['high_conf_overcommit_90']:.3f}",
-        f"- Mean confidence: {overall['mean_confidence']:.1f}",
+        f"- Mean confidence: {overall['mean_confidence']:.3f}",
         f"- Weak-modality accuracy: {overall['weak_accuracy']:.3f}",
         f"- Weak-modality over-commitment rate: {overall['weak_overcommit_rate']:.3f}",
         f"- Text-modality accuracy: {overall['text_modality_accuracy']:.3f}",
@@ -207,13 +262,18 @@ def markdown_report(
         "",
         text_confusion.to_markdown(),
         "",
-    ]
+        ]
+    )
     return "\n".join(lines)
 
 
 def write_external_comparison_report(output_dir: Path) -> Path | None:
     rows: list[dict[str, Any]] = []
     for scored_path in sorted(output_dir.glob("*_scored_items.csv")):
+        model_slug = scored_path.name.removesuffix("_scored_items.csv")
+        paper_ready = evaluation_report_paper_ready(output_dir / f"{model_slug}_evaluation.md")
+        if paper_ready is None:
+            continue
         scored = pd.read_csv(scored_path, dtype=str, keep_default_na=False)
         if scored.empty:
             continue
@@ -231,7 +291,8 @@ def write_external_comparison_report(output_dir: Path) -> Path | None:
             scored[column] = scored[column].astype(str).str.lower().isin({"true", "1", "yes"})
         rows.append(
             {
-                "model_slug": scored_path.name.removesuffix("_scored_items.csv"),
+                "model_slug": model_slug,
+                "paper_ready": "yes" if paper_ready else "no",
                 "n": len(scored),
                 "label_accuracy": scored["correct"].mean(),
                 "label_overcommit": scored["overcommit"].mean(),
@@ -249,6 +310,8 @@ def write_external_comparison_report(output_dir: Path) -> Path | None:
         [
             "# External Probe Comparison",
             "",
+            "Use this table only as an orientation aid; check each individual evaluation report for paper-ready provenance and confidence-scale validity.",
+            "",
             frame.to_markdown(index=False, floatfmt=".3f"),
             "",
         ]
@@ -256,6 +319,16 @@ def write_external_comparison_report(output_dir: Path) -> Path | None:
     path = output_dir / "external_probe_comparison.md"
     path.write_text(report, encoding="utf-8")
     return path
+
+
+def evaluation_report_paper_ready(path: Path) -> bool | None:
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"Paper-ready under current contract:\s*(yes|no)", text, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    return match.group(1).lower() == "yes"
 
 
 def main() -> None:
@@ -272,9 +345,21 @@ def main() -> None:
         type=Path,
         default=eu.project_root() / "outputs/external_ai_service_probe",
     )
+    parser.add_argument("--prompt-version", default="external-task2-v2-conf01")
+    parser.add_argument(
+        "--prompt-path",
+        type=Path,
+        default=eu.project_root() / "outputs/external_ai_service_probe/external_task2_prompt.md",
+    )
     args = parser.parse_args()
 
     scored, validation = evaluate_outputs(args.outputs_jsonl, args.gold_key)
+    validation["prompt_version"] = args.prompt_version
+    validation["prompt_sha256"] = eu.sha256_file(args.prompt_path) if args.prompt_path.exists() else ""
+    validation["evaluated_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not validation["prompt_sha256"]:
+        validation["paper_ready_blockers"] = [*validation.get("paper_ready_blockers", []), "missing_prompt_hash"]
+        validation["paper_ready"] = False
     by_condition = source_condition_summary(scored)
     confusion = pd.crosstab(scored["task2_gold_modality"], scored["modality"], dropna=False)
     text_confusion = pd.crosstab(scored["task2_gold_modality"], scored["text_modality"], dropna=False)

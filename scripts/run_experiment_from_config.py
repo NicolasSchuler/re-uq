@@ -51,7 +51,7 @@ def fake_completion(**kwargs: Any) -> dict[str, Any]:
                     {
                         "request_index": request_index,
                         "decision": "yes",
-                        "confidence": 90,
+                        "confidence": 0.9,
                         "brief_reason": "fake smoke",
                     }
                 )
@@ -70,12 +70,12 @@ def fake_completion(**kwargs: Any) -> dict[str, Any]:
                         "request_index": request_index,
                         "requirement": item["source_statement"],
                         "modality": modality,
-                        "confidence": 90,
+                        "confidence": 0.9,
                     }
                 )
         raw_text = json.dumps({"results": results})
     elif "Candidate requirement:" in prompt or '"decision"' in prompt:
-        raw_text = '{"decision":"yes","confidence":90,"brief_reason":"fake smoke"}'
+        raw_text = '{"decision":"yes","confidence":0.9,"brief_reason":"fake smoke"}'
     else:
         source = source_from_prompt(prompt).lower()
         if "must " in source or "shall " in source:
@@ -89,7 +89,7 @@ def fake_completion(**kwargs: Any) -> dict[str, Any]:
         raw_text = (
             '{"requirement":"'
             + source_from_prompt(prompt).replace("\\", "\\\\").replace('"', '\\"')
-            + f'","modality":"{modality}","confidence":90}}'
+            + f'","modality":"{modality}","confidence":0.9}}'
         )
     return {
         "ok": True,
@@ -167,6 +167,8 @@ def main() -> None:
                 structured_output=str(profile.get("structured_output", "none")),
                 response_format=profile.get("response_format"),
                 extra_body=profile.get("extra_body"),
+                instructor_mode=str(profile.get("instructor_mode", "json")),
+                validation_retries=int(profile.get("validation_retries", 2)),
                 completion_fn=completion_fn,
             )
             if not preflight["ok"]:
@@ -206,6 +208,9 @@ def main() -> None:
                         structured_output=str(profile.get("structured_output", "none")),
                         response_format=profile.get("response_format"),
                         extra_body=profile.get("extra_body"),
+                        instructor_mode=str(profile.get("instructor_mode", "json")),
+                        validation_retries=int(profile.get("validation_retries", 2)),
+                        fallback_batch_size=int(profile.get("fallback_batch_size", 1)),
                         server_model_probe=preflight,
                     )
                     existing_rows = eu.read_jsonl(output_path)

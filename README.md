@@ -17,6 +17,8 @@ Use the environment for local commands:
 ```bash
 source .venv/bin/activate
 .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m coverage run --branch --source=scripts -m unittest discover -s tests -v
+.venv/bin/python -m coverage report -m
 ```
 
 The evaluation utilities intentionally use established libraries from this environment: `pandas`, `numpy`, `scipy`, `scikit-learn`, `matplotlib`, `openai`, `requests`, and `nbformat`.
@@ -51,6 +53,8 @@ The `mlm_tapt` path loads the Hugging Face dataset through `datasets`, excludes 
 
 The final reviewed seed capability documents are committed under `docs/final_seed_documents/` for both NICE/PROMISE and `mlm_tapt`.
 
+## Provider Runs
+
 For reproducible multi-provider runs, copy `run_configs/full_matrix.example.json` to the ignored `run_configs/current_run.json`, edit the provider/model list, and start with a smoke run:
 
 ```bash
@@ -62,7 +66,19 @@ For reproducible multi-provider runs, copy `run_configs/full_matrix.example.json
   --mode smoke
 ```
 
-Then run `--mode full` after the provider preflight and smoke parse checks pass. Provider profiles can set `batch_size` to pack multiple same-task benchmark items into one API request; the runner still writes one canonical raw JSONL row per item/sample so existing analysis remains unchanged. Profiles can also set `structured_output` to `json_object` or `json_schema`; strict JSON Schema is used per task/batch when the provider accepts OpenAI-style structured outputs. The example Z.ai profile uses the GLM Coding Plan endpoint (`https://api.z.ai/api/coding/paas/v4`); switch it to the general endpoint only when using a standard paid API balance. Raw outputs still append to the canonical `data/processed/model_outputs_raw*.jsonl` files; `data/processed/run_registry*.csv` records which provider/model/run IDs are complete. During long runs, the CLI periodically refreshes `data/processed/run_progress_live*.csv` and appends structured events to `data/processed/run_events*.jsonl`. Monitor a run from another terminal with:
+Then run `--mode full` after the provider preflight and smoke parse checks pass.
+
+Provider profiles can set `batch_size` to pack multiple same-task benchmark items into one API request. The runner still writes one canonical raw JSONL row per item/sample so existing analysis remains unchanged.
+
+Profiles can set `structured_output` to `json_object`, `json_schema`, or `instructor`. Current v2 prompts use `confidence` as a `0.0`-to-`1.0` selected-label probability; new v2 raw records include `confidence_scale=0_1`. The Instructor path validates Pydantic response models and retries partial or invalid batches unbatched.
+
+The example Z.ai profile uses the GLM Coding Plan endpoint (`https://api.z.ai/api/coding/paas/v4`). Switch it to the general endpoint only when using a standard paid API balance.
+
+## Monitoring
+
+Raw outputs append to the canonical `data/processed/model_outputs_raw*.jsonl` files. `data/processed/run_registry*.csv` records which provider/model/run IDs are complete. During long runs, the CLI periodically refreshes `data/processed/run_progress_live*.csv` and appends structured events to `data/processed/run_events*.jsonl`.
+
+Monitor a run from another terminal with:
 
 ```bash
 .venv/bin/python scripts/show_run_progress.py --dataset nice --run-id RUN_ID --watch 30
@@ -74,6 +90,10 @@ Compare a completed run group with:
 .venv/bin/python scripts/compare_run_matrix.py --config run_configs/current_run.json
 ```
 
+## Analysis
+
 `notebooks/04_compute_uq_and_metrics.ipynb` analyzes one full experiment run at a time. By default it selects the latest `full-*` run in `data/processed/model_outputs_raw.jsonl`; set `RUN_ID` or `ANALYSIS_RUN_ID` to reproduce metrics for an earlier run.
 
 `notebooks/03b_run_modality_verification.ipynb` adds the Task 3 self-verification diagnostic after a complete full run. It verifies deterministic Task 2 extractions with the same model and caches raw verifier outputs in `data/processed/model_outputs_raw_task3_verification.jsonl`.
+
+The current checked-in metric snapshots are preliminary. Paper-facing claims require a clean post-fix full run, recomputed metrics, and inspected exported figures/tables.

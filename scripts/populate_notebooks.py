@@ -1188,6 +1188,8 @@ def notebook_03b() -> list[nbf.NotebookNode]:
                     "brier",
                     "ece",
                     "error_detection_auroc",
+                    "selective_error_defer_10",
+                    "selective_error_defer_20",
                     "parse_failure_rate",
                 ]
                 print(eu.markdown_table(summary, fields))
@@ -1329,6 +1331,8 @@ def notebook_04() -> list[nbf.NotebookNode]:
                 "false_preserve_rate",
                 "evidence_phrase_source_rate",
                 "error_detection_auroc",
+                "selective_error_defer_10",
+                "selective_error_defer_20",
                 "parse_failure_rate",
             ]
             print(eu.markdown_table(summary, fields))
@@ -1352,7 +1356,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
 
                 acc_point, acc_low, acc_high = eu.bootstrap_seed_metric(rows, acc_metric, iterations=1000)
                 brier_point, brier_low, brier_high = eu.bootstrap_seed_metric(rows, brier_metric, iterations=1000)
-                ci_rows.append({
+                ci_row = {
                     "model": model,
                     "task": task,
                     "uq_method": uq_method,
@@ -1362,12 +1366,30 @@ def notebook_04() -> list[nbf.NotebookNode]:
                     "brier": brier_point,
                     "brier_ci_low": brier_low,
                     "brier_ci_high": brier_high,
-                })
+                }
+                ci_row.update(eu.headline_risk_ci_fields(rows, task, iterations=1000))
+                ci_rows.append(ci_row)
 
             ci_path = eu.artifact_path(PROJECT_ROOT / "data/processed/bootstrap_seed_ci.csv", DATASET_ID, BENCHMARK_VARIANT)
             eu.write_csv_rows(ci_path, ci_rows)
             print(f"Wrote bootstrap CIs: {ci_path}")
-            print(eu.markdown_table(ci_rows, ["model", "task", "uq_method", "accuracy", "accuracy_ci_low", "accuracy_ci_high", "brier", "brier_ci_low", "brier_ci_high"]))
+            print(eu.markdown_table(ci_rows, [
+                "model",
+                "task",
+                "uq_method",
+                "accuracy",
+                "accuracy_ci_low",
+                "accuracy_ci_high",
+                "brier",
+                "brier_ci_low",
+                "brier_ci_high",
+                "unsupported_mandatory_acceptance_80_ci_low",
+                "unsupported_mandatory_acceptance_80_ci_high",
+                "high_conf_overcommit_overcommittable_80_ci_low",
+                "high_conf_overcommit_overcommittable_80_ci_high",
+                "weak_strengthening_80_ci_low",
+                "weak_strengthening_80_ci_high",
+            ]))
             """
         ),
         md("## Sensitivity Check: Recommended Strength = 0.75"),
@@ -1432,6 +1454,8 @@ def notebook_05() -> list[nbf.NotebookNode]:
                 "ece",
                 "auroc",
                 "error_detection_auroc",
+                "selective_error_defer_10",
+                "selective_error_defer_20",
                 "monotonicity_violations",
                 "monotonicity_strict_violations",
                 "monotonicity_tolerance",

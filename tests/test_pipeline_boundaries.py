@@ -226,7 +226,7 @@ class ParsingAndExternalProbeTest(unittest.TestCase):
                                 "external_item_id": "EXT0001",
                                 "requirement": "The system MAY export reports.",
                                 "modality": "optional",
-                                "confidence": 80,
+                                "confidence": 0.8,
                             }
                         ),
                         json.dumps(

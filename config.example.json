@@ -3,7 +3,7 @@
     "seed": 20260518,
     "target_seed_count": 180,
     "pilot_seed_count": 20,
-    "prompt_version": "v1"
+    "prompt_version": "v2-conf01"
   },
   "llm": {
     "host": "http://127.0.0.1:1234/v1",

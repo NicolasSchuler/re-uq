@@ -1,5 +1,8 @@
 # External Probe Evaluation: ChatGPT thinking standard
 
+Legacy/non-paper-ready status: this report does not satisfy the current external-probe contract.
+Blockers: invalid_confidence.
+
 ## Validation
 
 - Output rows: 140
@@ -9,7 +12,15 @@
 - Missing IDs: 0
 - Extra IDs: 0
 - Invalid labels: 0
-- Invalid confidence values: 0
+- Invalid confidence values: 140
+- Confidence scale: 0_1
+- Prompt version: external-task2-v2-conf01
+- Evaluated at UTC: 2026-05-22T10:19:44Z
+- Raw output SHA-256: 0576772179ab8b26550e250e82a51b2186c20b33aeaff77be5586e7e3c3019d1
+- Gold key SHA-256: dec62b6af9d4112863e1111e9f8bb988c608bfa8ceea5c2b63f5452d20945a2d
+- Prompt SHA-256: 1511e86c16ba68d1a8baf3888ebcfbad3093a31b67042cd97c43267c0bc0fef3
+- Paper-ready under current contract: no
+- Paper-ready blockers: invalid_confidence
 
 ## Overall
 
@@ -18,7 +29,7 @@
 - Under-commitment rate: 0.000
 - High-confidence over-commitment >= 0.80: 0.143
 - High-confidence over-commitment >= 0.90: 0.143
-- Mean confidence: 95.1
+- Mean confidence: 95.143
 - Weak-modality accuracy: 0.750
 - Weak-modality over-commitment rate: 0.250
 - Text-modality accuracy: 0.143
