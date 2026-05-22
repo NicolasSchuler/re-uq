@@ -25,6 +25,7 @@ data/processed/uq_scores*.csv
 
 outputs/*
 !outputs/.gitkeep
+!outputs/README.md
 !outputs/benchmark_manifest*.json
 !outputs/benchmark_statements_review*
 !outputs/included_capabilities_review*

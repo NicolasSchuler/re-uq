@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> This file configures AI coding assistants (e.g. Copilot CLI, Codex) that operate on this repository. It is tooling, not part of the published research artifact. Reviewers can safely ignore it. The reader-facing entry points are `README.md`, `docs/repository_layout.md`, and `docs/reproduction.md`.
+
 ## Repository Purpose
 
 This repository supports an Information and Software Technology short communication paper on uncertainty quantification for LLM-assisted requirements engineering.

@@ -1,4 +1,6 @@
-# Phased Evaluation Implementation Plan
+# Phased Evaluation Implementation Plan (Internal Build Log)
+
+> This is the **internal build log** for how the evaluation pipeline was assembled. It is preserved for traceability of design decisions. Readers who want to **reproduce** the experiments should use `docs/reproduction.md` and `docs/architecture.md` instead. Readers who want the **paper-facing framing** should use `docs/paper_framing.md` and `docs/evaluation.md`.
 
 This plan implements the modality-conditioned uncertainty evaluation described in `docs/evaluation.md`.
 

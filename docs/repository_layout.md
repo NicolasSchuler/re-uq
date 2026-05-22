@@ -1,0 +1,52 @@
+# Repository Layout
+
+This document is the single source of truth for the repository map. The `README.md` links here rather than duplicating the structure.
+
+## Top-Level Map
+
+| Path | Purpose |
+| --- | --- |
+| `README.md` | Reader entry point: study abstract and pointers into the docs. |
+| `docs/` | Reader-facing documentation (evaluation spec, reproduction guide, paper framing, results mapping, FAQ). |
+| `docs/internal/` | Internal build logs and design notes preserved for traceability. Not required for reproduction. |
+| `scripts/` | Canonical CLI entry points and shared evaluation utilities. The `scripts/*.py` files are the publication reproduction interface. |
+| `prompts/` | Frozen task prompt contracts (Task 1, Task 2, Task 3, plus prompt-sensitivity variants). |
+| `run_configs/` | Tracked example provider matrices. Local `current_run*.json` files are gitignored. |
+| `data/raw/` | Local-only raw seed inputs. Empty in Git except for `.gitkeep`. |
+| `data/processed/` | Curated benchmark inputs and compact metric snapshots. Raw run outputs are gitignored. |
+| `outputs/` | Curated paper-facing summaries and review artifacts. Run-specific output directories are gitignored. |
+| `notebooks/` | Stripped, generated companion notebooks for narrative inspection. Scripts are the canonical interface. |
+| `tests/` | Unit, CLI, parsing, and notebook-boundary regression checks. |
+| `.github/workflows/` | CI: install via `uv`, run the unittest suite, run a whitespace check. |
+| `AGENTS.md` | AI-assistant tooling configuration. Not a research artifact. |
+| `LICENSE` | License under which the artifact is distributed. |
+| `pyproject.toml`, `uv.lock` | Python project definition and lockfile. |
+
+## Variant Suffix Convention
+
+Several artifacts come in parallel variants. The suffix encodes the variant; the unsuffixed file is the default (NICE/PROMISE, `MUST`).
+
+| Suffix | Meaning |
+| --- | --- |
+| _(no suffix)_ | NICE/PROMISE dataset, `MUST` mandatory variant — the **main** result path. |
+| `_mlm_tapt` | `limsc/mlm-tapt-requirements` dataset, `MUST` variant — **co-primary** dataset. |
+| `_shall` | NICE/PROMISE dataset, `SHALL` robustness variant. |
+| `_mlm_tapt_shall` | `mlm_tapt` dataset, `SHALL` robustness variant. |
+
+Example: `outputs/benchmark_statements_review.csv` is the NICE/MUST review table; `outputs/benchmark_statements_review_mlm_tapt_shall.csv` is the `mlm_tapt`/SHALL review table.
+
+## CSV + Markdown Pair Convention
+
+Many curated artifacts under `outputs/` and `docs/final_seed_documents/` exist as a `.csv` and a sibling `.md` with the same stem. This is intentional: the CSV is the machine-readable evidence, and the Markdown is the human-readable rendering used during review. Both are tracked.
+
+## Where to Look For
+
+| You want to … | Go to … |
+| --- | --- |
+| Understand the study claim and framing | `docs/paper_framing.md`, `docs/evaluation.md` |
+| Reproduce the pipeline end-to-end | `docs/reproduction.md`, `scripts/reproduce.sh` |
+| See how artifacts map to paper figures/tables | `docs/results_mapping.md` |
+| Understand pipeline code architecture | `docs/architecture.md` |
+| Understand Git/artifact policy | `docs/repository_hygiene.md` |
+| Understand anonymization plan for submission | `docs/anonymization.md` |
+| Common reviewer questions | `docs/faq.md` |
