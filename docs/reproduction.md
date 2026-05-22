@@ -2,6 +2,21 @@
 
 This is the command-first path for reproducing the publication artifacts. The notebooks are useful for inspection, but these scripts are the canonical interface for provider runs and final analysis.
 
+## Task → Command Cheat-sheet
+
+| Goal | Command |
+| --- | --- |
+| One-time env setup | `uv sync --group dev --locked` |
+| Sanity-check pipeline without API access | `bash scripts/reproduce.sh smoke-fake` (uses `--fake-completion`) |
+| Smoke test a provider/model cell | `bash scripts/reproduce.sh smoke` |
+| Run Task 1 + Task 2 (main) | `bash scripts/reproduce.sh full` |
+| Run Task 3 diagnostic | `bash scripts/reproduce.sh task3 --source-run-id RUN_ID` |
+| Generate paper-facing analysis | `bash scripts/reproduce.sh analysis --run-id RUN_ID --task3-run-id TASK3_RUN_ID` |
+| Monitor a live run | `.venv/bin/python scripts/show_run_progress.py --dataset mlm_tapt --run-id RUN_ID --watch 30` |
+| Compare completed cells | `.venv/bin/python scripts/compare_run_matrix.py --config run_configs/current_run.json --dataset mlm_tapt` |
+
+`scripts/reproduce.sh` is a thin convenience wrapper around the canonical CLIs documented below; use the raw commands directly when you need fine-grained control.
+
 ## 1. Environment
 
 ```bash
@@ -10,6 +25,8 @@ uv sync --group dev --locked
 ```
 
 If the lock file needs to be refreshed locally, use `uv sync --group dev` and commit the resulting `uv.lock` only when the dependency change is intentional.
+
+For a no-credentials sanity check before configuring a provider, see [`docs/reproduction_smoke.md`](reproduction_smoke.md).
 
 ## 2. Configure A Provider Matrix
 
