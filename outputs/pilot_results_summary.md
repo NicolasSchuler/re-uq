@@ -71,7 +71,7 @@ Run id: `weak-modality-probe-20260518-220538-6a39dfa8`
 
 Purpose: check whether the deterministic Task 2 `nice_to_have` failure was tied to the single source wording `It would be useful if...`.
 
-Pre-model sanity check: the four weak templates were reviewed and marked by Nicolas as weaker than `SHOULD` / `recommended`.
+Pre-model sanity check: the four weak templates were reviewed and marked by R1 as weaker than `SHOULD` / `recommended`.
 
 | template_id | n | parse_success | predicted_nice_to_have | predicted_recommended | predicted_optional | mean_confidence |
 |:--|--:|--:|--:|--:|--:|--:|
