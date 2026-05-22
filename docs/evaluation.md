@@ -116,7 +116,7 @@ Report bootstrap confidence intervals over seeds for accuracy, Brier score, unsu
 
 ## Run Protocol
 
-Use the provider-aware CLI for reproducible provider/model matrices:
+Use the provider-aware CLI for reproducible Task 1 and Task 2 provider/model matrices:
 
 ```bash
 .venv/bin/python scripts/run_experiment_from_config.py \
@@ -127,9 +127,31 @@ Use the provider-aware CLI for reproducible provider/model matrices:
   --mode smoke
 ```
 
-Then run `--mode full` only after provider preflight and smoke parse checks pass. Analyze one complete full run at a time with `notebooks/04_compute_uq_and_metrics.ipynb`, then export paper artifacts with `notebooks/05_analyze_and_export_results.ipynb`.
+Then run `--mode full` only after provider preflight and smoke parse checks pass. Use `--task task1`, `--task task2`, or `--task both` to isolate failures or run the primary matrix.
 
-Task 3 should run only after a complete Task 2 full run.
+Task 3 should run only after a complete Task 2 full run:
+
+```bash
+.venv/bin/python scripts/run_task3_verification_from_config.py \
+  --config run_configs/current_run.json \
+  --profile local_llama_cpp \
+  --model qwen/qwen3.5-9b \
+  --dataset nice \
+  --source-run-id RUN_ID \
+  --mode full
+```
+
+Generate paper-facing analysis artifacts from a complete run with:
+
+```bash
+.venv/bin/python scripts/generate_evaluation_analysis.py \
+  --dataset nice \
+  --variant must \
+  --run-id RUN_ID \
+  --task3-run-id TASK3_RUN_ID
+```
+
+The notebooks remain useful for inspection, but `docs/reproduction.md` is the canonical command-first reproduction guide.
 
 ## External Probe
 

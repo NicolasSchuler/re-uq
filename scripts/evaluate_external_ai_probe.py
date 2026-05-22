@@ -1,3 +1,5 @@
+"""Evaluate blind external web-model outputs for the Task 2 probe."""
+
 from __future__ import annotations
 
 import argparse

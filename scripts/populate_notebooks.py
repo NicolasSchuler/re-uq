@@ -1,3 +1,5 @@
+"""Generate the stripped companion notebooks from version-controlled sources."""
+
 from __future__ import annotations
 
 from pathlib import Path

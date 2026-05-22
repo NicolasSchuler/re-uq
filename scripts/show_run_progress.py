@@ -1,3 +1,5 @@
+"""Read-only progress reporter for provider-aware benchmark runs."""
+
 from __future__ import annotations
 
 import argparse

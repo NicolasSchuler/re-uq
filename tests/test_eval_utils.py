@@ -11,7 +11,9 @@ from unittest import mock
 from scripts import eval_utils as eu
 from scripts import compare_run_matrix as compare_matrix
 from scripts import evaluate_external_ai_probe as external_eval
+from scripts import generate_evaluation_analysis as analysis_cli
 from scripts import run_experiment_from_config as run_config_cli
+from scripts import run_task3_verification_from_config as task3_cli
 from scripts import show_run_progress
 from scripts import structured_outputs as so
 
@@ -2873,6 +2875,249 @@ class EvalUtilsTest(unittest.TestCase):
             finish_event = next(row for row in reversed(events) if row["event_type"] == "finish")
             self.assertEqual(finish_event["pending_jobs"], 0)
             self.assertEqual(finish_event["pending_api_calls"], 0)
+
+    def test_task3_cli_fake_run_writes_diagnostic_outputs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "prompts").mkdir(parents=True)
+            (root / "data/processed").mkdir(parents=True)
+            (root / "AGENTS.md").write_text("", encoding="utf-8")
+            (root / "docs").mkdir()
+            (root / "docs/evaluation.md").write_text("", encoding="utf-8")
+            (root / "prompts/modality_verification.txt").write_text(
+                Path("prompts/modality_verification.txt").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            benchmark = eu.build_benchmark_items(
+                [
+                    {
+                        "seed_id": "S0001",
+                        "source_dataset": "NICE",
+                        "original_requirement": "The system shall export reports.",
+                        "capability_text_final": "export reports",
+                    },
+                    {
+                        "seed_id": "S0002",
+                        "source_dataset": "NICE",
+                        "original_requirement": "The system shall print invoices.",
+                        "capability_text_final": "print invoices",
+                    },
+                ]
+            )
+            eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
+            for item in benchmark:
+                eu.append_jsonl(
+                    root / "data/processed/model_outputs_raw.jsonl",
+                    eu.build_raw_record(
+                        run_id="full-source",
+                        model="fake-model",
+                        host="http://127.0.0.1:1234/v1",
+                        task="task2",
+                        item=item,
+                        sample_index=0,
+                        sample_kind="deterministic",
+                        temperature=0.0,
+                        top_p=1.0,
+                        prompt_version="v2-conf01",
+                        prompt=item["source_statement"],
+                        completion={
+                            "ok": True,
+                            "raw_text": json.dumps(
+                                {
+                                    "requirement": item["source_statement"],
+                                    "modality": item["task2_gold_modality"],
+                                    "confidence": 0.9,
+                                }
+                            ),
+                            "latency_s": 0.0,
+                            "error": "",
+                        },
+                        provider_id="fake",
+                        profile_id="fake",
+                        run_group_id="group1",
+                    ),
+                )
+            config_path = root / "run_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "run_group_id": "task3-group",
+                        "datasets": ["nice"],
+                        "benchmark_variants": ["must"],
+                        "stochastic": {"temperature": 0.7, "top_p": 1.0, "samples": 0},
+                        "profiles": [
+                            {
+                                "profile_id": "fake",
+                                "provider_id": "fake",
+                                "base_url": "http://127.0.0.1:1234/v1",
+                                "api_key_env": "LOCAL_OPENAI_API_KEY",
+                                "models": ["fake-model"],
+                                "concurrency": 1,
+                                "batch_size": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            argv = [
+                "run_task3_verification_from_config.py",
+                "--config",
+                str(config_path),
+                "--profile",
+                "fake",
+                "--model",
+                "fake-model",
+                "--dataset",
+                "nice",
+                "--source-run-id",
+                "full-source",
+                "--mode",
+                "smoke",
+                "--smoke-items",
+                "2",
+                "--fake-completion",
+            ]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(task3_cli.eu, "project_root", return_value=root),
+                redirect_stdout(io.StringIO()),
+            ):
+                task3_cli.main()
+
+            task3_items = eu.read_csv_rows(root / "data/processed/task3_verification_items.csv")
+            task3_rows = eu.read_jsonl(root / "data/processed/model_outputs_raw_task3_verification.jsonl")
+            registry = eu.read_csv_rows(root / "data/processed/run_registry_task3_verification.csv")
+            progress = eu.read_csv_rows(root / "data/processed/run_progress_live_task3_verification.csv")
+            self.assertEqual(len(task3_items), len(benchmark))
+            self.assertEqual(len(task3_rows), 2)
+            self.assertEqual({row["task"] for row in task3_rows}, {"task3"})
+            self.assertEqual({row["parse_status"] for row in task3_rows}, {"ok"})
+            self.assertEqual(registry[0]["status"], "complete")
+            self.assertEqual(registry[0]["tasks"], "task3")
+            self.assertEqual({row["task"] for row in progress}, {"task3"})
+
+    def test_analysis_cli_generates_publication_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "prompts").mkdir(parents=True)
+            (root / "data/processed").mkdir(parents=True)
+            (root / "docs").mkdir(parents=True)
+            for prompt_name in ["mandatory_entailment.txt", "modality_extraction.txt", "modality_verification.txt"]:
+                (root / f"prompts/{prompt_name}").write_text(
+                    Path(f"prompts/{prompt_name}").read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+            review_rows = [{**row, "weaker_than_should": "yes"} for row in eu.weak_modality_construct_review_rows()]
+            eu.write_csv_rows(
+                root / "docs/weak_modality_construct_review.csv",
+                review_rows,
+                fieldnames=eu.WEAK_MODALITY_CONSTRUCT_REVIEW_FIELDS,
+            )
+            benchmark = eu.build_benchmark_items(
+                [
+                    {
+                        "seed_id": "S0001",
+                        "source_dataset": "NICE",
+                        "original_requirement": "The system shall export reports.",
+                        "capability_text_final": "export reports",
+                    }
+                ]
+            )
+            eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
+            task1_template = eu.load_prompt(root / "prompts/mandatory_entailment.txt")
+            task2_template = eu.load_prompt(root / "prompts/modality_extraction.txt")
+            raw_rows = []
+            for item in benchmark:
+                for task in ["task1", "task2"]:
+                    parsed = (
+                        {
+                            "decision": item["task1_gold_decision"],
+                            "confidence": 0.9,
+                            "brief_reason": "test",
+                        }
+                        if task == "task1"
+                        else {
+                            "requirement": item["source_statement"],
+                            "modality": item["task2_gold_modality"],
+                            "confidence": 0.9,
+                        }
+                    )
+                    raw = eu.build_raw_record(
+                        run_id="full-analysis",
+                        model="fake-model",
+                        host="http://127.0.0.1:1234/v1",
+                        task=task,
+                        item=item,
+                        sample_index=0,
+                        sample_kind="deterministic",
+                        temperature=0.0,
+                        top_p=1.0,
+                        prompt_version="v2-conf01",
+                        prompt=eu.prompt_for_benchmark_task(task, item, task1_template, task2_template),
+                        completion={
+                            "ok": True,
+                            "raw_text": json.dumps(parsed),
+                            "latency_s": 0.0,
+                            "error": "",
+                        },
+                        provider_id="fake",
+                        profile_id="fake",
+                        run_group_id="group1",
+                    )
+                    raw_rows.append(raw)
+                    eu.append_jsonl(root / "data/processed/model_outputs_raw.jsonl", raw)
+            registry_row = eu.run_registry_summary(
+                benchmark,
+                raw_rows,
+                run_id="full-analysis",
+                run_group_id="group1",
+                provider_id="fake",
+                profile_id="fake",
+                model="fake-model",
+                dataset_id="nice",
+                variant="must",
+                tasks=["task1", "task2"],
+                expected_stochastic_samples=0,
+                started_at_utc="2026-05-22T00:00:00Z",
+                finished_at_utc="2026-05-22T00:01:00Z",
+            )
+            eu.upsert_run_registry_row(root / "data/processed/run_registry.csv", registry_row)
+            output_dir = root / "outputs/final"
+            argv = [
+                "generate_evaluation_analysis.py",
+                "--dataset",
+                "nice",
+                "--variant",
+                "must",
+                "--run-id",
+                "full-analysis",
+                "--model",
+                "fake-model",
+                "--profile",
+                "fake",
+                "--output-dir",
+                str(output_dir),
+                "--bootstrap-iterations",
+                "5",
+                "--max-parse-failure-rate",
+                "0",
+            ]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(analysis_cli.eu, "project_root", return_value=root),
+                redirect_stdout(io.StringIO()),
+            ):
+                analysis_cli.main()
+
+            self.assertTrue((output_dir / "metrics_summary.csv").exists())
+            self.assertTrue((output_dir / "paper_results_table.md").exists())
+            self.assertTrue((output_dir / "task1_p_yes_by_modality.svg").exists())
+            self.assertTrue((output_dir / "provenance_manifest.json").exists())
+            provenance = json.loads((output_dir / "provenance_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(provenance["run_id"], "full-analysis")
+            self.assertEqual(provenance["stale_item_count"], 0)
 
     def test_show_run_progress_reads_outputs_without_mutation(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -1,3 +1,5 @@
+"""Summarize completed provider/model runs for a configured run group."""
+
 from __future__ import annotations
 
 import argparse

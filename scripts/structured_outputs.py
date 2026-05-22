@@ -1,3 +1,5 @@
+"""Pydantic response models for strict provider structured-output paths."""
+
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal

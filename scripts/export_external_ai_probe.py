@@ -1,3 +1,5 @@
+"""Export the blind Task 2 input bundle for external AI-service probes."""
+
 from __future__ import annotations
 
 import csv

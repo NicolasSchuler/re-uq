@@ -1,3 +1,11 @@
+"""Shared utilities for the modality-conditioned UQ evaluation pipeline.
+
+The module intentionally keeps the durable research contracts in one place:
+dataset and benchmark construction, provider request planning, raw-output
+parsing, UQ scoring, and compact paper-facing exports. Command-line entry
+points and notebooks should stay thin wrappers around these helpers.
+"""
+
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -519,6 +527,8 @@ def normalize_task_filter(task: str | Iterable[str] | None = None) -> list[str]:
             candidates = ["task1"]
         elif normalized in {"task2", "modality_extraction"}:
             candidates = ["task2"]
+        elif normalized in {"task3", "modality_verification", "self_verification"}:
+            candidates = ["task3"]
         else:
             raise ValueError(f"Unknown task filter: {value}")
         for candidate in candidates:
@@ -2385,6 +2395,29 @@ def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
             'Do not return percentages such as 95 or strings such as "95%".\n'
             "Return JSON only as this object:\n"
             '{"results":[{"request_index":0,"requirement":"...","modality":"mandatory","confidence":0.95}]}\n\n'
+            "Items:\n"
+            f"{json.dumps(items, ensure_ascii=False, indent=2)}"
+        )
+
+    if task == "task3":
+        items = [
+            {
+                "request_index": int(job["request_index"]),
+                "source_statement": str(job["item"]["source_statement"]),
+                "extracted_requirement": str(job["item"]["task2_requirement"]),
+                "extracted_modality": str(job["item"]["task2_modality"]),
+            }
+            for job in jobs
+        ]
+        return (
+            "Audit whether each extracted software requirement preserves the source statement.\n"
+            "Evaluate each item independently and do not repair the extracted requirement.\n\n"
+            'Use one of: "preserves", "strengthens", "weakens", "content_changed".\n'
+            "Use confidence as a decimal from 0.0 to 1.0 for confidence in the selected relation.\n"
+            'Do not return percentages such as 95 or strings such as "95%".\n'
+            "Return JSON only as this object:\n"
+            '{"results":[{"request_index":0,"relation":"preserves","confidence":0.95,'
+            '"evidence_phrase":"...","brief_reason":"<max 12 words>"}]}\n\n'
             "Items:\n"
             f"{json.dumps(items, ensure_ascii=False, indent=2)}"
         )

@@ -121,14 +121,14 @@ Example:
 
 ## Phase 4b: Run Source-Grounded Modality Verification
 
-- Run `notebooks/03b_run_modality_verification.ipynb` after a complete full run.
+- Run `scripts/run_task3_verification_from_config.py` after a complete Task 2 full run. `notebooks/03b_run_modality_verification.ipynb` mirrors this diagnostic for inspection.
 - Build `data/processed/task3_verification_items.csv` from valid deterministic Task 2 outputs.
 - Run the same model as verifier for each extraction, with deterministic decoding plus stochastic verifier samples.
 - Cache raw Task 3 responses in `data/processed/model_outputs_raw_task3_verification.jsonl`.
 
 ## Phase 5: Compute UQ and Metrics
 
-- Run `notebooks/04_compute_uq_and_metrics.ipynb`.
+- For publication artifacts, run `scripts/generate_evaluation_analysis.py`. `notebooks/04_compute_uq_and_metrics.ipynb` remains available for staged inspection.
 - Analyze one full experiment run at a time. The notebook selects the latest `full-*` run by default; set `RUN_ID` or `ANALYSIS_RUN_ID` to reproduce an earlier run.
 - For provider/model matrix comparison, run `scripts/compare_run_matrix.py --config run_configs/current_run.json` after the registry marks the relevant runs complete.
 - Compute verbalized confidence, label self-consistency, modality consistency, relation consistency, predictive entropy, variation ratio, and model-ensemble disagreement when available.
@@ -145,8 +145,7 @@ Example:
 
 ## Phase 6: Export Paper Artifacts
 
-- Run `notebooks/05_analyze_and_export_results.ipynb`.
-- Export the compact paper-facing result table, modality figure, qualitative examples, and UQ method inventory under `outputs/`.
+- Use `scripts/generate_evaluation_analysis.py` to export the compact paper-facing result table, modality figure, qualitative examples, UQ method inventory, and provenance manifest under a local `outputs/evaluation_*` directory. `notebooks/05_analyze_and_export_results.ipynb` remains a companion export notebook.
 - Inspect the figure and result notes before using them in the IST manuscript.
 - Treat checked-in 468-row metric snapshots as stale until a clean post-fix full run replaces them.
 

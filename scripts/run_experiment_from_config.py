@@ -1,3 +1,10 @@
+"""Run Task 1 and Task 2 provider-matrix experiments from JSON config.
+
+The runner is the canonical reproduction entry point for primary benchmark
+calls. It writes one raw JSONL record per item/sample and records run status in
+local registry/progress artifacts so incomplete runs can be resumed safely.
+"""
+
 from __future__ import annotations
 
 import argparse
