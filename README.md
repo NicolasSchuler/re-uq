@@ -21,6 +21,7 @@ The headline observable is **high-confidence over-commitment of weak stakeholder
 | Trace a paper result back to inputs | [`docs/results_mapping.md`](docs/results_mapping.md) |
 | Understand Git / artifact policy | [`docs/repository_hygiene.md`](docs/repository_hygiene.md) |
 | Understand the double-blind anonymization plan | [`docs/anonymization.md`](docs/anonymization.md) |
+| Common reviewer questions | [`docs/faq.md`](docs/faq.md) |
 
 ## Quick Start
 
