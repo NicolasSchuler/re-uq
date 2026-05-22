@@ -33,13 +33,13 @@
   },
   "profiles": [
     {
-      "profile_id": "kit_toolbox",
-      "provider_id": "kit_toolbox",
+      "profile_id": "institutional_llm",
+      "provider_id": "institutional_llm",
       "base_url": "https://institutional-llm.example.invalid/api/v1",
-      "api_key_env": "KIT_TOOLBOX_API_KEY",
+      "api_key_env": "INSTITUTIONAL_LLM_API_KEY",
       "models": [
         "azure.gpt-4.1-mini",
-        "kit.gemma4-31b-it"
+        "institutional.gemma4-31b-it"
       ],
       "concurrency": 2,
       "batch_size": 8,

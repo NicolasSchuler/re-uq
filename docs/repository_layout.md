@@ -12,7 +12,7 @@ This document is the single source of truth for the repository map. The `README.
 | `scripts/` | Canonical CLI entry points and shared evaluation utilities. The `scripts/*.py` files are the publication reproduction interface. |
 | `prompts/` | Frozen task prompt contracts (Task 1, Task 2, Task 3, plus prompt-sensitivity variants). |
 | `run_configs/` | Tracked example provider matrices. Local `current_run*.json` files are gitignored. |
-| `data/raw/` | Local-only raw seed inputs. Empty in Git except for `.gitkeep`. |
+| `data/raw/` | Raw seed inputs needed to rebuild curated benchmark tables; additional local downloads stay untracked. |
 | `data/processed/` | Curated benchmark inputs and compact metric snapshots. Raw run outputs are gitignored. |
 | `outputs/` | Curated paper-facing summaries and review artifacts. Run-specific output directories are gitignored. |
 | `notebooks/` | Stripped, generated companion notebooks for narrative inspection. Scripts are the canonical interface. |

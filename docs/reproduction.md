@@ -46,7 +46,7 @@ Smoke test one provider/model/dataset cell:
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-4.5-air \
+  --model glm-5.1 \
   --dataset mlm_tapt \
   --task both \
   --mode smoke
@@ -58,7 +58,7 @@ Run the full Task 1 + Task 2 cell after smoke checks pass:
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-4.5-air \
+  --model glm-5.1 \
   --dataset mlm_tapt \
   --task both \
   --mode full
@@ -70,7 +70,7 @@ Run one task at a time when isolating failures:
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-4.5-air \
+  --model glm-5.1 \
   --dataset mlm_tapt \
   --task task1 \
   --mode full
@@ -80,7 +80,7 @@ Run one task at a time when isolating failures:
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-4.5-air \
+  --model glm-5.1 \
   --dataset mlm_tapt \
   --task task2 \
   --mode full
@@ -92,7 +92,7 @@ Resume a partial run by reusing the same run ID:
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-4.5-air \
+  --model glm-5.1 \
   --dataset mlm_tapt \
   --mode resume \
   --run-id RUN_ID
@@ -106,7 +106,7 @@ Monitor a live run:
 .venv/bin/python scripts/show_run_progress.py \
   --dataset mlm_tapt \
   --run-id RUN_ID \
-  --model glm-4.5-air \
+  --model glm-5.1 \
   --profile zai \
   --watch 30
 ```
@@ -129,7 +129,7 @@ Smoke test Task 3 against a complete Task 2 source run:
 .venv/bin/python scripts/run_task3_verification_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-4.5-air \
+  --model glm-5.1 \
   --dataset mlm_tapt \
   --source-run-id RUN_ID \
   --mode smoke
@@ -141,7 +141,7 @@ Run the full Task 3 diagnostic:
 .venv/bin/python scripts/run_task3_verification_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-4.5-air \
+  --model glm-5.1 \
   --dataset mlm_tapt \
   --source-run-id RUN_ID \
   --mode full

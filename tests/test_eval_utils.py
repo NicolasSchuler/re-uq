@@ -1925,10 +1925,10 @@ class EvalUtilsTest(unittest.TestCase):
     def test_json_schema_structured_output_uses_task_schema(self):
         profile = eu.normalize_provider_profile(
             {
-                "profile_id": "kit",
-                "provider_id": "kit_toolbox",
+                "profile_id": "institutional",
+                "provider_id": "institutional_llm",
                 "base_url": "https://institutional-llm.example.invalid/api/v1",
-                "api_key_env": "KIT_TOOLBOX_API_KEY",
+                "api_key_env": "INSTITUTIONAL_LLM_API_KEY",
                 "models": ["azure.gpt-4.1-mini"],
                 "json_schema": True,
             }

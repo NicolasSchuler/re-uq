@@ -20,7 +20,7 @@
 # Required environment overrides (set via env or pass as extra args):
 #   RE_UQ_CONFIG     Path to run config (default: run_configs/current_run.json)
 #   RE_UQ_PROFILE    Provider profile name (default: zai)
-#   RE_UQ_MODEL      Model id (default: glm-4.5-air)
+#   RE_UQ_MODEL      Model id (default: glm-5.1)
 #   RE_UQ_DATASET    Dataset id (default: mlm_tapt)
 #   RE_UQ_VARIANT    Benchmark variant (default: must)
 
@@ -30,7 +30,7 @@ cd "$(dirname "$0")/.."
 
 CONFIG="${RE_UQ_CONFIG:-run_configs/current_run.json}"
 PROFILE="${RE_UQ_PROFILE:-zai}"
-MODEL="${RE_UQ_MODEL:-glm-4.5-air}"
+MODEL="${RE_UQ_MODEL:-glm-5.1}"
 DATASET="${RE_UQ_DATASET:-mlm_tapt}"
 VARIANT="${RE_UQ_VARIANT:-must}"
 PY=".venv/bin/python"

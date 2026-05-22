@@ -6,7 +6,7 @@ This directory holds dataset inputs and curated/derived data products.
 
 | Path | Tracked in Git? | Purpose |
 | --- | --- | --- |
-| `data/raw/` | No (except `.gitkeep`) | Local-only raw seed inputs (e.g. NICE/PROMISE CSV downloads). |
+| `data/raw/` | Selectively | Raw seed inputs needed to rebuild curated benchmark tables. Additional local downloads remain untracked. |
 | `data/processed/` | Selectively | Curated benchmark CSVs, reviewed seed tables, compact metric summaries. Raw run outputs (`model_outputs_raw*.jsonl`), run registries, progress files, and UQ score CSVs are gitignored and remain local. |
 
 ## What is tracked under `data/processed/`

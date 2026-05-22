@@ -21,7 +21,7 @@ bash scripts/reproduce.sh smoke-fake
 # .venv/bin/python scripts/run_experiment_from_config.py \
 #   --config run_configs/current_run.json \
 #   --profile zai \
-#   --model glm-4.5-air \
+#   --model glm-5.1 \
 #   --dataset mlm_tapt \
 #   --task both \
 #   --mode smoke \
