@@ -167,7 +167,7 @@ def write_result_notes_template(path: Path) -> None:
         "- Observation: <grounded result from metrics_summary.csv>.",
         "- Observation: <grounded result from task1_p_yes_by_modality.svg>.",
         "- Observation: <grounded high-confidence over-commitment result>.",
-        "- Observation: <grounded Task 3 self-verification result, if run>.",
+        "- Observation: <grounded Task 3 self-audit result, if run>.",
         "",
         "## Interpretation",
         "- Hypothesis: <what the observed pattern may imply>.",

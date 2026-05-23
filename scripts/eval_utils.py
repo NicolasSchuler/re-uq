@@ -4352,6 +4352,7 @@ def provider_preflight(
     model: str,
     api_key_env: str,
     timeout_s: int,
+    prompt_version: str = "v1",
     json_mode: bool = False,
     structured_output: str = "none",
     response_format: Mapping[str, Any] | None = None,
@@ -4398,7 +4399,12 @@ def provider_preflight(
     if normalize_structured_output_mode(structured_output, json_mode=json_mode) == "instructor":
         _, parse_status = parse_instructor_task_response("task1", completion.get("raw_text", ""))
     else:
-        _, parse_status = parse_task_response("task1", completion.get("raw_text", ""))
+        confidence_scale = confidence_scale_for_record({"prompt_version": prompt_version})
+        _, parse_status = parse_task_response(
+            "task1",
+            completion.get("raw_text", ""),
+            confidence_scale=confidence_scale,
+        )
     return {
         "ok": bool(completion.get("ok")) and parse_status == "ok",
         "parse_status": parse_status,

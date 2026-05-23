@@ -37,14 +37,14 @@ Avoid claiming that all UQ fails. The current evidence supports the narrower cla
 - RQ1: When functional content is held constant and only modality changes, how reliably do local LLMs preserve requirement strength across mandatory, recommended, optional, and weak stakeholder-intent phrasings?
 - RQ2: Do lightweight UQ signals reveal high-confidence over-commitment errors, or can models be stable and confident while wrong?
 - RQ3: Is weak-intent collapse robust to prompt simplification and lexical variation in weak stakeholder-intent wording?
-- RQ4 diagnostic: Can a model detect, in a source-grounded verifier prompt, that its own extracted requirement strengthened or weakened the source modality?
+- RQ4 diagnostic: Can a model detect, in a source-grounded self-audit prompt, that its own extracted requirement strengthened or weakened the source modality?
 
 ## Contribution Bullets
 
 - A compact controlled RE benchmark that isolates requirement-strength preservation by holding functional content constant and varying modality.
 - Pilot evidence of high-confidence over-commitment: the model correctly handles mandatory entailment but fails to preserve the weakest stakeholder-intent class during extraction.
 - A UQ-focused diagnostic showing that consistency-based uncertainty is not a sufficient correctness proxy for this RE extraction setting.
-- A source-grounded self-verification diagnostic that tests whether models recognize modality strengthening after extraction.
+- A source-grounded self-audit diagnostic that tests whether models recognize modality strengthening after extraction.
 - A construct-validity probe showing that the weak-intent failure is not tied to a single wording, while the exact upgraded class is wording-sensitive.
 
 ## Evidence Table
@@ -88,7 +88,7 @@ Open question:
 - Whether the same high-confidence over-commitment pattern persists across all planned local models.
 - Whether independent RE-informed reviewers agree that all weak templates sit below `SHOULD/recommended` on the study's ordinal scale.
 - Whether verbalized confidence remains informative in full runs, given that consistency-style UQ is expected to struggle with systematic errors.
-- Whether Task 3 self-verification detects over-commitment or instead repeats the same modality normalization error.
+- Whether Task 3 self-audit detects over-commitment or instead repeats the same modality normalization error.
 - Whether the `mlm_tapt` co-primary seed split reproduces the NICE pattern after manual review.
 
 ## Construct-Validity Gate

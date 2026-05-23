@@ -170,6 +170,7 @@ def main() -> None:
                 model=model,
                 api_key_env=profile["api_key_env"],
                 timeout_s=int(profile["timeout_s"]),
+                prompt_version=run_config["prompt_version"],
                 json_mode=bool(profile["json_mode"]),
                 structured_output=str(profile.get("structured_output", "none")),
                 response_format=profile.get("response_format"),

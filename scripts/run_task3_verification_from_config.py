@@ -1,6 +1,6 @@
 """Run the Task 3 modality-preservation diagnostic from a provider config.
 
-Task 3 is deliberately downstream of Task 2: it builds verifier items from a
+Task 3 is deliberately downstream of Task 2: it builds self-audit items from a
 complete deterministic Task 2 run, then asks the same provider/model whether
 each extracted requirement preserved, strengthened, weakened, or changed the
 source statement. It never rewrites or corrects the Task 2 raw outputs.
@@ -138,7 +138,7 @@ def require_complete_task2_source(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Task 3 modality verification from a provider-aware run config.")
+    parser = argparse.ArgumentParser(description="Run Task 3 modality self-audit from a provider-aware run config.")
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--profile")
     parser.add_argument("--model")
@@ -189,6 +189,7 @@ def main() -> None:
                 model=model,
                 api_key_env=profile["api_key_env"],
                 timeout_s=int(profile["timeout_s"]),
+                prompt_version=run_config["prompt_version"],
                 json_mode=bool(profile["json_mode"]),
                 structured_output=str(profile.get("structured_output", "none")),
                 response_format=profile.get("response_format"),
@@ -225,7 +226,7 @@ def main() -> None:
                     if not model_source_rows:
                         raise ValueError(
                             f"Source run {source_run_id!r} has no rows for model {model!r}; "
-                            "Task 3 should verify the same model's Task 2 outputs."
+                            "Task 3 should audit the same model's Task 2 outputs."
                         )
                     if not args.allow_partial_source:
                         require_complete_task2_source(
@@ -238,7 +239,7 @@ def main() -> None:
 
                     all_task3_items = eu.build_task3_verification_items(benchmark, model_source_rows)
                     if not all_task3_items:
-                        raise ValueError("No Task 3 verification items were built from valid deterministic Task 2 rows.")
+                        raise ValueError("No Task 3 self-audit items were built from valid deterministic Task 2 rows.")
                     eu.write_csv_rows(task3_items_path, all_task3_items, fieldnames=eu.TASK3_VERIFICATION_FIELDS)
                     task3_items_for_run = (
                         all_task3_items[: max(1, args.smoke_items)] if args.mode == "smoke" else all_task3_items

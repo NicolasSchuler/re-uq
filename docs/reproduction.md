@@ -121,7 +121,7 @@ Compare complete runs in the configured matrix:
 
 ## 5. Task 3 Self-Audit Diagnostic
 
-Task 3 verifies deterministic Task 2 extractions with a source-grounded prompt. It does not repair or overwrite Task 2 outputs.
+Task 3 audits deterministic Task 2 extractions with a source-grounded self-audit prompt. It is not independent verification and does not repair or overwrite Task 2 outputs.
 
 Smoke test Task 3 against a complete Task 2 source run:
 

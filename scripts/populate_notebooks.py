@@ -1027,15 +1027,15 @@ def notebook_03b() -> list[nbf.NotebookNode]:
     return [
         md(
             """
-            # 03b Run Modality Verification
+            # 03b Run Modality Self-Audit
 
-            Objective: verify deterministic Task 2 extractions with a source-grounded Task 3 self-verification prompt.
+            Objective: audit deterministic Task 2 extractions with a source-grounded Task 3 self-audit prompt.
 
             This diagnostic does not revise Task 2 outputs. It asks the same model whether its extracted requirement preserves, strengthens, weakens, or changes the source.
             """
         ),
         code(COMMON_SETUP),
-        md("## Configure Verification Run"),
+        md("## Configure Self-Audit Run"),
         code(
             r"""
             HOST = os.getenv("HOST", CONFIG["llm"]["host"])
@@ -1066,7 +1066,7 @@ def notebook_03b() -> list[nbf.NotebookNode]:
                 if not complete_run_ids:
                     available = sorted({row.get("run_id", "") for row in all_source_rows if str(row.get("run_id", "")).startswith(run_prefix)})
                     raise ValueError(
-                        "No complete full run found for Task 3 verification. "
+                        "No complete full run found for Task 3 self-audit. "
                         f"Set TASK3_SOURCE_RUN_ID explicitly or finish a full run. Available run_ids: {available[-10:]}"
                     )
                 source_run_id, source_rows = eu.select_run_rows(all_source_rows, run_id=complete_run_ids[-1], prefix=run_prefix)
@@ -1085,19 +1085,19 @@ def notebook_03b() -> list[nbf.NotebookNode]:
             print(f"Task 3 output path: {output_path}")
             """
         ),
-        md("## Build Task 3 Verification Items"),
+        md("## Build Task 3 Self-Audit Items"),
         code(
             r"""
             task3_items = eu.build_task3_verification_items(benchmark, source_rows)
             eu.write_csv_rows(task3_items_path, task3_items, fieldnames=eu.TASK3_VERIFICATION_FIELDS)
-            print(f"Wrote Task 3 verification items: {task3_items_path}")
+            print(f"Wrote Task 3 self-audit items: {task3_items_path}")
             print(f"Task 3 items: {len(task3_items)}")
             if not task3_items:
                 raise ValueError("No Task 3 items were built. Check that the selected run has valid deterministic Task 2 rows.")
             print(eu.markdown_table(task3_items[:8], ["item_id", "source_modality", "task2_modality", "task3_gold_relation"]))
             """
         ),
-        md("## Run Task 3 Verification"),
+        md("## Run Task 3 Self-Audit"),
         code(
             r"""
             task3_template = eu.load_prompt(PROJECT_ROOT / "prompts/modality_verification.txt")
@@ -1162,7 +1162,7 @@ def notebook_03b() -> list[nbf.NotebookNode]:
                         print(f"Completed {len(records)}/{len(jobs)} Task 3 calls")
                 print(f"Wrote {len(records)} Task 3 records to {output_path}")
             else:
-                print("Task 3 verification not run. Set RUN_TASK3_VERIFICATION=true to execute it.")
+                print("Task 3 self-audit not run. Set RUN_TASK3_VERIFICATION=true to execute it.")
             """
         ),
         md("## Verification Summary"),
@@ -1526,7 +1526,7 @@ def notebook_05() -> list[nbf.NotebookNode]:
                 "- Observation: <grounded result from metrics_summary.csv>.",
                 "- Observation: <grounded result from task1_p_yes_by_modality.svg>.",
                 "- Observation: <grounded high-confidence over-commitment result>.",
-                "- Observation: <grounded Task 3 self-verification result>.",
+                "- Observation: <grounded Task 3 self-audit result>.",
                 "",
                 "## Interpretation",
                 "- Hypothesis: <what the observed pattern may imply>.",

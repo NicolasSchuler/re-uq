@@ -14,7 +14,7 @@ Use **commitment normalization** as an explanatory shorthand, not as the primary
 
 Treat Task 1 as a capability/control task and Task 2 as the main empirical task. In the current pilot, the model handled mandatory entailment correctly but failed to preserve weak stakeholder intent during extraction.
 
-Add Task 3 as a source-grounded self-verification diagnostic over deterministic Task 2 outputs. Task 3 asks the same model whether its extraction preserved, strengthened, weakened, or changed the source statement; it audits fidelity but does not revise or repair outputs.
+Add Task 3 as a source-grounded self-audit diagnostic over deterministic Task 2 outputs. Task 3 asks the same model whether its extraction preserved, strengthened, weakened, or changed the source statement; it audits fidelity but does not revise or repair outputs.
 
 For paper-facing wording and caveats, see `docs/paper_framing.md`.
 
@@ -56,7 +56,7 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 - Add a deterministic rule-based modality baseline as a sanity comparator, not a competing ML method.
 - Add high-confidence over-commitment metrics at thresholds `0.80` and `0.90`.
 - Treat all `v2-conf01` and `v2-instructor-conf01` model outputs as probability-scale confidence in `[0.0, 1.0]`; new v2 raw rows must carry `confidence_scale=0_1`.
-- Add Task 3 source-grounded modality verification after the full run, using `prompts/modality_verification.txt` and writing `data/processed/model_outputs_raw_task3_verification.jsonl`.
+- Add Task 3 source-grounded modality self-audit after the full run, using `prompts/modality_verification.txt` and writing `data/processed/model_outputs_raw_task3_verification.jsonl`.
 - Add one Task 1 prompt-sensitivity check on the pilot subset using `prompts/mandatory_entailment_strict.txt`.
 - Add one focused Task 2 prompt-validity check for `nice_to_have` sources using `prompts/modality_extraction_labels_only.txt`, which states the allowed output labels without giving deterministic mapping rules or examples.
 - Add `notebooks/02b_weak_modality_robustness_probe.ipynb` before full runs to test whether the `nice_to_have` failure is phrase-specific or robust across weak stakeholder-intent phrasings.

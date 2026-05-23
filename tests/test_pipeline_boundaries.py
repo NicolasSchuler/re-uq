@@ -1,3 +1,4 @@
+import csv
 import json
 import math
 import tempfile
@@ -108,6 +109,125 @@ class NotebookBoundaryTest(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["robustness_benchmark"], "SHALL")
         self.assertEqual(manifest["metadata"]["seed_count"], 180)
         self.assertEqual(manifest["metadata"]["source_modalities"], eu.MODALITIES)
+
+
+class PublicationArtifactIntegrityTest(unittest.TestCase):
+    BENCHMARK_FILES = [
+        ("data/processed/benchmark_items.csv", "MUST"),
+        ("data/processed/benchmark_items_mlm_tapt.csv", "MUST"),
+        ("data/processed/benchmark_items_shall.csv", "SHALL"),
+        ("data/processed/benchmark_items_mlm_tapt_shall.csv", "SHALL"),
+    ]
+    WEAK_TEMPLATES = {"future_enhancement", "low_priority_enhancement", "nice_if", "useful_if"}
+    EXTERNAL_MAIN_CONDITIONS = {"mandatory", "recommended", "optional", "nice_to_have"}
+    EXTERNAL_WEAK_CONDITIONS = {"weak_future_enhancement", "weak_low_priority_enhancement", "weak_nice_if"}
+
+    def test_checked_benchmark_csvs_preserve_minimal_pair_contract(self):
+        for path_text, keyword in self.BENCHMARK_FILES:
+            with self.subTest(path=path_text):
+                rows = eu.read_csv_rows(path_text)
+                self.assertEqual(len(rows), 720)
+                self.assertEqual(len({row["item_id"] for row in rows}), 720)
+                self.assertEqual(len({row["seed_id"] for row in rows}), 180)
+                self.assertEqual({row["source_modality"] for row in rows}, set(eu.MODALITIES))
+                self.assertTrue(all(row["mandatory_keyword"] == keyword for row in rows))
+
+                by_seed: dict[str, list[dict[str, str]]] = {}
+                for row in rows:
+                    by_seed.setdefault(row["seed_id"], []).append(row)
+                    self.assertTrue(row["source_statement"].strip())
+                    self.assertTrue(row["candidate_requirement"].strip())
+                    self.assertTrue(row["capability_text"].strip())
+                    self.assertIn(keyword, row["candidate_requirement"])
+                    if row["source_modality"] == "mandatory":
+                        self.assertIn(keyword, row["source_statement"])
+                    self.assertEqual(row["task1_gold_decision"], "yes" if row["source_modality"] == "mandatory" else "no")
+                    self.assertEqual(row["task1_gold_yes"], "1" if row["source_modality"] == "mandatory" else "0")
+                    self.assertEqual(row["task2_gold_modality"], row["source_modality"])
+
+                for seed_id, seed_rows in by_seed.items():
+                    self.assertEqual(len(seed_rows), 4, seed_id)
+                    self.assertEqual({row["source_modality"] for row in seed_rows}, set(eu.MODALITIES))
+
+    def test_checked_weak_modality_probe_rows_are_balanced(self):
+        rows = eu.read_csv_rows("data/processed/weak_modality_probe_items.csv")
+
+        self.assertEqual(len(rows), 80)
+        self.assertEqual(len({row["item_id"] for row in rows}), 80)
+        self.assertEqual(len({row["seed_id"] for row in rows}), 20)
+        self.assertEqual({row["template_id"] for row in rows}, self.WEAK_TEMPLATES)
+        self.assertEqual({row["source_modality"] for row in rows}, {"nice_to_have"})
+        self.assertEqual({row["task2_gold_modality"] for row in rows}, {"nice_to_have"})
+        self.assertTrue(all(row["source_statement"].strip() for row in rows))
+        self.assertTrue(all(row["capability_text"].strip() for row in rows))
+
+        for seed_id in {row["seed_id"] for row in rows}:
+            seed_rows = [row for row in rows if row["seed_id"] == seed_id]
+            self.assertEqual(len(seed_rows), 4, seed_id)
+            self.assertEqual({row["template_id"] for row in seed_rows}, self.WEAK_TEMPLATES)
+
+    def test_checked_external_probe_is_blind_and_balanced(self):
+        inputs_path = Path("outputs/external_ai_service_probe/external_task2_inputs.csv")
+        with inputs_path.open(newline="", encoding="utf-8") as handle:
+            input_reader = csv.DictReader(handle)
+            self.assertEqual(input_reader.fieldnames, ["external_item_id", "source_statement"])
+            inputs = list(input_reader)
+        gold = eu.read_csv_rows("outputs/external_ai_service_probe/external_task2_gold_key.csv")
+
+        expected_ids = [f"EXT{index:04d}" for index in range(1, 141)]
+        self.assertEqual([row["external_item_id"] for row in inputs], expected_ids)
+        self.assertEqual([row["external_item_id"] for row in gold], expected_ids)
+        self.assertEqual(len(gold), 140)
+        self.assertEqual(len({row["external_item_id"] for row in gold}), 140)
+        self.assertTrue(all(row["source_statement"].strip() for row in inputs))
+
+        kind_counts = Counter(row["source_kind"] for row in gold)
+        self.assertEqual(kind_counts["main_benchmark"], 80)
+        self.assertEqual(kind_counts["weak_modality_probe"], 60)
+
+        main_conditions = Counter(row["source_condition"] for row in gold if row["source_kind"] == "main_benchmark")
+        weak_conditions = Counter(row["source_condition"] for row in gold if row["source_kind"] == "weak_modality_probe")
+        self.assertEqual(set(main_conditions), self.EXTERNAL_MAIN_CONDITIONS)
+        self.assertEqual(set(weak_conditions), self.EXTERNAL_WEAK_CONDITIONS)
+        self.assertTrue(all(count == 20 for count in main_conditions.values()))
+        self.assertTrue(all(count == 20 for count in weak_conditions.values()))
+        self.assertTrue(all(row["source_modality"] == row["task2_gold_modality"] for row in gold))
+
+    def test_checked_benchmark_manifests_match_current_artifacts(self):
+        expected = {
+            "outputs/benchmark_manifest.json": "nice",
+            "outputs/benchmark_manifest_mlm_tapt.json": "mlm_tapt",
+        }
+        required_prompt_paths = {
+            "prompts/mandatory_entailment.txt",
+            "prompts/mandatory_entailment_strict.txt",
+            "prompts/modality_extraction.txt",
+            "prompts/modality_extraction_labels_only.txt",
+            "prompts/modality_verification.txt",
+        }
+
+        for manifest_path, dataset_id in expected.items():
+            with self.subTest(path=manifest_path):
+                manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+                self.assertEqual(manifest["metadata"]["dataset_id"], dataset_id)
+                self.assertEqual(manifest["metadata"]["seed_count"], 180)
+                self.assertEqual(manifest["metadata"]["main_benchmark"], "MUST")
+                self.assertEqual(manifest["metadata"]["robustness_benchmark"], "SHALL")
+                self.assertEqual(manifest["metadata"]["source_modalities"], eu.MODALITIES)
+
+                artifact_paths = {artifact["path"] for artifact in manifest["artifacts"]}
+                self.assertTrue(required_prompt_paths.issubset(artifact_paths))
+                self.assertIn(eu.artifact_path("data/processed/benchmark_items.csv", dataset_id).as_posix(), artifact_paths)
+                self.assertIn(eu.artifact_path("data/processed/benchmark_items.csv", dataset_id, "shall").as_posix(), artifact_paths)
+
+                for artifact in manifest["artifacts"]:
+                    path = Path(artifact["path"])
+                    self.assertTrue(path.exists(), artifact["path"])
+                    self.assertTrue(artifact["exists"], artifact["path"])
+                    self.assertEqual(artifact["sha256"], eu.sha256_file(path), artifact["path"])
+                    self.assertEqual(artifact["bytes"], path.stat().st_size, artifact["path"])
+                    if path.suffix == ".csv":
+                        self.assertEqual(artifact["rows"], len(eu.read_csv_rows(path)), artifact["path"])
 
 
 class AggregationBoundaryTest(unittest.TestCase):

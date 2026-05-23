@@ -44,7 +44,7 @@ For real provider runs, see the Task → Command cheat-sheet at the top of [`doc
 For the full map, conventions, and the variant-suffix table, see [`docs/repository_layout.md`](docs/repository_layout.md).
 
 - `scripts/` — canonical CLI entry points; the publication reproduction interface.
-- `prompts/` — frozen task prompts (Task 1 entailment, Task 2 extraction, Task 3 verification).
+- `prompts/` — frozen task prompts (Task 1 entailment, Task 2 extraction, Task 3 self-audit).
 - `data/processed/` — curated benchmark inputs and compact metric snapshots. Raw run outputs are local-only.
 - `outputs/` — curated paper-facing summaries and review artifacts.
 - `notebooks/` — generated companion notebooks for narrative inspection (scripts remain canonical).
@@ -60,6 +60,6 @@ The project uses a `uv`-managed virtual environment at `.venv/`. Dependencies ar
 Two scope notes carry over into the paper and should travel with this artifact:
 
 - Paper-facing weak-intent claims are gated on `docs/weak_modality_construct_review.csv`. Until both reviewer slots have judged every weak template as weaker than `SHOULD/recommended`, weak-class results are diagnostic, not headline.
-- The metric snapshots checked in at the time of writing reflect the most recent full pilot; the analysis script regenerates the paper-facing tables and figures from raw outputs and refuses to do so under stale prompts, mixed confidence scales, or incomplete registries.
+- The metric snapshots checked in at the time of writing are diagnostic/stale until a clean post-fix full run regenerates paper-facing tables and figures from raw outputs. The analysis script refuses stale prompts, mixed confidence scales, or incomplete registries.
 
-See `docs/paper_framing.md` for the full framing and `docs/results_mapping.md` for the artifact-to-claim trail.
+See `docs/paper_framing.md` for the full framing, `docs/results_mapping.md` for the artifact-to-claim trail, and `outputs/README.md` for artifact status.

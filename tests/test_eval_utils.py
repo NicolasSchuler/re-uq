@@ -1922,6 +1922,45 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertIsNone(captured["response_format"])
         self.assertEqual(captured["extra_body"]["response_format"]["type"], "json_object")
 
+    def test_provider_preflight_rejects_v2_percentage_confidence(self):
+        def run_preflight(raw_text):
+            def fake_completion(**kwargs):
+                return {
+                    "ok": True,
+                    "raw_text": raw_text,
+                    "response_json": {},
+                    "latency_s": 0.01,
+                    "error": "",
+                }
+
+            return eu.provider_preflight(
+                host="https://api.z.ai/api/coding/paas/v4",
+                model="glm-5.1",
+                api_key_env="ZAI_API_KEY",
+                timeout_s=30,
+                prompt_version="v2-conf01",
+                json_mode=True,
+                extra_body={"response_format": {"type": "json_object"}},
+                completion_fn=fake_completion,
+            )
+
+        valid = run_preflight('{"decision": "yes", "confidence": 0.8, "brief_reason": "ok"}')
+        self.assertTrue(valid["ok"])
+
+        for bad_confidence in [95, 100, "95%"]:
+            with self.subTest(confidence=bad_confidence):
+                preflight = run_preflight(
+                    json.dumps(
+                        {
+                            "decision": "yes",
+                            "confidence": bad_confidence,
+                            "brief_reason": "bad scale",
+                        }
+                    )
+                )
+                self.assertFalse(preflight["ok"])
+                self.assertEqual(preflight["parse_status"], "invalid_confidence")
+
     def test_json_schema_structured_output_uses_task_schema(self):
         profile = eu.normalize_provider_profile(
             {
