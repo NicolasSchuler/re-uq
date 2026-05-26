@@ -41,7 +41,11 @@ PAPER_RESULT_FIELDS = [
     "over_commitment_severity_all",
     "over_commitment_severity_given_overcommitment",
     "text_modality_parse_coverage",
+    "heuristic_text_modality_rate",
     "label_text_consistency",
+    "text_over_commitment",
+    "strict_text_over_commitment",
+    "label_correct_text_overcommit_90",
     "strengthening_recall",
     "false_preserve_rate",
     "evidence_phrase_source_rate",
@@ -55,6 +59,68 @@ def task3_raw_path(root: Path, dataset_id: str, variant: str) -> Path:
 
 def task3_registry_path(root: Path, dataset_id: str, variant: str) -> Path:
     return eu.artifact_path(root / "data/processed/run_registry_task3_verification.csv", dataset_id, variant)
+
+
+def task3_audit_modes_in_rows(rows: list[dict[str, Any]]) -> set[str]:
+    modes: set[str] = set()
+    for row in rows:
+        raw_mode = str(row.get("task3_audit_mode", "")).strip()
+        if raw_mode:
+            modes.add(eu.normalize_task3_audit_mode(raw_mode))
+        else:
+            modes.add(eu.LEGACY_TASK3_AUDIT_MODE)
+    return modes
+
+
+def require_task3_audit_mode(rows: list[dict[str, Any]], requested_mode: str) -> None:
+    requested_mode = eu.normalize_task3_audit_mode(requested_mode)
+    modes = task3_audit_modes_in_rows(rows)
+    if modes == {requested_mode}:
+        return
+    raise ValueError(
+        "Task 3 audit mode mismatch. "
+        f"Requested {requested_mode!r}, found {sorted(modes)!r}. "
+        "Official Task 3 analysis requires blind rows; legacy rows are anchored diagnostics."
+    )
+
+
+def load_task3_items_for_analysis(
+    root: Path,
+    dataset_id: str,
+    variant: str,
+    source_run_id: str,
+    task3_rows: list[dict[str, Any]],
+    model: str | None,
+    audit_mode: str,
+) -> tuple[list[dict[str, Any]], Path | None]:
+    reconstructed = eu.task3_items_from_raw_rows(task3_rows)
+    if reconstructed:
+        return reconstructed, None
+
+    models = sorted(
+        {
+            str(row.get("task2_model") or row.get("model") or "").strip()
+            for row in task3_rows
+            if str(row.get("task2_model") or row.get("model") or "").strip()
+        }
+    )
+    selected_model = model or (models[0] if len(models) == 1 else "")
+    if selected_model:
+        run_specific_path = eu.task3_verification_items_path(
+            root,
+            dataset_id,
+            variant,
+            source_run_id,
+            selected_model,
+            audit_mode,
+        )
+        if run_specific_path.exists():
+            return eu.read_csv_rows(run_specific_path), run_specific_path
+
+    legacy_path = eu.artifact_path(root / "data/processed/task3_verification_items.csv", dataset_id, variant)
+    if eu.normalize_task3_audit_mode(audit_mode) == eu.LEGACY_TASK3_AUDIT_MODE and legacy_path.exists():
+        return eu.read_csv_rows(legacy_path), legacy_path
+    return [], None
 
 
 def parse_status_counts(rows: Iterable[dict[str, Any]]) -> dict[str, int]:
@@ -167,7 +233,7 @@ def write_result_notes_template(path: Path) -> None:
         "- Observation: <grounded result from metrics_summary.csv>.",
         "- Observation: <grounded result from task1_p_yes_by_modality.svg>.",
         "- Observation: <grounded high-confidence over-commitment result>.",
-        "- Observation: <grounded Task 3 self-audit result, if run>.",
+        "- Observation: <grounded blind Task 3 text-audit result, if run>.",
         "",
         "## Interpretation",
         "- Hypothesis: <what the observed pattern may imply>.",
@@ -189,6 +255,11 @@ def main() -> None:
     parser.add_argument("--variant", default="must")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--task3-run-id")
+    parser.add_argument(
+        "--task3-audit-mode",
+        choices=eu.TASK3_AUDIT_MODES + [eu.LEGACY_TASK3_AUDIT_MODE],
+        default=eu.OFFICIAL_TASK3_AUDIT_MODE,
+    )
     parser.add_argument("--model")
     parser.add_argument("--profile")
     parser.add_argument("--output-dir", type=Path)
@@ -210,8 +281,9 @@ def main() -> None:
     raw_path = eu.artifact_path(root / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
     registry_path = eu.run_registry_path(root, dataset_id, variant)
     construct_review_path = root / "docs/weak_modality_construct_review.csv"
-    task3_items_path = eu.artifact_path(root / "data/processed/task3_verification_items.csv", dataset_id, variant)
+    task3_legacy_items_path = eu.artifact_path(root / "data/processed/task3_verification_items.csv", dataset_id, variant)
     task3_path = task3_raw_path(root, dataset_id, variant)
+    task3_audit_mode = eu.normalize_task3_audit_mode(args.task3_audit_mode)
 
     benchmark = eu.read_csv_rows(benchmark_path)
     if not benchmark:
@@ -243,18 +315,31 @@ def main() -> None:
 
     task3_items: list[dict[str, Any]] = []
     task3_rows: list[dict[str, Any]] = []
+    task3_items_artifact_path: Path | None = None
     if args.task3_run_id:
-        all_task3_items = eu.read_csv_rows(task3_items_path) if task3_items_path.exists() else []
-        task3_items = [row for row in all_task3_items if str(row.get("task2_run_id", "")) == args.run_id]
         _, task3_rows = eu.select_run_rows(eu.read_jsonl(task3_path), run_id=args.task3_run_id, prefix=None)
         if args.model:
             task3_rows = [row for row in task3_rows if str(row.get("model", "")) == args.model]
         if args.profile:
             task3_rows = [row for row in task3_rows if str(row.get("profile_id", "")) == args.profile]
-        if not task3_items:
-            raise ValueError(f"No Task 3 items found for source run_id={args.run_id!r}.")
         if not task3_rows:
             raise ValueError(f"No Task 3 raw rows found for run_id={args.task3_run_id!r}.")
+        require_task3_audit_mode(task3_rows, task3_audit_mode)
+        task3_items, task3_items_artifact_path = load_task3_items_for_analysis(
+            root,
+            dataset_id,
+            variant,
+            args.run_id,
+            task3_rows,
+            args.model,
+            task3_audit_mode,
+        )
+        task3_items = [row for row in task3_items if str(row.get("task2_run_id", "")) == args.run_id]
+        if not task3_items:
+            raise ValueError(
+                f"No Task 3 items found for source run_id={args.run_id!r}; "
+                "new Task 3 rows should contain item provenance, or the run-specific item CSV must exist."
+            )
         if not args.skip_registry_check:
             require_registry_complete(task3_registry_path(root, dataset_id, variant), args.task3_run_id, model=args.model, profile_id=args.profile)
         require_parse_quality("Task 3 run", task3_rows, args.max_parse_failure_rate)
@@ -291,6 +376,8 @@ def main() -> None:
                 "high_conf_overcommit_overcommittable_80_ci_high",
                 "weak_strengthening_80_ci_low",
                 "weak_strengthening_80_ci_high",
+                "label_correct_text_overcommit_80_ci_low",
+                "label_correct_text_overcommit_80_ci_high",
             ],
         )
         + "\n",
@@ -308,6 +395,8 @@ def main() -> None:
         "benchmark_variant": variant,
         "run_id": args.run_id,
         "task3_run_id": args.task3_run_id or "",
+        "task3_audit_mode": task3_audit_mode if args.task3_run_id else "",
+        "task3_audit_modes_observed": sorted(task3_audit_modes_in_rows(task3_rows)) if task3_rows else [],
         "model_filter": args.model or "",
         "profile_filter": args.profile or "",
         "benchmark_items": len(benchmark),
@@ -326,11 +415,12 @@ def main() -> None:
             eu.artifact_metadata(raw_path, root=root),
             eu.artifact_metadata(registry_path, root=root),
             eu.artifact_metadata(construct_review_path, root=root),
-            eu.artifact_metadata(task3_items_path, root=root),
+            eu.artifact_metadata(task3_items_artifact_path or task3_legacy_items_path, root=root),
             eu.artifact_metadata(task3_path, root=root),
             eu.artifact_metadata(root / "prompts/mandatory_entailment.txt", root=root),
             eu.artifact_metadata(root / "prompts/modality_extraction.txt", root=root),
             eu.artifact_metadata(root / "prompts/modality_verification.txt", root=root),
+            eu.artifact_metadata(root / "prompts/modality_verification_declared.txt", root=root),
         ],
     }
     (output_dir / "provenance_manifest.json").write_text(
@@ -344,6 +434,7 @@ def main() -> None:
                 "output_dir": str(output_dir),
                 "run_id": args.run_id,
                 "task3_run_id": args.task3_run_id or "",
+                "task3_audit_mode": task3_audit_mode if args.task3_run_id else "",
                 "score_rows": len(scores),
                 "summary_rows": len(summary),
                 "stale_item_count": stale_item_count,

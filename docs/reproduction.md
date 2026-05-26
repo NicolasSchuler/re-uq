@@ -121,7 +121,7 @@ Compare complete runs in the configured matrix:
 
 ## 5. Task 3 Self-Audit Diagnostic
 
-Task 3 audits deterministic Task 2 extractions with a source-grounded self-audit prompt. It is not independent verification and does not repair or overwrite Task 2 outputs.
+Task 3 audits deterministic Task 2 extracted text with a source-grounded blind prompt. It is not independent verification and does not repair or overwrite Task 2 outputs. Declared-modality Task 3 runs are anchoring ablations, not official Task 3 results.
 
 Smoke test Task 3 against a complete Task 2 source run:
 
@@ -132,6 +132,7 @@ Smoke test Task 3 against a complete Task 2 source run:
   --model glm-5.1 \
   --dataset mlm_tapt \
   --source-run-id RUN_ID \
+  --audit-mode blind \
   --mode smoke
 ```
 
@@ -144,10 +145,11 @@ Run the full Task 3 diagnostic:
   --model glm-5.1 \
   --dataset mlm_tapt \
   --source-run-id RUN_ID \
+  --audit-mode blind \
   --mode full
 ```
 
-Task 3 writes local-only raw outputs to `data/processed/model_outputs_raw_task3_verification*.jsonl`, plus Task 3 registry/progress files.
+Task 3 writes local-only raw outputs to `data/processed/model_outputs_raw_task3_verification*.jsonl`, run-specific item CSVs under `data/processed/task3_verification_items/`, plus Task 3 registry/progress files. Existing Task 3 rows without `task3_audit_mode=blind` are legacy anchored diagnostics.
 
 ## 6. Generate Final Analysis
 
@@ -158,7 +160,8 @@ Complete `docs/weak_modality_construct_review.csv` before generating paper-facin
   --dataset mlm_tapt \
   --variant must \
   --run-id RUN_ID \
-  --task3-run-id TASK3_RUN_ID
+  --task3-run-id TASK3_RUN_ID \
+  --task3-audit-mode blind
 ```
 
 The command writes a local analysis directory under `outputs/evaluation_<dataset>_<variant>_<run_id>/` unless `--output-dir` is provided. Expected artifacts include:

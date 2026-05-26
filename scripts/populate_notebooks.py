@@ -344,6 +344,7 @@ def notebook_01() -> list[nbf.NotebookNode]:
                 PROJECT_ROOT / "prompts/modality_extraction.txt",
                 PROJECT_ROOT / "prompts/modality_extraction_labels_only.txt",
                 PROJECT_ROOT / "prompts/modality_verification.txt",
+                PROJECT_ROOT / "prompts/modality_verification_declared.txt",
             ]
             manifest = eu.write_benchmark_manifest(
                 manifest_paths,
@@ -1029,7 +1030,7 @@ def notebook_03b() -> list[nbf.NotebookNode]:
             """
             # 03b Run Modality Self-Audit
 
-            Objective: audit deterministic Task 2 extractions with a source-grounded Task 3 self-audit prompt.
+            Objective: audit deterministic Task 2 extracted text with a source-grounded blind Task 3 prompt.
 
             This diagnostic does not revise Task 2 outputs. It asks the same model whether its extracted requirement preserves, strengthens, weakens, or changes the source.
             """
@@ -1043,10 +1044,10 @@ def notebook_03b() -> list[nbf.NotebookNode]:
             deterministic = CONFIG["llm"]["deterministic"]
             stochastic = CONFIG["llm"]["stochastic"]
             REQUEST_CONCURRENCY = eu.resolve_llm_concurrency(CONFIG)
+            TASK3_AUDIT_MODE = eu.normalize_task3_audit_mode(os.getenv("TASK3_AUDIT_MODE", eu.OFFICIAL_TASK3_AUDIT_MODE))
 
             benchmark_path = eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID, BENCHMARK_VARIANT)
             source_raw_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", DATASET_ID, BENCHMARK_VARIANT)
-            task3_items_path = eu.artifact_path(PROJECT_ROOT / "data/processed/task3_verification_items.csv", DATASET_ID, BENCHMARK_VARIANT)
             output_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task3_verification.jsonl", DATASET_ID, BENCHMARK_VARIANT)
 
             benchmark = eu.read_csv_rows(benchmark_path)
@@ -1066,16 +1067,25 @@ def notebook_03b() -> list[nbf.NotebookNode]:
                 if not complete_run_ids:
                     available = sorted({row.get("run_id", "") for row in all_source_rows if str(row.get("run_id", "")).startswith(run_prefix)})
                     raise ValueError(
-                        "No complete full run found for Task 3 self-audit. "
+                        "No complete full run found for Task 3 text audit. "
                         f"Set TASK3_SOURCE_RUN_ID explicitly or finish a full run. Available run_ids: {available[-10:]}"
                     )
                 source_run_id, source_rows = eu.select_run_rows(all_source_rows, run_id=complete_run_ids[-1], prefix=run_prefix)
 
             run_id = eu.new_run_id("task3" if BENCHMARK_VARIANT == "must" else f"task3-{BENCHMARK_VARIANT}")
+            task3_items_path = eu.task3_verification_items_path(
+                PROJECT_ROOT,
+                DATASET_ID,
+                BENCHMARK_VARIANT,
+                source_run_id,
+                "notebook_multi_model",
+                TASK3_AUDIT_MODE,
+            )
             print({
                 "HOST": HOST,
                 "RUN_TASK3_VERIFICATION": RUN_TASK3_VERIFICATION,
                 "REQUEST_CONCURRENCY": REQUEST_CONCURRENCY,
+                "TASK3_AUDIT_MODE": TASK3_AUDIT_MODE,
                 "source_run_id": source_run_id,
                 "task3_run_id": run_id,
                 "BENCHMARK_VARIANT": BENCHMARK_VARIANT,
@@ -1088,27 +1098,35 @@ def notebook_03b() -> list[nbf.NotebookNode]:
         md("## Build Task 3 Self-Audit Items"),
         code(
             r"""
-            task3_items = eu.build_task3_verification_items(benchmark, source_rows)
+            task3_items = eu.build_task3_verification_items(benchmark, source_rows, audit_mode=TASK3_AUDIT_MODE)
             eu.write_csv_rows(task3_items_path, task3_items, fieldnames=eu.TASK3_VERIFICATION_FIELDS)
-            print(f"Wrote Task 3 self-audit items: {task3_items_path}")
+            print(f"Wrote Task 3 text-audit items: {task3_items_path}")
             print(f"Task 3 items: {len(task3_items)}")
             if not task3_items:
                 raise ValueError("No Task 3 items were built. Check that the selected run has valid deterministic Task 2 rows.")
-            print(eu.markdown_table(task3_items[:8], ["item_id", "source_modality", "task2_modality", "task3_gold_relation"]))
+            print(eu.markdown_table(task3_items[:8], ["item_id", "source_modality", "task2_modality", "task2_text_modality", "task3_declared_relation", "task3_gold_relation"]))
             """
         ),
         md("## Run Task 3 Self-Audit"),
         code(
             r"""
-            task3_template = eu.load_prompt(PROJECT_ROOT / "prompts/modality_verification.txt")
+            task3_prompt_path = (
+                PROJECT_ROOT / "prompts/modality_verification.txt"
+                if TASK3_AUDIT_MODE == eu.OFFICIAL_TASK3_AUDIT_MODE
+                else PROJECT_ROOT / "prompts/modality_verification_declared.txt"
+            )
+            task3_template = eu.load_prompt(task3_prompt_path)
 
             def task3_prompt_for(item):
-                return eu.render_prompt(
-                    task3_template,
-                    source_statement=item["source_statement"],
-                    extracted_requirement=item["task2_requirement"],
-                    extracted_modality=item["task2_modality"],
-                )
+                values = {
+                    "source_statement": item["source_statement"],
+                    "extracted_requirement": item["task2_requirement"],
+                }
+                if TASK3_AUDIT_MODE == "declared_text":
+                    values["declared_extracted_modality"] = item["task2_text_modality"]
+                elif TASK3_AUDIT_MODE == "declared_source":
+                    values["declared_extracted_modality"] = item["source_modality"]
+                return eu.render_prompt(task3_template, **values)
 
             def task3_request_job(item, sample_kind, sample_index, temperature, top_p, request_index):
                 return {
@@ -1122,7 +1140,7 @@ def notebook_03b() -> list[nbf.NotebookNode]:
                     "sample_kind": sample_kind,
                     "temperature": temperature,
                     "top_p": top_p,
-                    "prompt_version": f"{CONFIG['project']['prompt_version']}:task3",
+                    "prompt_version": f"{CONFIG['project']['prompt_version']}:task3:{TASK3_AUDIT_MODE}",
                     "prompt": task3_prompt_for(item),
                     "max_tokens": int(CONFIG["llm"]["max_tokens"]),
                     "timeout_s": int(CONFIG["llm"]["timeout_s"]),
@@ -1162,7 +1180,7 @@ def notebook_03b() -> list[nbf.NotebookNode]:
                         print(f"Completed {len(records)}/{len(jobs)} Task 3 calls")
                 print(f"Wrote {len(records)} Task 3 records to {output_path}")
             else:
-                print("Task 3 self-audit not run. Set RUN_TASK3_VERIFICATION=true to execute it.")
+                print("Task 3 text audit not run. Set RUN_TASK3_VERIFICATION=true to execute it.")
             """
         ),
         md("## Verification Summary"),
@@ -1217,8 +1235,8 @@ def notebook_04() -> list[nbf.NotebookNode]:
             r"""
             benchmark_path = eu.artifact_path(PROJECT_ROOT / "data/processed/benchmark_items.csv", DATASET_ID, BENCHMARK_VARIANT)
             raw_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw.jsonl", DATASET_ID, BENCHMARK_VARIANT)
-            task3_items_path = eu.artifact_path(PROJECT_ROOT / "data/processed/task3_verification_items.csv", DATASET_ID, BENCHMARK_VARIANT)
             task3_raw_path = eu.artifact_path(PROJECT_ROOT / "data/processed/model_outputs_raw_task3_verification.jsonl", DATASET_ID, BENCHMARK_VARIANT)
+            TASK3_AUDIT_MODE = eu.normalize_task3_audit_mode(os.getenv("TASK3_AUDIT_MODE", eu.OFFICIAL_TASK3_AUDIT_MODE))
 
             benchmark = eu.read_csv_rows(benchmark_path)
             all_raw_rows = eu.read_jsonl(raw_path)
@@ -1240,16 +1258,39 @@ def notebook_04() -> list[nbf.NotebookNode]:
                         f"Set RUN_ID or ANALYSIS_RUN_ID explicitly. Available run_ids: {available[-10:]}"
                     )
                 selected_run_id, raw_rows = eu.select_run_rows(all_raw_rows, run_id=complete_run_ids[-1], prefix=run_prefix)
-            all_task3_items = eu.read_csv_rows(task3_items_path) if task3_items_path.exists() else []
-            task3_items = [row for row in all_task3_items if row.get("task2_run_id") == selected_run_id]
             all_task3_rows = eu.read_jsonl(task3_raw_path)
             requested_task3_run_id = os.getenv("TASK3_RUN_ID")
+
+            def task3_row_matches_audit_mode(row):
+                raw_mode = str(row.get("task3_audit_mode", "")).strip()
+                row_mode = eu.normalize_task3_audit_mode(raw_mode) if raw_mode else eu.LEGACY_TASK3_AUDIT_MODE
+                return row_mode == TASK3_AUDIT_MODE
+
             if requested_task3_run_id:
                 selected_task3_run_id, task3_raw_rows = eu.select_run_rows(all_task3_rows, run_id=requested_task3_run_id, prefix="task3")
+                task3_raw_rows = [row for row in task3_raw_rows if task3_row_matches_audit_mode(row)]
             else:
-                source_task3_rows = [row for row in all_task3_rows if row.get("task2_run_id") == selected_run_id]
+                source_task3_rows = [
+                    row
+                    for row in all_task3_rows
+                    if row.get("task2_run_id") == selected_run_id and task3_row_matches_audit_mode(row)
+                ]
                 selected_task3_run_id = eu.latest_run_id(source_task3_rows, prefix="task3")
                 task3_raw_rows = [row for row in source_task3_rows if row.get("run_id") == selected_task3_run_id] if selected_task3_run_id else []
+            task3_items = eu.task3_items_from_raw_rows(task3_raw_rows)
+            task3_item_models = sorted({row.get("task2_model") or row.get("model", "") for row in task3_raw_rows})
+            task3_items_path = None
+            if not task3_items and len(task3_item_models) == 1:
+                task3_items_path = eu.task3_verification_items_path(
+                    PROJECT_ROOT,
+                    DATASET_ID,
+                    BENCHMARK_VARIANT,
+                    selected_run_id,
+                    task3_item_models[0],
+                    TASK3_AUDIT_MODE,
+                )
+                all_task3_items = eu.read_csv_rows(task3_items_path) if task3_items_path.exists() else []
+                task3_items = [row for row in all_task3_items if row.get("task2_run_id") == selected_run_id]
             result_benchmark = eu.benchmark_rows_with_current_raw_outputs(benchmark, raw_rows)
             stale_item_count = len(benchmark) - len(result_benchmark)
             print(f"Benchmark variant: {BENCHMARK_VARIANT}")
@@ -1261,7 +1302,8 @@ def notebook_04() -> list[nbf.NotebookNode]:
             print(f"Raw output rows: {len(all_raw_rows)}")
             print(f"Selected run_id: {selected_run_id}")
             print(f"Selected raw rows: {len(raw_rows)}")
-            print(f"Task 3 items path: {task3_items_path} ({'exists' if task3_items_path.exists() else 'missing'})")
+            print(f"Task 3 audit mode: {TASK3_AUDIT_MODE}")
+            print(f"Task 3 items path: {task3_items_path} ({'exists' if task3_items_path and task3_items_path.exists() else 'from raw rows or missing'})")
             print(f"Selected Task 3 run_id: {selected_task3_run_id}")
             print(f"Selected Task 3 items: {len(task3_items)}")
             print(f"Selected Task 3 raw rows: {len(task3_raw_rows)}")
@@ -1526,7 +1568,7 @@ def notebook_05() -> list[nbf.NotebookNode]:
                 "- Observation: <grounded result from metrics_summary.csv>.",
                 "- Observation: <grounded result from task1_p_yes_by_modality.svg>.",
                 "- Observation: <grounded high-confidence over-commitment result>.",
-                "- Observation: <grounded Task 3 self-audit result>.",
+                "- Observation: <grounded blind Task 3 text-audit result>.",
                 "",
                 "## Interpretation",
                 "- Hypothesis: <what the observed pattern may imply>.",

@@ -6,6 +6,9 @@ Source statement:
 Extracted requirement:
 "{extracted_requirement}"
 
+Declared extracted modality:
+"{declared_extracted_modality}"
+
 Question:
 Compared with the source statement, does the extracted requirement preserve, strengthen, weaken, or change the functional content?
 

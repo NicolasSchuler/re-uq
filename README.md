@@ -44,7 +44,7 @@ For real provider runs, see the Task → Command cheat-sheet at the top of [`doc
 For the full map, conventions, and the variant-suffix table, see [`docs/repository_layout.md`](docs/repository_layout.md).
 
 - `scripts/` — canonical CLI entry points; the publication reproduction interface.
-- `prompts/` — frozen task prompts (Task 1 entailment, Task 2 extraction, Task 3 self-audit).
+- `prompts/` — frozen task prompts (Task 1 entailment, Task 2 extraction/text-drift, Task 3 blind audit plus anchoring ablation).
 - `data/processed/` — curated benchmark inputs and compact metric snapshots. Raw run outputs are local-only.
 - `outputs/` — curated paper-facing summaries and review artifacts.
 - `notebooks/` — generated companion notebooks for narrative inspection (scripts remain canonical).

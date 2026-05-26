@@ -14,7 +14,7 @@ Use **commitment normalization** as an explanatory shorthand, not as the primary
 
 Treat Task 1 as a capability/control task and Task 2 as the main empirical task. In the current pilot, the model handled mandatory entailment correctly but failed to preserve weak stakeholder intent during extraction.
 
-Add Task 3 as a source-grounded self-audit diagnostic over deterministic Task 2 outputs. Task 3 asks the same model whether its extraction preserved, strengthened, weakened, or changed the source statement; it audits fidelity but does not revise or repair outputs.
+Add Task 3 as a blind source-grounded text-audit diagnostic over deterministic Task 2 outputs. Task 3 asks the same model whether its extracted text preserved, strengthened, weakened, or changed the source statement; it audits fidelity but does not revise or repair outputs. Declared-modality prompts are anchoring ablations.
 
 For paper-facing wording and caveats, see `docs/paper_framing.md`.
 
@@ -56,7 +56,7 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 - Add a deterministic rule-based modality baseline as a sanity comparator, not a competing ML method.
 - Add high-confidence over-commitment metrics at thresholds `0.80` and `0.90`.
 - Treat all `v2-conf01` and `v2-instructor-conf01` model outputs as probability-scale confidence in `[0.0, 1.0]`; new v2 raw rows must carry `confidence_scale=0_1`.
-- Add Task 3 source-grounded modality self-audit after the full run, using `prompts/modality_verification.txt` and writing `data/processed/model_outputs_raw_task3_verification.jsonl`.
+- Add blind Task 3 text audit after the full run, using `prompts/modality_verification.txt` and writing `data/processed/model_outputs_raw_task3_verification.jsonl`.
 - Add one Task 1 prompt-sensitivity check on the pilot subset using `prompts/mandatory_entailment_strict.txt`.
 - Add one focused Task 2 prompt-validity check for `nice_to_have` sources using `prompts/modality_extraction_labels_only.txt`, which states the allowed output labels without giving deterministic mapping rules or examples.
 - Add `notebooks/02b_weak_modality_robustness_probe.ipynb` before full runs to test whether the `nice_to_have` failure is phrase-specific or robust across weak stakeholder-intent phrasings.
@@ -124,7 +124,7 @@ Example:
 ## Phase 4b: Run Source-Grounded Modality Verification
 
 - Run `scripts/run_task3_verification_from_config.py` after a complete Task 2 full run. `notebooks/03b_run_modality_verification.ipynb` mirrors this diagnostic for inspection.
-- Build `data/processed/task3_verification_items.csv` from valid deterministic Task 2 outputs.
+- Build run-specific Task 3 item CSVs under `data/processed/task3_verification_items/` from valid deterministic Task 2 outputs.
 - Run the same model as verifier for each extraction, with deterministic decoding plus stochastic verifier samples.
 - Cache raw Task 3 responses in `data/processed/model_outputs_raw_task3_verification.jsonl`.
 
@@ -143,7 +143,7 @@ Example:
   - Task 2 `HC-OC_overcommittable@tau`: the same numerator, but excluding mandatory source rows from the denominator.
   - Task 2 `weak_strengthening@tau`: among weak stakeholder-intent sources, the fraction predicted as any stronger modality with confidence at least `tau`.
 - Treat entropy, variation ratio, and consistency frequency as summaries of the same stochastic label distribution, not as independent prediction methods.
-- Treat Task 3 as a source-grounded self-audit diagnostic, not independent verification.
+- Treat Task 3 as a blind source-grounded text-audit diagnostic, not independent verification.
 
 ## Phase 6: Export Paper Artifacts
 

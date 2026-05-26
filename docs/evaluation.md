@@ -45,13 +45,13 @@ Task 1 is a control task: mandatory-requirement entailment.
 
 Given a source statement and a mandatory candidate requirement, the model answers whether the mandatory candidate is faithfully entailed by the source. The expected risk metric is unsupported mandatory acceptance among non-mandatory sources.
 
-Task 2 is the main empirical task: modality-preserving extraction.
+Task 2 is the main empirical task: modality-preserving extraction plus generated-text modality drift.
 
-Given a source statement, the model extracts one requirement and labels its modality. The expected failure mode is strengthening, especially from `nice_to_have` to `optional`, `recommended`, or `mandatory`.
+Given a source statement, the model extracts one requirement and labels its modality. The expected failure mode is strengthening in either the declared label or the generated requirement text, especially when a weak stakeholder-intent source is rewritten into `optional`, `recommended`, or `mandatory` language.
 
-Task 3 is a post-run self-audit diagnostic.
+Task 3 is a post-run blind text-audit diagnostic.
 
-After a complete Task 2 run, the same model judges whether its extracted requirement `preserves`, `strengthens`, `weakens`, or changes the source content. Task 3 is not independent verification and must not be framed as correcting the benchmark outputs.
+After a complete Task 2 run, the same model judges whether its extracted requirement text `preserves`, `strengthens`, `weakens`, or changes the source content. The official prompt does not reveal the Task 2 declared modality. Declared-modality Task 3 prompts are anchoring ablations only. Task 3 is not independent verification and must not be framed as correcting the benchmark outputs.
 
 ## Confidence Contract
 
@@ -104,15 +104,17 @@ Task 2 headline risks:
 - `HC-OC_all@tau`: strengthening with confidence at least `tau`, denominator all valid Task 2 outputs.
 - `HC-OC_overcommittable@tau`: same numerator, excluding mandatory source rows from the denominator.
 - `weak_strengthening@tau`: among weak stakeholder-intent sources, prediction as any stronger modality with confidence at least `tau`.
+- `label_correct_text_overcommit@tau`: among label-correct Task 2 outputs, generated requirement text still strengthens the source at confidence at least `tau`.
+- `strict_text_over_commitment`: generated-text strengthening using explicit modal or weak-phrase evidence, excluding the generic system-verb fallback.
 
 Task 3 diagnostic metrics:
 
 - relation macro-F1;
-- strengthening recall;
-- false-preserve rate;
+- blind strengthening recall;
+- blind false-preserve rate;
 - evidence-phrase-in-source rate.
 
-Report bootstrap confidence intervals over seeds for accuracy, Brier score, unsupported mandatory acceptance, `HC-OC_overcommittable`, and `weak_strengthening`.
+Report bootstrap confidence intervals over seeds for accuracy, Brier score, unsupported mandatory acceptance, `HC-OC_overcommittable`, `weak_strengthening`, and `label_correct_text_overcommit`.
 
 ## Run Protocol
 
@@ -138,6 +140,7 @@ Task 3 should run only after a complete Task 2 full run:
   --model qwen/qwen3.5-9b \
   --dataset nice \
   --source-run-id RUN_ID \
+  --audit-mode blind \
   --mode full
 ```
 
@@ -148,7 +151,8 @@ Generate paper-facing analysis artifacts from a complete run with:
   --dataset nice \
   --variant must \
   --run-id RUN_ID \
-  --task3-run-id TASK3_RUN_ID
+  --task3-run-id TASK3_RUN_ID \
+  --task3-audit-mode blind
 ```
 
 The notebooks remain useful for inspection, but `docs/reproduction.md` is the canonical command-first reproduction guide.

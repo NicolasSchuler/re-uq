@@ -30,7 +30,7 @@ No. The scripts under `scripts/` are the canonical reproduction interface for th
 
 ## What about Task 3? Is it part of the headline?
 
-Task 3 is a **diagnostic** self-audit, not the headline. It asks whether the deterministic Task 2 extraction preserved, strengthened, weakened, or changed the source. It is run after a complete Task 2 run and never repairs Task 2 outputs. See `docs/architecture.md` and `docs/evaluation.md`.
+Task 3 is a **diagnostic** blind text audit, not the headline. It asks whether the deterministic Task 2 extracted text preserved, strengthened, weakened, or changed the source, without revealing the Task 2 declared modality. Declared-modality Task 3 runs are anchoring ablations. See `docs/architecture.md` and `docs/evaluation.md`.
 
 ## Why is the repository preserved without anonymized commit history?
 

@@ -64,10 +64,10 @@ seed datasets   ---> | seed candidates (raw)   |
 | Task | Role | Prompt | Output contract |
 | --- | --- | --- | --- |
 | **Task 1** | Capability/control: does the source statement entail a mandatory requirement? | `prompts/mandatory_entailment.txt` (+ `_strict` sensitivity variant) | `{decision: yes|no, confidence: 0.0-1.0, brief_reason}` |
-| **Task 2** | Main: extract modality-preserving requirement label from the source. | `prompts/modality_extraction.txt` (+ `_labels_only` sensitivity variant) | `{requirement, modality: mandatory|recommended|optional|nice_to_have, confidence: 0.0-1.0}` |
-| **Task 3** | Diagnostic: does the deterministic Task 2 extraction preserve, strengthen, weaken, or change the source? | `prompts/modality_verification.txt` | `{relation: preserves|strengthens|weakens|content_changed, confidence: 0.0-1.0, evidence_phrase}` |
+| **Task 2** | Main: extract a requirement plus declared modality, then diagnose generated-text modality drift. | `prompts/modality_extraction.txt` (+ `_labels_only` sensitivity variant) | `{requirement, modality: mandatory|recommended|optional|nice_to_have, confidence: 0.0-1.0}` |
+| **Task 3** | Diagnostic: blind audit of whether deterministic Task 2 extracted text preserves, strengthens, weakens, or changes the source. | `prompts/modality_verification.txt` (+ `_declared` anchoring ablation) | `{relation: preserves|strengthens|weakens|content_changed, confidence: 0.0-1.0, evidence_phrase}` |
 
-Task 3 is **strictly downstream** of a complete deterministic Task 2 run and never repairs Task 2 outputs.
+Task 3 is **strictly downstream** of a complete deterministic Task 2 run and never repairs Task 2 outputs. Official Task 3 is blind to the Task 2 declared modality; declared-modality prompts are ablations.
 
 ## Confidence Contract
 

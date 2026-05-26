@@ -52,6 +52,11 @@ import matplotlib.pyplot as plt
 
 MODALITIES = ["mandatory", "recommended", "optional", "nice_to_have"]
 TASK3_RELATIONS = ["preserves", "strengthens", "weakens", "content_changed"]
+TASK3_AUDIT_MODES = ["blind", "declared_text", "declared_source"]
+OFFICIAL_TASK3_AUDIT_MODE = "blind"
+LEGACY_TASK3_AUDIT_MODE = "legacy_declared"
+TEXT_MODALITY_BASES = ["weak_phrase", "explicit_modal", "heuristic_system_verb", "unknown"]
+STRICT_TEXT_MODALITY_BASES = {"weak_phrase", "explicit_modal"}
 MONOTONICITY_TOLERANCE = 0.05
 WEAK_MODALITY_PROBE_TEMPLATES = [
     {
@@ -131,8 +136,13 @@ TASK3_VERIFICATION_FIELDS = [
     "task2_model",
     "task2_requirement",
     "task2_modality",
+    "task2_text_modality",
+    "task2_text_modality_basis",
+    "task2_text_modality_parse_status",
     "task2_confidence",
+    "task3_declared_relation",
     "task3_gold_relation",
+    "task3_audit_mode",
     "ordinal_strength",
     "numeric_strength",
 ]
@@ -493,6 +503,25 @@ def artifact_path(path: str | Path, dataset_id: str | None = None, variant: str 
     return path.with_name(f"{path.stem}{suffix}{path.suffix}")
 
 
+def task3_verification_items_path(
+    root: str | Path,
+    dataset_id: str | None,
+    variant: str | None,
+    source_run_id: str,
+    model: str,
+    audit_mode: str = OFFICIAL_TASK3_AUDIT_MODE,
+) -> Path:
+    parts = [
+        "task3_verification_items",
+        normalize_dataset_id(dataset_id),
+        normalize_benchmark_variant(variant),
+        safe_identifier(source_run_id),
+        safe_identifier(model),
+        safe_identifier(normalize_task3_audit_mode(audit_mode)),
+    ]
+    return Path(root) / "data/processed/task3_verification_items" / ("_".join(parts) + ".csv")
+
+
 def candidate_path(path: str | Path) -> Path:
     path = Path(path)
     return path.with_name(f"{path.stem}_candidate{path.suffix}")
@@ -553,6 +582,24 @@ def normalize_benchmark_variant(variant: str | None) -> str:
     if normalized == "shall":
         return "shall"
     raise ValueError(f"Unknown benchmark variant: {variant}")
+
+
+def normalize_task3_audit_mode(value: Any) -> str:
+    normalized = str(value or OFFICIAL_TASK3_AUDIT_MODE).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "": OFFICIAL_TASK3_AUDIT_MODE,
+        "official": OFFICIAL_TASK3_AUDIT_MODE,
+        "blind": "blind",
+        "declared": "declared_text",
+        "anchored": "declared_text",
+        "declared_text": "declared_text",
+        "declared_source": "declared_source",
+        "legacy": LEGACY_TASK3_AUDIT_MODE,
+        "legacy_declared": LEGACY_TASK3_AUDIT_MODE,
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    raise ValueError(f"Unknown Task 3 audit mode: {value}")
 
 
 def normalize_base_url(value: Any) -> str:
@@ -1412,7 +1459,9 @@ def build_weak_modality_probe_items(
 def build_task3_verification_items(
     benchmark_rows: list[dict[str, Any]],
     task2_raw_rows: list[dict[str, Any]],
+    audit_mode: str = OFFICIAL_TASK3_AUDIT_MODE,
 ) -> list[dict[str, Any]]:
+    audit_mode = normalize_task3_audit_mode(audit_mode)
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
     task2_raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, task2_raw_rows)
     items: list[dict[str, Any]] = []
@@ -1429,17 +1478,23 @@ def build_task3_verification_items(
         extracted_modality = normalize_modality(parsed.get("modality"))
         if extracted_modality is None:
             continue
+        text_diagnostic = requirement_text_modality_diagnostic(parsed.get("requirement", ""))
+        text_modality = normalize_modality(text_diagnostic["text_modality"])
+        text_parse_status = "ok" if text_modality in MODALITIES else "unknown"
+        if text_modality is None:
+            continue
         model = str(raw.get("model", ""))
         source_item_id = str(source_item["item_id"])
         dedupe_key = (model, source_item_id)
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
-        relation = task3_gold_relation(source_item["source_modality"], extracted_modality)
+        declared_relation = task3_gold_relation(source_item["source_modality"], extracted_modality)
+        relation = task3_gold_relation(source_item["source_modality"], text_modality)
         confidence = confidence_probability(raw, parsed)
         items.append(
             {
-                "item_id": f"{source_item_id}__task3__{safe_identifier(model)}",
+                "item_id": f"{source_item_id}__task3__{safe_identifier(model)}__{safe_identifier(audit_mode)}",
                 "source_item_id": source_item_id,
                 "seed_id": source_item["seed_id"],
                 "source_dataset": source_item.get("source_dataset", "NICE"),
@@ -1451,12 +1506,48 @@ def build_task3_verification_items(
                 "task2_model": model,
                 "task2_requirement": str(parsed.get("requirement", "")),
                 "task2_modality": extracted_modality,
+                "task2_text_modality": text_modality,
+                "task2_text_modality_basis": text_diagnostic["text_modality_basis"],
+                "task2_text_modality_parse_status": text_parse_status,
                 "task2_confidence": "" if confidence is None else confidence,
+                "task3_declared_relation": declared_relation,
                 "task3_gold_relation": relation,
+                "task3_audit_mode": audit_mode,
                 "ordinal_strength": int(source_item["ordinal_strength"]),
                 "numeric_strength": float(source_item["numeric_strength"]),
             }
         )
+    return items
+
+
+def task3_items_from_raw_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    required_fields = {
+        "item_id",
+        "source_item_id",
+        "seed_id",
+        "source_modality",
+        "source_statement",
+        "task2_run_id",
+        "task2_model",
+        "task2_requirement",
+        "task3_gold_relation",
+        "task3_audit_mode",
+        "ordinal_strength",
+        "numeric_strength",
+    }
+    for raw in raw_rows:
+        if raw.get("task") != "task3":
+            continue
+        item_id = str(raw.get("item_id", ""))
+        if not item_id or item_id in seen:
+            continue
+        if any(str(raw.get(field, "")).strip() == "" for field in required_fields):
+            continue
+        seen.add(item_id)
+        item = {field: raw.get(field, "") for field in TASK3_VERIFICATION_FIELDS}
+        items.append(item)
     return items
 
 
@@ -2276,10 +2367,10 @@ def rule_based_source_modality(source_statement_text: str) -> str | None:
     return None
 
 
-def requirement_text_modality(requirement_text: Any) -> str:
+def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, str]:
     text = normalize_space(str(requirement_text or "")).lower()
     if not text:
-        return "unknown"
+        return {"text_modality": "unknown", "text_modality_basis": "unknown"}
 
     weak_patterns = [
         r"\bwould\s+be\s+nice\s+if\b",
@@ -2290,28 +2381,38 @@ def requirement_text_modality(requirement_text: Any) -> str:
         r"\bwishlist\b",
     ]
     if any(re.search(pattern, text) for pattern in weak_patterns):
-        return "nice_to_have"
+        return {"text_modality": "nice_to_have", "text_modality_basis": "weak_phrase"}
     if re.search(r"\b(?:must|shall)\b", text) or re.search(r"\brequired\s+to\b", text):
-        return "mandatory"
+        return {"text_modality": "mandatory", "text_modality_basis": "explicit_modal"}
     if re.search(r"\b(?:should|recommended)\b", text):
-        return "recommended"
+        return {"text_modality": "recommended", "text_modality_basis": "explicit_modal"}
     if re.search(r"\b(?:may|optional|could|can)\b", text):
-        return "optional"
+        return {"text_modality": "optional", "text_modality_basis": "explicit_modal"}
     if re.match(r"^(?:the\s+)?system\s+\w+", text):
-        return "mandatory"
-    return "unknown"
+        return {"text_modality": "mandatory", "text_modality_basis": "heuristic_system_verb"}
+    return {"text_modality": "unknown", "text_modality_basis": "unknown"}
+
+
+def requirement_text_modality(requirement_text: Any) -> str:
+    return requirement_text_modality_diagnostic(requirement_text)["text_modality"]
 
 
 def empty_text_modality_fields() -> dict[str, Any]:
     return {
         "text_modality": "",
+        "text_modality_basis": "",
         "text_modality_parse_status": "",
         "text_modality_correct": "",
         "label_text_consistent": "",
         "text_overcommit": "",
         "text_undercommit": "",
+        "strict_text_overcommit": "",
         "text_high_conf_overcommit_80": "",
         "text_high_conf_overcommit_90": "",
+        "strict_text_high_conf_overcommit_80": "",
+        "strict_text_high_conf_overcommit_90": "",
+        "label_correct_text_overcommit_80": "",
+        "label_correct_text_overcommit_90": "",
     }
 
 
@@ -2321,21 +2422,31 @@ def text_modality_fields(
     pred_modality: str,
     confidence: float,
 ) -> dict[str, Any]:
-    text_modality = requirement_text_modality(requirement_text)
+    diagnostic = requirement_text_modality_diagnostic(requirement_text)
+    text_modality = diagnostic["text_modality"]
+    text_modality_basis = diagnostic["text_modality_basis"]
     parse_ok = text_modality in MODALITIES
     gold_strength = ORDINAL_STRENGTH.get(str(gold_modality))
     text_strength = ORDINAL_STRENGTH.get(text_modality)
     overcommit = bool(parse_ok and gold_strength is not None and text_strength is not None and text_strength > gold_strength)
     undercommit = bool(parse_ok and gold_strength is not None and text_strength is not None and text_strength < gold_strength)
+    strict_overcommit = bool(overcommit and text_modality_basis in STRICT_TEXT_MODALITY_BASES)
+    label_correct = normalize_modality(pred_modality) == normalize_modality(gold_modality)
     return {
         "text_modality": text_modality,
+        "text_modality_basis": text_modality_basis,
         "text_modality_parse_status": "ok" if parse_ok else "unknown",
         "text_modality_correct": bool(parse_ok and text_modality == gold_modality),
         "label_text_consistent": bool(parse_ok and text_modality == pred_modality),
         "text_overcommit": overcommit,
         "text_undercommit": undercommit,
+        "strict_text_overcommit": strict_overcommit,
         "text_high_conf_overcommit_80": bool(overcommit and confidence >= 0.80),
         "text_high_conf_overcommit_90": bool(overcommit and confidence >= 0.90),
+        "strict_text_high_conf_overcommit_80": bool(strict_overcommit and confidence >= 0.80),
+        "strict_text_high_conf_overcommit_90": bool(strict_overcommit and confidence >= 0.90),
+        "label_correct_text_overcommit_80": bool(label_correct and overcommit and confidence >= 0.80),
+        "label_correct_text_overcommit_90": bool(label_correct and overcommit and confidence >= 0.90),
     }
 
 
@@ -2448,18 +2559,31 @@ def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
         )
 
     if task == "task3":
-        items = [
-            {
+        items = []
+        has_declared_modality = False
+        for job in jobs:
+            item = {
                 "request_index": int(job["request_index"]),
                 "source_statement": str(job["item"]["source_statement"]),
                 "extracted_requirement": str(job["item"]["task2_requirement"]),
-                "extracted_modality": str(job["item"]["task2_modality"]),
             }
-            for job in jobs
-        ]
+            audit_mode = normalize_task3_audit_mode(job["item"].get("task3_audit_mode", OFFICIAL_TASK3_AUDIT_MODE))
+            if audit_mode == "declared_text":
+                item["declared_extracted_modality"] = str(job["item"].get("task2_text_modality", ""))
+                has_declared_modality = True
+            elif audit_mode == "declared_source":
+                item["declared_extracted_modality"] = str(job["item"].get("source_modality", ""))
+                has_declared_modality = True
+            items.append(item)
+        declared_instruction = (
+            "Use any declared_extracted_modality field only when it is present.\n"
+            if has_declared_modality
+            else ""
+        )
         return (
             "Audit whether each extracted software requirement preserves the source statement.\n"
-            "Evaluate each item independently and do not repair the extracted requirement.\n\n"
+            "Evaluate each item independently and do not repair the extracted requirement.\n"
+            f"{declared_instruction}\n"
             'Use one of: "preserves", "strengthens", "weakens", "content_changed".\n'
             "Use confidence as a decimal from 0.0 to 1.0 for confidence in the selected relation.\n"
             'Do not return percentages such as 95 or strings such as "95%".\n'
@@ -2936,11 +3060,24 @@ def build_raw_record(
     if "template_id" in item:
         record["template_id"] = item["template_id"]
     for key in [
+        "source_dataset",
+        "original_requirement",
+        "capability_text",
+        "source_statement",
         "source_item_id",
         "task2_run_id",
         "task2_model",
+        "task2_requirement",
         "task2_modality",
+        "task2_text_modality",
+        "task2_text_modality_basis",
+        "task2_text_modality_parse_status",
+        "task2_confidence",
+        "task3_declared_relation",
         "task3_gold_relation",
+        "task3_audit_mode",
+        "ordinal_strength",
+        "numeric_strength",
     ]:
         if key in item:
             record[key] = item[key]
@@ -3512,6 +3649,11 @@ def task3_score_fields(item: dict[str, Any], pred_relation: str, evidence_phrase
         "gold_relation": item.get("task3_gold_relation", ""),
         "pred_relation": pred_relation,
         "task2_modality": item.get("task2_modality", ""),
+        "task2_text_modality": item.get("task2_text_modality", ""),
+        "task2_text_modality_basis": item.get("task2_text_modality_basis", ""),
+        "task2_text_modality_parse_status": item.get("task2_text_modality_parse_status", ""),
+        "task3_declared_relation": item.get("task3_declared_relation", ""),
+        "task3_audit_mode": item.get("task3_audit_mode", ""),
         "task2_requirement": item.get("task2_requirement", ""),
         "evidence_phrase": str(evidence_phrase or ""),
         "evidence_phrase_in_source": evidence_phrase_in_source(evidence_phrase, item.get("source_statement", "")),
@@ -3941,6 +4083,8 @@ def build_task3_scores(task3_items: list[dict[str, Any]], raw_rows: list[dict[st
             continue
         confidence = confidence_probability(raw, parsed)
         gold_relation = item["task3_gold_relation"]
+        if gold_relation not in TASK3_RELATIONS:
+            continue
         correct = 1 if pred_relation == gold_relation else 0
         base = score_base(raw, item, "verbalized_confidence", valid_n=1, total_n=1)
         scores.append(
@@ -3974,6 +4118,8 @@ def build_task3_scores(task3_items: list[dict[str, Any]], raw_rows: list[dict[st
             continue
         valid = [row for row in group if row.get("parse_status") == "ok" and isinstance(row.get("parsed_json"), dict)]
         if not valid:
+            continue
+        if item.get("task3_gold_relation", "") not in TASK3_RELATIONS:
             continue
         distribution = label_distribution_from_rows("task3", valid)
         scores.extend(distribution_score_rows(valid[0], item, distribution, len(valid), len(group), "relation_consistency"))
@@ -4476,13 +4622,19 @@ def write_preliminary_result_snapshot(
         "gold_modality",
         "pred_modality",
         "text_modality",
+        "text_modality_basis",
         "text_modality_parse_status",
         "text_modality_correct",
         "label_text_consistent",
         "text_overcommit",
         "text_undercommit",
+        "strict_text_overcommit",
         "text_high_conf_overcommit_80",
         "text_high_conf_overcommit_90",
+        "strict_text_high_conf_overcommit_80",
+        "strict_text_high_conf_overcommit_90",
+        "label_correct_text_overcommit_80",
+        "label_correct_text_overcommit_90",
     ]
     summary_fields = [
         "model",
@@ -4518,11 +4670,15 @@ def write_preliminary_result_snapshot(
         "text_modality_accuracy",
         "text_modality_accuracy_all",
         "text_modality_parse_coverage",
+        "heuristic_text_modality_rate",
         "label_text_consistency",
         "text_over_commitment",
+        "strict_text_over_commitment",
         "text_under_commitment",
         "text_high_conf_overcommit_80",
         "text_high_conf_overcommit_90",
+        "label_correct_text_overcommit_80",
+        "label_correct_text_overcommit_90",
         "parse_failure_rate",
     ]
     write_csv_rows(paths["scores"], scores, fieldnames=score_fields)
@@ -4917,6 +5073,24 @@ def weak_strengthening_rate(rows: list[dict[str, Any]], threshold: float | None 
     return len(strengthened) / len(weak_rows)
 
 
+def label_correct_text_overcommit_rate(rows: list[dict[str, Any]], threshold: float | None = None) -> float:
+    label_correct_rows = [
+        row
+        for row in rows
+        if str(row.get("task", "")) == "task2" and _truthy(row.get("y_true"))
+    ]
+    if not label_correct_rows:
+        return math.nan
+    over = []
+    for row in label_correct_rows:
+        if not _truthy(row.get("text_overcommit")):
+            continue
+        if threshold is not None and float(row.get("confidence", 0.0)) < threshold:
+            continue
+        over.append(row)
+    return len(over) / len(label_correct_rows)
+
+
 def weak_modality_recall(rows: list[dict[str, Any]]) -> float:
     weak_rows = [
         row
@@ -4959,11 +5133,15 @@ def text_modality_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, float
             "text_modality_accuracy": "",
             "text_modality_accuracy_all": "",
             "text_modality_parse_coverage": "",
+            "heuristic_text_modality_rate": "",
             "label_text_consistency": "",
             "text_over_commitment": "",
+            "strict_text_over_commitment": "",
             "text_under_commitment": "",
             "text_high_conf_overcommit_80": "",
             "text_high_conf_overcommit_90": "",
+            "label_correct_text_overcommit_80": "",
+            "label_correct_text_overcommit_90": "",
         }
     total_rows = len(diagnostic_rows)
     text_rows = [row for row in diagnostic_rows if str(row.get("text_modality_parse_status", "")) == "ok"]
@@ -4976,22 +5154,33 @@ def text_modality_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, float
             "text_modality_accuracy": "",
             "text_modality_accuracy_all": correct_over_all,
             "text_modality_parse_coverage": coverage,
+            "heuristic_text_modality_rate": "",
             "label_text_consistency": "",
             "text_over_commitment": "",
+            "strict_text_over_commitment": "",
             "text_under_commitment": "",
             "text_high_conf_overcommit_80": "",
             "text_high_conf_overcommit_90": "",
+            "label_correct_text_overcommit_80": label_correct_text_overcommit_rate(diagnostic_rows, 0.80),
+            "label_correct_text_overcommit_90": label_correct_text_overcommit_rate(diagnostic_rows, 0.90),
         }
     total = len(text_rows)
     return {
         "text_modality_accuracy": sum(1 for row in text_rows if _truthy(row.get("text_modality_correct"))) / total,
         "text_modality_accuracy_all": correct_over_all,
         "text_modality_parse_coverage": coverage,
+        "heuristic_text_modality_rate": sum(
+            1 for row in text_rows if str(row.get("text_modality_basis", "")) == "heuristic_system_verb"
+        )
+        / total,
         "label_text_consistency": sum(1 for row in text_rows if _truthy(row.get("label_text_consistent"))) / total,
         "text_over_commitment": sum(1 for row in text_rows if _truthy(row.get("text_overcommit"))) / total,
+        "strict_text_over_commitment": sum(1 for row in text_rows if _truthy(row.get("strict_text_overcommit"))) / total,
         "text_under_commitment": sum(1 for row in text_rows if _truthy(row.get("text_undercommit"))) / total,
         "text_high_conf_overcommit_80": sum(1 for row in text_rows if _truthy(row.get("text_high_conf_overcommit_80"))) / total,
         "text_high_conf_overcommit_90": sum(1 for row in text_rows if _truthy(row.get("text_high_conf_overcommit_90"))) / total,
+        "label_correct_text_overcommit_80": label_correct_text_overcommit_rate(diagnostic_rows, 0.80),
+        "label_correct_text_overcommit_90": label_correct_text_overcommit_rate(diagnostic_rows, 0.90),
     }
 
 
@@ -5192,6 +5381,12 @@ def headline_risk_ci_fields(
                 f"weak_strengthening_{suffix}": (
                     lambda sample_rows, threshold=threshold: weak_strengthening_rate(sample_rows, threshold)
                 ),
+                f"label_correct_text_overcommit_{suffix}": (
+                    lambda sample_rows, threshold=threshold: label_correct_text_overcommit_rate(
+                        sample_rows,
+                        threshold,
+                    )
+                ),
             }
             for metric_name, metric in metric_specs.items():
                 _, low, high = bootstrap_seed_metric(rows, metric, iterations=iterations)
@@ -5275,11 +5470,15 @@ def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[di
             "text_modality_accuracy": "",
             "text_modality_accuracy_all": "",
             "text_modality_parse_coverage": "",
+            "heuristic_text_modality_rate": "",
             "label_text_consistency": "",
             "text_over_commitment": "",
+            "strict_text_over_commitment": "",
             "text_under_commitment": "",
             "text_high_conf_overcommit_80": "",
             "text_high_conf_overcommit_90": "",
+            "label_correct_text_overcommit_80": "",
+            "label_correct_text_overcommit_90": "",
             "strengthening_recall": "",
             "false_preserve_rate": "",
             "evidence_phrase_source_rate": "",

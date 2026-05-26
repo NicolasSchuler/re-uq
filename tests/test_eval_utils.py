@@ -189,6 +189,21 @@ class EvalUtilsTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(eu.requirement_text_modality(text), expected)
 
+        self.assertEqual(
+            eu.requirement_text_modality_diagnostic("The system SHOULD export reports.")["text_modality_basis"],
+            "explicit_modal",
+        )
+        self.assertEqual(
+            eu.requirement_text_modality_diagnostic("It would be nice if the system could export reports.")[
+                "text_modality_basis"
+            ],
+            "weak_phrase",
+        )
+        self.assertEqual(
+            eu.requirement_text_modality_diagnostic("The system exports reports.")["text_modality_basis"],
+            "heuristic_system_verb",
+        )
+
     def test_text_modality_overcommitment_fields(self):
         optional_to_shall = eu.text_modality_fields("The system shall export reports.", "optional", "optional", 0.98)
         nice_to_could = eu.text_modality_fields("The system could export reports.", "nice_to_have", "nice_to_have", 0.94)
@@ -201,6 +216,7 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertTrue(optional_to_shall["text_overcommit"])
         self.assertTrue(nice_to_could["text_overcommit"])
+        self.assertTrue(nice_to_could["strict_text_overcommit"])
         self.assertFalse(weak_phrase["text_overcommit"])
         self.assertEqual(weak_phrase["text_modality"], "nice_to_have")
 
@@ -655,6 +671,17 @@ class EvalUtilsTest(unittest.TestCase):
             Path("data/processed/benchmark_items_mlm_tapt_shall.csv"),
         )
 
+    def test_task3_verification_items_path_is_run_specific(self):
+        path_a = eu.task3_verification_items_path(Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind")
+        path_b = eu.task3_verification_items_path(Path("/tmp/re-uq"), "nice", "must", "full-b", "m1", "blind")
+        path_c = eu.task3_verification_items_path(Path("/tmp/re-uq"), "nice", "must", "full-a", "m2", "blind")
+
+        self.assertNotEqual(path_a, path_b)
+        self.assertNotEqual(path_a, path_c)
+        self.assertEqual(path_a.parent.name, "task3_verification_items")
+        self.assertIn("full_a", path_a.name)
+        self.assertIn("m1", path_a.name)
+
     def test_parse_task2_response(self):
         raw = '{"requirement": "The system SHOULD export reports.", "modality": "should", "confidence": 80}'
         parsed, status = eu.parse_task_response("task2", raw)
@@ -681,6 +708,49 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(eu.task3_gold_relation("optional", "mandatory"), "strengthens")
         self.assertEqual(eu.task3_gold_relation("mandatory", "optional"), "weakens")
         self.assertEqual(eu.task3_gold_relation("recommended", "recommended"), "preserves")
+
+    def test_task3_prompt_modes_are_distinct(self):
+        item = {
+            "source_statement": "It would be useful if the system could export reports.",
+            "task2_requirement": "The system SHOULD export reports.",
+            "source_modality": "nice_to_have",
+            "task2_text_modality": "recommended",
+        }
+        blind_template = Path("prompts/modality_verification.txt").read_text(encoding="utf-8")
+        declared_template = Path("prompts/modality_verification_declared.txt").read_text(encoding="utf-8")
+
+        blind_prompt = task3_cli.task3_prompt_for(blind_template, item, audit_mode="blind")
+        declared_text_prompt = task3_cli.task3_prompt_for(declared_template, item, audit_mode="declared_text")
+        declared_source_prompt = task3_cli.task3_prompt_for(declared_template, item, audit_mode="declared_source")
+
+        self.assertNotIn("Declared extracted modality", blind_prompt)
+        self.assertIn("Declared extracted modality", declared_text_prompt)
+        self.assertIn('"recommended"', declared_text_prompt)
+        self.assertIn('"nice_to_have"', declared_source_prompt)
+        self.assertNotEqual(blind_prompt, declared_text_prompt)
+        self.assertNotEqual(declared_text_prompt, declared_source_prompt)
+
+    def test_task3_batch_prompt_is_blind_unless_audit_mode_declared(self):
+        base_item = {
+            "item_id": "i1",
+            "source_statement": "It would be useful if the system could export reports.",
+            "task2_requirement": "The system SHOULD export reports.",
+            "source_modality": "nice_to_have",
+            "task2_modality": "nice_to_have",
+            "task2_text_modality": "recommended",
+            "task3_audit_mode": "blind",
+        }
+        blind_prompt = eu.batch_prompt_for_completion_jobs(
+            [{"task": "task3", "request_index": 0, "item": base_item}]
+        )
+        declared_prompt = eu.batch_prompt_for_completion_jobs(
+            [{"task": "task3", "request_index": 0, "item": {**base_item, "task3_audit_mode": "declared_text"}}]
+        )
+
+        self.assertNotIn("extracted_modality", blind_prompt)
+        self.assertNotIn("declared_extracted_modality", blind_prompt)
+        self.assertIn("declared_extracted_modality", declared_prompt)
+        self.assertIn("recommended", declared_prompt)
 
     def test_metrics(self):
         y_true = [1, 0, 1, 0]
@@ -1012,7 +1082,7 @@ class EvalUtilsTest(unittest.TestCase):
                 "top_p": 1.0,
                 "prompt_version": "v1",
                 "raw_text": "",
-                "parsed_json": {"requirement": "The system SHOULD export reports.", "modality": "recommended", "confidence": 95.0},
+                "parsed_json": {"requirement": "The system SHOULD export reports.", "modality": "nice_to_have", "confidence": 95.0},
                 "parse_status": "ok",
                 "latency_s": 0.1,
                 "error": "",
@@ -1023,8 +1093,40 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual(len(task3_items), 1)
         self.assertEqual(item["source_item_id"], source_item["item_id"])
-        self.assertEqual(item["task2_modality"], "recommended")
+        self.assertEqual(item["task2_modality"], "nice_to_have")
+        self.assertEqual(item["task2_text_modality"], "recommended")
+        self.assertEqual(item["task2_text_modality_basis"], "explicit_modal")
+        self.assertEqual(item["task3_declared_relation"], "preserves")
         self.assertEqual(item["task3_gold_relation"], "strengthens")
+        self.assertEqual(item["task3_audit_mode"], "blind")
+
+        raw_record = eu.build_raw_record(
+            run_id="task3-r1",
+            model="m1",
+            host="http://localhost:8000/v1",
+            task="task3",
+            item=item,
+            sample_index=0,
+            sample_kind="deterministic",
+            temperature=0.0,
+            top_p=1.0,
+            prompt_version="v1:task3:blind",
+            prompt="prompt",
+            completion={
+                "ok": True,
+                "raw_text": (
+                    '{"relation":"preserves","confidence":0.9,'
+                    '"evidence_phrase":"It would be useful if","brief_reason":"missed"}'
+                ),
+                "latency_s": 0.1,
+                "error": "",
+            },
+        )
+        self.assertEqual(raw_record["task2_requirement"], "The system SHOULD export reports.")
+        self.assertEqual(raw_record["task2_text_modality"], "recommended")
+        self.assertEqual(raw_record["task3_declared_relation"], "preserves")
+        reconstructed_items = eu.task3_items_from_raw_rows([raw_record])
+        self.assertEqual(reconstructed_items[0]["task3_gold_relation"], "strengthens")
 
         raw_rows = [
             {
@@ -1251,12 +1353,16 @@ class EvalUtilsTest(unittest.TestCase):
         summary = eu.metric_summary_by_model_task_method(scores)
 
         self.assertEqual(scores[0]["text_modality"], "mandatory")
+        self.assertEqual(scores[0]["text_modality_basis"], "explicit_modal")
         self.assertFalse(scores[0]["label_text_consistent"])
         self.assertTrue(scores[0]["text_overcommit"])
+        self.assertTrue(scores[0]["strict_text_overcommit"])
         self.assertEqual(summary[0]["accuracy"], 1.0)
         self.assertEqual(summary[0]["text_modality_accuracy"], 0.0)
         self.assertEqual(summary[0]["text_modality_accuracy_all"], 0.0)
         self.assertEqual(summary[0]["text_modality_parse_coverage"], 1.0)
+        self.assertEqual(summary[0]["strict_text_over_commitment"], 1.0)
+        self.assertEqual(summary[0]["label_correct_text_overcommit_90"], 1.0)
         self.assertEqual(summary[0]["text_high_conf_overcommit_90"], 1.0)
 
     def test_text_modality_summary_reports_coverage_and_all_row_accuracy(self):
@@ -3025,16 +3131,21 @@ class EvalUtilsTest(unittest.TestCase):
             ):
                 task3_cli.main()
 
-            task3_items = eu.read_csv_rows(root / "data/processed/task3_verification_items.csv")
+            task3_items_path = eu.task3_verification_items_path(root, "nice", "must", "full-source", "fake-model", "blind")
+            task3_items = eu.read_csv_rows(task3_items_path)
             task3_rows = eu.read_jsonl(root / "data/processed/model_outputs_raw_task3_verification.jsonl")
             registry = eu.read_csv_rows(root / "data/processed/run_registry_task3_verification.csv")
             progress = eu.read_csv_rows(root / "data/processed/run_progress_live_task3_verification.csv")
             self.assertEqual(len(task3_items), len(benchmark))
             self.assertEqual(len(task3_rows), 2)
+            self.assertFalse((root / "data/processed/task3_verification_items.csv").exists())
             self.assertEqual({row["task"] for row in task3_rows}, {"task3"})
             self.assertEqual({row["parse_status"] for row in task3_rows}, {"ok"})
+            self.assertEqual({row["task3_audit_mode"] for row in task3_rows}, {"blind"})
+            self.assertTrue(all("Declared extracted modality" not in row["prompt"] for row in task3_rows))
             self.assertEqual(registry[0]["status"], "complete")
             self.assertEqual(registry[0]["tasks"], "task3")
+            self.assertIn("audit_mode=blind", registry[0]["notes"])
             self.assertEqual({row["task"] for row in progress}, {"task3"})
 
     def test_analysis_cli_generates_publication_artifacts(self):
@@ -3043,7 +3154,12 @@ class EvalUtilsTest(unittest.TestCase):
             (root / "prompts").mkdir(parents=True)
             (root / "data/processed").mkdir(parents=True)
             (root / "docs").mkdir(parents=True)
-            for prompt_name in ["mandatory_entailment.txt", "modality_extraction.txt", "modality_verification.txt"]:
+            for prompt_name in [
+                "mandatory_entailment.txt",
+                "modality_extraction.txt",
+                "modality_verification.txt",
+                "modality_verification_declared.txt",
+            ]:
                 (root / f"prompts/{prompt_name}").write_text(
                     Path(f"prompts/{prompt_name}").read_text(encoding="utf-8"),
                     encoding="utf-8",
@@ -3157,6 +3273,10 @@ class EvalUtilsTest(unittest.TestCase):
             provenance = json.loads((output_dir / "provenance_manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(provenance["run_id"], "full-analysis")
             self.assertEqual(provenance["stale_item_count"], 0)
+
+    def test_analysis_rejects_legacy_task3_as_official_blind(self):
+        with self.assertRaisesRegex(ValueError, "legacy"):
+            analysis_cli.require_task3_audit_mode([{"task": "task3", "item_id": "legacy-item"}], "blind")
 
     def test_show_run_progress_reads_outputs_without_mutation(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -13,7 +13,7 @@
 #   smoke-fake    Smoke run with --fake-completion (no API key required).
 #   smoke         Smoke run against the configured provider/model cell.
 #   full          Full Task 1 + Task 2 run.
-#   task3         Task 3 diagnostic over a complete Task 2 source run.
+#   task3         Blind Task 3 diagnostic over a complete Task 2 source run.
 #   analysis      Generate paper-facing analysis artifacts.
 #   verify        Publication verification gate (status, tests, coverage).
 #

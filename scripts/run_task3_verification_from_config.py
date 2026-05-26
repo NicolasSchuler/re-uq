@@ -1,9 +1,11 @@
 """Run the Task 3 modality-preservation diagnostic from a provider config.
 
-Task 3 is deliberately downstream of Task 2: it builds self-audit items from a
+Task 3 is deliberately downstream of Task 2: it builds audit items from a
 complete deterministic Task 2 run, then asks the same provider/model whether
 each extracted requirement preserved, strengthened, weakened, or changed the
-source statement. It never rewrites or corrects the Task 2 raw outputs.
+source statement. The default audit is blind to the Task 2 declared modality;
+declared-modality modes are anchoring ablations. Task 3 never rewrites or
+corrects the Task 2 raw outputs.
 """
 
 from __future__ import annotations
@@ -37,8 +39,10 @@ def source_run_prefix(variant: str) -> str:
     return "full" if variant == "must" else f"full-{variant}"
 
 
-def task3_run_prefix(mode: str, variant: str) -> str:
-    base = "task3" if variant == "must" else f"task3-{variant}"
+def task3_run_prefix(mode: str, variant: str, audit_mode: str = eu.OFFICIAL_TASK3_AUDIT_MODE) -> str:
+    audit_mode = eu.normalize_task3_audit_mode(audit_mode)
+    audit_suffix = "" if audit_mode == eu.OFFICIAL_TASK3_AUDIT_MODE else f"-{audit_mode.replace('_', '-')}"
+    base = f"task3{audit_suffix}" if variant == "must" else f"task3{audit_suffix}-{variant}"
     return f"{base}-smoke" if mode == "smoke" else base
 
 
@@ -68,13 +72,31 @@ def run_rows_for(rows: list[dict[str, Any]], run_id: str, model: str) -> list[di
     ]
 
 
-def task3_prompt_for(template: str, item: Mapping[str, Any]) -> str:
-    return eu.render_prompt(
-        template,
-        source_statement=item["source_statement"],
-        extracted_requirement=item["task2_requirement"],
-        extracted_modality=item["task2_modality"],
-    )
+def task3_prompt_path(root: Path, audit_mode: str) -> Path:
+    audit_mode = eu.normalize_task3_audit_mode(audit_mode)
+    if audit_mode == eu.OFFICIAL_TASK3_AUDIT_MODE:
+        return root / "prompts/modality_verification.txt"
+    return root / "prompts/modality_verification_declared.txt"
+
+
+def task3_declared_modality_for_prompt(item: Mapping[str, Any], audit_mode: str) -> str:
+    audit_mode = eu.normalize_task3_audit_mode(audit_mode)
+    if audit_mode == "declared_text":
+        return str(item.get("task2_text_modality", ""))
+    if audit_mode == "declared_source":
+        return str(item.get("source_modality", ""))
+    return ""
+
+
+def task3_prompt_for(template: str, item: Mapping[str, Any], audit_mode: str = eu.OFFICIAL_TASK3_AUDIT_MODE) -> str:
+    audit_mode = eu.normalize_task3_audit_mode(audit_mode)
+    values = {
+        "source_statement": item["source_statement"],
+        "extracted_requirement": item["task2_requirement"],
+    }
+    if audit_mode != eu.OFFICIAL_TASK3_AUDIT_MODE:
+        values["declared_extracted_modality"] = task3_declared_modality_for_prompt(item, audit_mode)
+    return eu.render_prompt(template, **values)
 
 
 def fake_completion(**kwargs: Any) -> dict[str, Any]:
@@ -138,7 +160,7 @@ def require_complete_task2_source(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Task 3 modality self-audit from a provider-aware run config.")
+    parser = argparse.ArgumentParser(description="Run Task 3 blind text audit from a provider-aware run config.")
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--profile")
     parser.add_argument("--model")
@@ -146,6 +168,7 @@ def main() -> None:
     parser.add_argument("--variant")
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument("--mode", choices=["smoke", "full", "resume"], default="smoke")
+    parser.add_argument("--audit-mode", choices=eu.TASK3_AUDIT_MODES, default=eu.OFFICIAL_TASK3_AUDIT_MODE)
     parser.add_argument("--run-id")
     parser.add_argument("--smoke-items", type=int, default=2)
     parser.add_argument("--fake-completion", action="store_true")
@@ -157,6 +180,7 @@ def main() -> None:
     parser.add_argument("--warn-request-error-rate", type=float)
     parser.add_argument("--no-progress-artifacts", action="store_true")
     args = parser.parse_args()
+    audit_mode = eu.normalize_task3_audit_mode(args.audit_mode)
 
     if args.mode == "resume" and not args.run_id:
         raise ValueError("--mode resume requires --run-id.")
@@ -178,7 +202,7 @@ def main() -> None:
             "write_event_jsonl": False if args.no_progress_artifacts else None,
         },
     )
-    task3_template = eu.load_prompt(root / "prompts/modality_verification.txt")
+    task3_template = eu.load_prompt(task3_prompt_path(root, audit_mode))
     completion_fn = fake_completion if args.fake_completion else eu.chat_completion
 
     for profile in profiles:
@@ -203,12 +227,11 @@ def main() -> None:
 
             for dataset_id in datasets:
                 for variant in variants:
-                    prefix = task3_run_prefix(args.mode, variant)
+                    prefix = task3_run_prefix(args.mode, variant, audit_mode)
                     run_id = args.run_id or eu.new_run_id(prefix)
                     started_at = utc_now()
                     benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
                     source_raw_path = eu.artifact_path(root / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
-                    task3_items_path = eu.artifact_path(root / "data/processed/task3_verification_items.csv", dataset_id, variant)
                     output_path = task3_raw_path(root, dataset_id, variant)
                     registry_path = task3_registry_path(root, dataset_id, variant)
                     progress_path = task3_progress_path(root, dataset_id, variant)
@@ -237,9 +260,17 @@ def main() -> None:
                             expected_stochastic_samples=int(run_config["stochastic"]["samples"]),
                         )
 
-                    all_task3_items = eu.build_task3_verification_items(benchmark, model_source_rows)
+                    all_task3_items = eu.build_task3_verification_items(benchmark, model_source_rows, audit_mode=audit_mode)
                     if not all_task3_items:
-                        raise ValueError("No Task 3 self-audit items were built from valid deterministic Task 2 rows.")
+                        raise ValueError("No Task 3 text-audit items were built from valid deterministic Task 2 rows.")
+                    task3_items_path = eu.task3_verification_items_path(
+                        root,
+                        dataset_id,
+                        variant,
+                        str(source_run_id),
+                        model,
+                        audit_mode,
+                    )
                     eu.write_csv_rows(task3_items_path, all_task3_items, fieldnames=eu.TASK3_VERIFICATION_FIELDS)
                     task3_items_for_run = (
                         all_task3_items[: max(1, args.smoke_items)] if args.mode == "smoke" else all_task3_items
@@ -248,7 +279,7 @@ def main() -> None:
                     jobs: list[dict[str, Any]] = []
                     stochastic_samples = int(run_config["stochastic"]["samples"])
                     for item in task3_items_for_run:
-                        prompt = task3_prompt_for(task3_template, item)
+                        prompt = task3_prompt_for(task3_template, item, audit_mode=audit_mode)
                         jobs.append(
                             eu.completion_request_job(
                                 item=item,
@@ -261,7 +292,7 @@ def main() -> None:
                                 temperature=float(run_config["deterministic"]["temperature"]),
                                 top_p=float(run_config["deterministic"]["top_p"]),
                                 prompt=prompt,
-                                prompt_version=f"{run_config['prompt_version']}:task3",
+                                prompt_version=f"{run_config['prompt_version']}:task3:{audit_mode}",
                                 max_tokens=int(profile["max_tokens"]),
                                 timeout_s=int(profile["timeout_s"]),
                                 api_key_env=profile["api_key_env"],
@@ -292,7 +323,7 @@ def main() -> None:
                                     temperature=float(run_config["stochastic"]["temperature"]),
                                     top_p=float(run_config["stochastic"]["top_p"]),
                                     prompt=prompt,
-                                    prompt_version=f"{run_config['prompt_version']}:task3",
+                                    prompt_version=f"{run_config['prompt_version']}:task3:{audit_mode}",
                                     max_tokens=int(profile["max_tokens"]),
                                     timeout_s=int(profile["timeout_s"]),
                                     api_key_env=profile["api_key_env"],
@@ -347,7 +378,7 @@ def main() -> None:
                             structured_output=str(profile.get("structured_output", "none")),
                             request_extra_body=profile.get("extra_body"),
                             server_model_probe=preflight,
-                            notes=f"mode={args.mode}; source_run_id={source_run_id}",
+                            notes=f"mode={args.mode}; audit_mode={audit_mode}; source_run_id={source_run_id}",
                         )
                         eu.upsert_run_registry_row(registry_path, registry_row)
                         if logging_config["write_progress_csv"]:
@@ -375,7 +406,9 @@ def main() -> None:
                             "model": model,
                             "tasks": ["task3"],
                             "mode": args.mode,
+                            "audit_mode": audit_mode,
                             "output_path": str(output_path),
+                            "task3_items_path": str(task3_items_path),
                             "registry_path": str(registry_path),
                             "progress_path": str(progress_path),
                             "planned_jobs": len(jobs),
@@ -415,7 +448,7 @@ def main() -> None:
                             structured_output=str(profile.get("structured_output", "none")),
                             request_extra_body=profile.get("extra_body"),
                             server_model_probe=preflight,
-                            notes=f"mode={args.mode}; source_run_id={source_run_id}",
+                            notes=f"mode={args.mode}; audit_mode={audit_mode}; source_run_id={source_run_id}",
                         ),
                     )
                     refresh_live_progress("start", print_line=False)
@@ -427,11 +460,13 @@ def main() -> None:
                             "variant": variant,
                             "profile": profile["profile_id"],
                             "model": model,
+                            "audit_mode": audit_mode,
                             "task3_items": len(task3_items_for_run),
                             "planned_jobs": len(jobs),
                             "pending_jobs": len(pending_jobs),
                             "batch_size": profile["batch_size"],
                             "output_path": str(output_path),
+                            "task3_items_path": str(task3_items_path),
                             "registry_path": str(registry_path),
                         }
                     )
@@ -500,7 +535,7 @@ def main() -> None:
                         structured_output=str(profile.get("structured_output", "none")),
                         request_extra_body=profile.get("extra_body"),
                         server_model_probe=preflight,
-                        notes=f"mode={args.mode}; source_run_id={source_run_id}",
+                        notes=f"mode={args.mode}; audit_mode={audit_mode}; source_run_id={source_run_id}",
                     )
                     eu.upsert_run_registry_row(registry_path, finish_row)
                     refresh_live_progress("finish", finished_at_utc=str(finish_row["finished_at_utc"]))

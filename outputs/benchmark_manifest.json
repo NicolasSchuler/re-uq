@@ -57,14 +57,21 @@
       "sha256": "1928901267262442ac25e5b24e3b794facafa1b6229f03ce099e8def320afeea"
     },
     {
-      "bytes": 1083,
+      "bytes": 1030,
       "exists": true,
       "path": "prompts/modality_verification.txt",
       "rows": "",
-      "sha256": "b581a005966a4b6c991f9bb370cf8a3d3a7131785b398897045e7b7332284bb3"
+      "sha256": "0f83d065dd701e52618d45206283091c93794686dfafc476bc1b6e4eedec5034"
+    },
+    {
+      "bytes": 1092,
+      "exists": true,
+      "path": "prompts/modality_verification_declared.txt",
+      "rows": "",
+      "sha256": "59df06d2e673c2ceae70184ff394609e38b01e4d0cf077ad03e6516252a9fc25"
     }
   ],
-  "created_at_utc": "2026-05-20T16:11:25Z",
+  "created_at_utc": "2026-05-26T08:44:19Z",
   "metadata": {
     "dataset_id": "nice",
     "main_benchmark": "MUST",
