@@ -78,6 +78,7 @@ All current v2 prompts (`v2-conf01`, `v2-instructor-conf01`) return `confidence`
 - `verbalized_confidence` — the model's own self-reported probability.
 - `label_self_consistency`, `modality_consistency` — agreement across stochastic samples.
 - `predictive_entropy`, `variation_ratio` — distributional UQ over the same stochastic samples.
+- `acse_semantic_entropy` — ACSE-inspired semantic clustering over stochastic answer texts, currently a five-sample triage signal rather than a conformal decision rule. The default backend is deterministic TF-IDF; Apple Silicon runs can opt into `mlx-embeddings` with `RE_UQ_ACSE_EMBEDDING_BACKEND=mlx`.
 - `model_ensemble_disagreement` — only when two deterministic model outputs exist for the same item.
 - `token_logprob_confidence` — optional, gated on a provider logprob capability probe.
 

@@ -81,10 +81,14 @@ Use lightweight black-box uncertainty signals:
 - `relation_consistency`: Task 3 stochastic relation distribution.
 - `predictive_entropy`: normalized entropy of the same stochastic label distribution.
 - `variation_ratio`: `1 - p_majority` over the same stochastic label distribution.
+- `acse_semantic_entropy`: ACSE-inspired semantic-cluster dispersion over the stochastic answer texts. With the default five stochastic samples, use this as a ranking or triage signal, not as a calibrated accept/abstain rule.
 - `model_ensemble_disagreement`: available only when multiple deterministic model runs cover the same item.
 - `token_logprob_confidence`: optional and non-headline until endpoint support and scoring are stable.
 
 Entropy, variation ratio, and consistency are related summaries of the same stochastic distribution. Do not present them as independent prediction methods.
+The ACSE-inspired score adds a separate text-clustering view of the same five samples. The current implementation uses local TF-IDF character n-gram embeddings plus average-linkage HAC as a lightweight proxy for sentence-encoder clustering; formal ACSE-style threshold guarantees would require a held-out calibration set and a stronger embedding backend.
+For local Apple Silicon runs, set `RE_UQ_ACSE_EMBEDDING_BACKEND=mlx` after installing `mlx-embeddings`; the default MLX model is `mlx-community/Qwen3-Embedding-0.6B-8bit`, with `RE_UQ_ACSE_MLX_MODEL` available for alternatives such as the 4-bit DWQ variant.
+The headless analysis exports normalized ACSE scores and an empirical seed-split calibration table. Use these outputs to discuss triage behavior and accepted-error/coverage trade-offs, not as a conformal guarantee unless a predeclared calibration protocol is added.
 
 ## Metrics
 

@@ -241,6 +241,7 @@ def write_result_notes_template(path: Path) -> None:
         "## Caveats",
         "- Controlled variants are synthetic minimal pairs.",
         "- Confidence values are verbalized or consistency-derived, not direct internal model uncertainty.",
+        "- ACSE-inspired semantic entropy is a five-sample triage signal unless thresholds are calibrated on held-out task data.",
         "- Report exact provider, profile, endpoint family, model ID, prompt version, and run ID.",
         "",
         "## Recommended Next Step",
@@ -350,12 +351,29 @@ def main() -> None:
     baseline_scores = eu.build_rule_baseline_scores(result_benchmark)
     scores.extend(task3_scores)
     scores.extend(baseline_scores)
+    acse_normalized_rows = eu.acse_normalized_score_rows(scores)
+    acse_calibration_rows = eu.acse_calibration_diagnostic_rows(acse_normalized_rows)
     summary = eu.metric_summary_by_model_task_method(scores)
     ci_rows = ci_rows_for_scores(scores, iterations=max(1, int(args.bootstrap_iterations)))
 
     eu.write_csv_rows(output_dir / "uq_scores.csv", scores)
+    eu.write_csv_rows(
+        output_dir / "acse_semantic_normalized_scores.csv",
+        acse_normalized_rows,
+        fieldnames=eu.ACSE_NORMALIZED_SCORE_FIELDS,
+    )
+    eu.write_csv_rows(
+        output_dir / "acse_semantic_calibration.csv",
+        acse_calibration_rows,
+        fieldnames=eu.ACSE_CALIBRATION_FIELDS,
+    )
     eu.write_csv_rows(output_dir / "metrics_summary.csv", summary)
     eu.write_csv_rows(output_dir / "bootstrap_seed_ci.csv", ci_rows)
+    (output_dir / "acse_semantic_calibration.md").write_text(
+        eu.markdown_table(acse_calibration_rows, eu.ACSE_CALIBRATION_FIELDS)
+        + "\n",
+        encoding="utf-8",
+    )
     (output_dir / "metrics_summary.md").write_text(eu.markdown_table(summary, PAPER_RESULT_FIELDS) + "\n", encoding="utf-8")
     (output_dir / "bootstrap_seed_ci.md").write_text(
         eu.markdown_table(
@@ -405,6 +423,8 @@ def main() -> None:
         "raw_rows": len(raw_rows),
         "task3_rows": len(task3_rows),
         "score_rows": len(scores),
+        "acse_normalized_rows": len(acse_normalized_rows),
+        "acse_calibration_rows": len(acse_calibration_rows),
         "summary_rows": len(summary),
         "task1_task2_parse_status": parse_status_counts(raw_rows),
         "task3_parse_status": parse_status_counts(task3_rows),
@@ -436,6 +456,7 @@ def main() -> None:
                 "task3_run_id": args.task3_run_id or "",
                 "task3_audit_mode": task3_audit_mode if args.task3_run_id else "",
                 "score_rows": len(scores),
+                "acse_calibration_rows": len(acse_calibration_rows),
                 "summary_rows": len(summary),
                 "stale_item_count": stale_item_count,
             },

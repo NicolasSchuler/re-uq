@@ -167,6 +167,9 @@ Complete `docs/weak_modality_construct_review.csv` before generating paper-facin
 The command writes a local analysis directory under `outputs/evaluation_<dataset>_<variant>_<run_id>/` unless `--output-dir` is provided. Expected artifacts include:
 
 - `uq_scores.csv`
+- `acse_semantic_normalized_scores.csv`
+- `acse_semantic_calibration.csv`
+- `acse_semantic_calibration.md`
 - `metrics_summary.csv`
 - `metrics_summary.md`
 - `bootstrap_seed_ci.csv`
@@ -181,6 +184,21 @@ The command writes a local analysis directory under `outputs/evaluation_<dataset
 - `result_notes_template.md`
 
 See `docs/results_mapping.md` for how each artifact backs a specific paper figure, table, or claim.
+
+`uq_scores.csv` includes the diagnostic `acse_semantic_entropy` method when stochastic samples are available. This row clusters the five generated answer texts and should be interpreted as a semantic-diversity ranking signal unless a held-out calibration split is used to set an accept/abstain threshold.
+The analysis also writes `acse_semantic_normalized_scores.csv` and `acse_semantic_calibration.*`, which min-max normalize ACSE scores within each run/model/task/backend group and select empirical accept thresholds on a deterministic seed-level calibration split. Treat those thresholds as post hoc triage diagnostics unless the split and target risk level are declared before running the final analysis.
+By default, this diagnostic uses the dependency-free TF-IDF fallback. To use a local MLX embedding model on Apple Silicon, install `mlx-embeddings` in the environment and run with:
+
+```bash
+RE_UQ_ACSE_EMBEDDING_BACKEND=mlx \
+RE_UQ_ACSE_MLX_MODEL=mlx-community/Qwen3-Embedding-0.6B-8bit \
+.venv/bin/python scripts/generate_evaluation_analysis.py \
+  --dataset mlm_tapt \
+  --variant must \
+  --run-id RUN_ID \
+  --task3-run-id TASK3_RUN_ID \
+  --task3-audit-mode blind
+```
 
 Use diagnostic flags such as `--allow-partial`, `--skip-registry-check`, `--skip-construct-review-check`, `--max-parse-failure-rate`, `--bootstrap-iterations`, or `--expected-stochastic-samples` only for local investigation, not for paper-ready results.
 

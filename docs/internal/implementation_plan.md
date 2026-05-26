@@ -72,6 +72,8 @@ For paper-facing wording and caveats, see `docs/paper_framing.md`.
 - Keep `label_self_consistency` and `modality_consistency` as black-box consistency methods.
 - Add `predictive_entropy` over the same stochastic label samples, normalized to `[0, 1]`.
 - Add `variation_ratio`, defined as `1 - p_majority`, over the same stochastic label samples.
+- Add `acse_semantic_entropy` as an ACSE-inspired diagnostic over stochastic answer texts. In the five-sample default setting, treat it as a ranking signal unless a held-out calibration split is used for thresholding. Keep TF-IDF as the reproducible fallback and use `RE_UQ_ACSE_EMBEDDING_BACKEND=mlx` for local Qwen3 embedding runs on Apple Silicon.
+- Export normalized ACSE scores and an empirical seed-split calibration table from the final analysis, so threshold/coverage claims are grounded in the completed run rather than raw uncalibrated score scale.
 - Add `model_ensemble_disagreement` only when deterministic outputs from at least two local models are available for the same item and task.
 - Treat `token_logprob_confidence` as optional and non-headline until the local OpenAI-compatible endpoint passes a logprob capability probe. For LM Studio, this probe uses `/v1/responses` with `include=["message.output_text.logprobs"]` and `top_logprobs`, because logprobs are not expected from the normal chat UI or necessarily from `/v1/chat/completions`.
 - Keep the UQ claim narrow: consistency-based UQ may miss systematic stable errors in modality extraction. Do not claim that all lightweight UQ fails, because verbalized confidence and token/logprob signals may behave differently.

@@ -38,12 +38,15 @@ import pandas as pd
 import requests
 from openai import OpenAI
 from scipy.stats import spearmanr
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import (
     accuracy_score as sklearn_accuracy_score,
     brier_score_loss,
     f1_score,
     roc_auc_score,
 )
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 matplotlib.use("Agg")
@@ -55,6 +58,67 @@ TASK3_RELATIONS = ["preserves", "strengthens", "weakens", "content_changed"]
 TASK3_AUDIT_MODES = ["blind", "declared_text", "declared_source"]
 OFFICIAL_TASK3_AUDIT_MODE = "blind"
 LEGACY_TASK3_AUDIT_MODE = "legacy_declared"
+ACSE_PROXY_METHOD = "acse_semantic_entropy"
+ACSE_PROXY_MEASURE = "acse_proxy_semantic_dispersion"
+ACSE_PROXY_EMBEDDING_BACKEND = "tfidf_char_wb_3_5"
+ACSE_MLX_EMBEDDING_BACKEND = "mlx"
+ACSE_MLX_DEFAULT_MODEL = "mlx-community/Qwen3-Embedding-0.6B-8bit"
+ACSE_EMBEDDING_BACKEND_ENV = "RE_UQ_ACSE_EMBEDDING_BACKEND"
+ACSE_MLX_MODEL_ENV = "RE_UQ_ACSE_MLX_MODEL"
+ACSE_MLX_MAX_LENGTH_ENV = "RE_UQ_ACSE_MLX_MAX_LENGTH"
+ACSE_PROXY_DISTANCE_THRESHOLD = 0.35
+ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT = 0.20
+ACSE_CALIBRATION_SEED = 20260526
+ACSE_CALIBRATION_FRACTION = 0.5
+ACSE_TARGET_ACCEPTED_ERROR_RATES = (0.10, 0.20)
+ACSE_NORMALIZED_SCORE_FIELDS = [
+    "run_id",
+    "model",
+    "task",
+    "semantic_embedding_backend",
+    "item_id",
+    "seed_id",
+    "source_modality",
+    "gold_modality",
+    "pred_modality",
+    "valid_n",
+    "total_n",
+    "y_true",
+    "y_pred",
+    "prediction_error",
+    "acse_raw_uncertainty_score",
+    "acse_normalized_uncertainty_score",
+    "acse_raw_group_min",
+    "acse_raw_group_max",
+    "acse_calibration_split",
+    "semantic_cluster_count",
+    "semantic_cluster_entropy",
+    "semantic_cluster_variation_ratio",
+    "semantic_dominant_cluster_share",
+    "semantic_mean_pairwise_distance",
+    "semantic_dominant_cluster_mean_distance",
+]
+ACSE_CALIBRATION_FIELDS = [
+    "run_id",
+    "model",
+    "task",
+    "semantic_embedding_backend",
+    "target_accepted_error_rate",
+    "selected_normalized_threshold",
+    "calibration_n",
+    "calibration_accepted_n",
+    "calibration_coverage",
+    "calibration_accepted_error_rate",
+    "evaluation_mode",
+    "evaluation_n",
+    "evaluation_accepted_n",
+    "evaluation_coverage",
+    "evaluation_accepted_error_rate",
+    "evaluation_deferred_error_rate",
+    "all_n",
+    "all_error_rate",
+    "all_error_detection_auroc",
+]
 TEXT_MODALITY_BASES = ["weak_phrase", "explicit_modal", "heuristic_system_verb", "unknown"]
 STRICT_TEXT_MODALITY_BASES = {"weak_phrase", "explicit_modal"}
 MONOTONICITY_TOLERANCE = 0.05
@@ -76,6 +140,7 @@ WEAK_MODALITY_PROBE_TEMPLATES = [
         "source_template": "Stakeholders mentioned that the system could {capability} as a possible future enhancement.",
     },
 ]
+_MLX_EMBEDDING_MODEL_CACHE: dict[str, tuple[Any, Any]] = {}
 WEAK_MODALITY_PROBE_FIELDS = [
     "item_id",
     "seed_id",
@@ -3629,6 +3694,220 @@ def variation_ratio(distribution: dict[str, float]) -> float:
     return 1.0 - max(float(value) for value in distribution.values())
 
 
+def semantic_response_text(task: str, parsed: Mapping[str, Any]) -> str:
+    if task == "task1":
+        decision = normalize_decision(parsed.get("decision")) or str(parsed.get("decision", "")).strip()
+        parts = [f"decision: {decision}" if decision else "", f"reason: {parsed.get('brief_reason', '')}"]
+    elif task == "task2":
+        modality = normalize_modality(parsed.get("modality")) or str(parsed.get("modality", "")).strip()
+        parts = [
+            f"modality: {modality}" if modality else "",
+            f"requirement: {parsed.get('requirement', '')}",
+        ]
+    elif task == "task3":
+        relation = normalize_relation(parsed.get("relation")) or str(parsed.get("relation", "")).strip()
+        parts = [
+            f"relation: {relation}" if relation else "",
+            f"evidence: {parsed.get('evidence_phrase', '')}",
+            f"reason: {parsed.get('brief_reason', '')}",
+        ]
+    else:
+        parts = [json.dumps(parsed, ensure_ascii=True, sort_keys=True)]
+    text = "\n".join(str(part).strip() for part in parts if str(part).strip())
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def semantic_texts_from_rows(task: str, rows: list[dict[str, Any]]) -> list[str]:
+    texts: list[str] = []
+    for row in rows:
+        parsed = row.get("parsed_json")
+        if isinstance(parsed, Mapping):
+            texts.append(semantic_response_text(task, parsed))
+    return texts
+
+
+def normalize_embedding_rows(embeddings: np.ndarray) -> np.ndarray:
+    matrix = np.asarray(embeddings, dtype=float)
+    if matrix.ndim != 2:
+        raise ValueError(f"Expected a 2D embedding matrix, got shape {matrix.shape}")
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    return np.divide(matrix, norms, out=np.zeros_like(matrix), where=norms > 0.0)
+
+
+def _tfidf_text_embedding_matrix(texts: list[str]) -> np.ndarray:
+    vectorizer_input = [text if text else "<empty response>" for text in texts]
+    try:
+        embeddings = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), lowercase=True).fit_transform(
+            vectorizer_input
+        )
+        return np.asarray(embeddings.toarray(), dtype=float)
+    except ValueError:
+        return np.zeros((len(texts), 1), dtype=float)
+
+
+def _mlx_text_embedding_matrix(texts: list[str], model_name: str, max_length: int) -> np.ndarray:
+    try:
+        import mlx.core as mx
+        from mlx_embeddings.utils import load as mlx_embedding_load
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised only with optional MLX dependency absent
+        raise RuntimeError(
+            "MLX semantic embeddings require the optional `mlx-embeddings` package. "
+            "Install it in the local environment before setting RE_UQ_ACSE_EMBEDDING_BACKEND=mlx."
+        ) from exc
+
+    if model_name not in _MLX_EMBEDDING_MODEL_CACHE:
+        _MLX_EMBEDDING_MODEL_CACHE[model_name] = mlx_embedding_load(model_name)
+    model, tokenizer = _MLX_EMBEDDING_MODEL_CACHE[model_name]
+    inputs = tokenizer.batch_encode_plus(
+        [text if text else "<empty response>" for text in texts],
+        return_tensors="mlx",
+        padding=True,
+        truncation=True,
+        max_length=max(1, int(max_length)),
+    )
+    outputs = model(inputs["input_ids"], attention_mask=inputs.get("attention_mask"))
+    text_embeds = getattr(outputs, "text_embeds", None)
+    if text_embeds is None and isinstance(outputs, Mapping):
+        text_embeds = outputs.get("text_embeds")
+    if text_embeds is None:
+        raise RuntimeError(
+            f"MLX embedding model {model_name!r} did not return `text_embeds`; "
+            "use a model supported by `mlx-embeddings` for text embedding."
+        )
+    mx.eval(text_embeds)
+    return np.asarray(text_embeds.tolist(), dtype=float)
+
+
+def semantic_embedding_backend_label(
+    embedding_backend: str | None = None,
+    mlx_model_name: str | None = None,
+) -> tuple[str, str | None]:
+    backend = str(embedding_backend or os.environ.get(ACSE_EMBEDDING_BACKEND_ENV, ACSE_PROXY_EMBEDDING_BACKEND)).strip()
+    backend = backend or ACSE_PROXY_EMBEDDING_BACKEND
+    if backend in {"tfidf", ACSE_PROXY_EMBEDDING_BACKEND}:
+        return ACSE_PROXY_EMBEDDING_BACKEND, None
+    if backend == ACSE_MLX_EMBEDDING_BACKEND:
+        model_name = str(mlx_model_name or os.environ.get(ACSE_MLX_MODEL_ENV, ACSE_MLX_DEFAULT_MODEL)).strip()
+        return f"{ACSE_MLX_EMBEDDING_BACKEND}:{model_name}", model_name
+    raise ValueError(
+        f"Unknown ACSE semantic embedding backend {backend!r}; "
+        f"use {ACSE_PROXY_EMBEDDING_BACKEND!r} or {ACSE_MLX_EMBEDDING_BACKEND!r}."
+    )
+
+
+def semantic_embedding_matrix(
+    texts: list[str],
+    embedding_backend: str | None = None,
+    mlx_model_name: str | None = None,
+) -> tuple[np.ndarray, str]:
+    backend_label, model_name = semantic_embedding_backend_label(embedding_backend, mlx_model_name)
+    if model_name is None:
+        return normalize_embedding_rows(_tfidf_text_embedding_matrix(texts)), backend_label
+    if backend_label.startswith(f"{ACSE_MLX_EMBEDDING_BACKEND}:"):
+        max_length = int(os.environ.get(ACSE_MLX_MAX_LENGTH_ENV, "512"))
+        embeddings = _mlx_text_embedding_matrix(texts, model_name, max_length=max_length)
+        return normalize_embedding_rows(embeddings), backend_label
+    raise AssertionError(f"Unhandled embedding backend label: {backend_label}")
+
+
+def acse_semantic_proxy_diagnostics(
+    texts: list[str],
+    distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
+    embedding_backend: str | None = None,
+    mlx_model_name: str | None = None,
+) -> dict[str, Any]:
+    cleaned = [re.sub(r"\s+", " ", str(text or "").strip()) for text in texts]
+    backend_label, _ = semantic_embedding_backend_label(embedding_backend, mlx_model_name)
+    sample_count = len(cleaned)
+    if sample_count == 0:
+        return {
+            "semantic_embedding_backend": backend_label,
+            "semantic_distance_threshold": float(distance_threshold),
+            "semantic_cluster_count": 0,
+            "semantic_cluster_distribution": "",
+            "semantic_cluster_entropy": math.nan,
+            "semantic_cluster_variation_ratio": math.nan,
+            "semantic_dominant_cluster_share": math.nan,
+            "semantic_mean_pairwise_distance": math.nan,
+            "semantic_dominant_cluster_mean_distance": math.nan,
+            "semantic_uncertainty_score": math.nan,
+        }
+
+    if sample_count == 1:
+        distribution = {"cluster_0": 1.0}
+        return {
+            "semantic_embedding_backend": backend_label,
+            "semantic_distance_threshold": float(distance_threshold),
+            "semantic_cluster_count": 1,
+            "semantic_cluster_distribution": label_distribution_json(distribution),
+            "semantic_cluster_entropy": 0.0,
+            "semantic_cluster_variation_ratio": 0.0,
+            "semantic_dominant_cluster_share": 1.0,
+            "semantic_mean_pairwise_distance": 0.0,
+            "semantic_dominant_cluster_mean_distance": 0.0,
+            "semantic_uncertainty_score": 0.0,
+        }
+
+    embeddings, backend_label = semantic_embedding_matrix(
+        cleaned,
+        embedding_backend=embedding_backend,
+        mlx_model_name=mlx_model_name,
+    )
+    distance_matrix = np.clip(1.0 - cosine_similarity(embeddings), 0.0, 1.0)
+    distance_matrix[np.abs(distance_matrix) < 1e-12] = 0.0
+    np.fill_diagonal(distance_matrix, 0.0)
+
+    clusterer = AgglomerativeClustering(
+        n_clusters=None,
+        metric="precomputed",
+        linkage="average",
+        distance_threshold=float(distance_threshold),
+    )
+    labels = [int(label) for label in clusterer.fit_predict(distance_matrix)]
+    counts = Counter(labels)
+    ordered_counts = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    distribution = {
+        f"cluster_{rank}": count / sample_count
+        for rank, (_, count) in enumerate(ordered_counts)
+    }
+    cluster_entropy = normalized_predictive_entropy(distribution)
+    cluster_variation = variation_ratio(distribution)
+    dominant_label, dominant_count = ordered_counts[0]
+
+    pairwise = distance_matrix[np.triu_indices(sample_count, k=1)]
+    mean_pairwise_distance = float(np.mean(pairwise)) if pairwise.size else 0.0
+    dominant_indices = [index for index, label in enumerate(labels) if label == dominant_label]
+    if len(dominant_indices) > 1:
+        dominant_distances = distance_matrix[np.ix_(dominant_indices, dominant_indices)]
+        dominant_pairwise = dominant_distances[np.triu_indices(len(dominant_indices), k=1)]
+        dominant_mean_distance = float(np.mean(dominant_pairwise)) if dominant_pairwise.size else 0.0
+    else:
+        dominant_mean_distance = 0.0
+
+    dispersion_denominator = max(float(distance_threshold), 1e-12)
+    dispersion_component = min(1.0, max(mean_pairwise_distance, dominant_mean_distance) / dispersion_denominator)
+    entropy_weight = 1.0 - ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT
+    uncertainty_score = min(
+        1.0,
+        entropy_weight * float(cluster_entropy)
+        + ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT * dispersion_component,
+    )
+    if abs(uncertainty_score) < 1e-12:
+        uncertainty_score = 0.0
+    return {
+        "semantic_embedding_backend": backend_label,
+        "semantic_distance_threshold": float(distance_threshold),
+        "semantic_cluster_count": len(counts),
+        "semantic_cluster_distribution": label_distribution_json(distribution),
+        "semantic_cluster_entropy": float(cluster_entropy),
+        "semantic_cluster_variation_ratio": float(cluster_variation),
+        "semantic_dominant_cluster_share": dominant_count / sample_count,
+        "semantic_mean_pairwise_distance": mean_pairwise_distance,
+        "semantic_dominant_cluster_mean_distance": dominant_mean_distance,
+        "semantic_uncertainty_score": float(uncertainty_score),
+    }
+
+
 def majority_label(distribution: dict[str, float], label_order: list[str]) -> str:
     if not distribution:
         raise ValueError("Cannot choose a majority label from an empty distribution")
@@ -3849,10 +4128,11 @@ def distribution_score_rows(
     total_n: int,
     consistency_method: str,
     model_name: str | None = None,
+    sample_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     entropy = normalized_predictive_entropy(distribution)
     vr = variation_ratio(distribution)
-    return [
+    rows = [
         score_from_distribution(
             raw,
             item,
@@ -3887,6 +4167,22 @@ def distribution_score_rows(
             model_name=model_name,
         ),
     ]
+    if sample_rows is not None:
+        diagnostics = acse_semantic_proxy_diagnostics(semantic_texts_from_rows(str(raw.get("task", "")), sample_rows))
+        acse_row = score_from_distribution(
+            raw,
+            item,
+            ACSE_PROXY_METHOD,
+            distribution,
+            valid_n,
+            total_n,
+            ACSE_PROXY_MEASURE,
+            diagnostics["semantic_uncertainty_score"],
+            model_name=model_name,
+        )
+        acse_row.update(diagnostics)
+        rows.append(acse_row)
+    return rows
 
 
 def build_ensemble_disagreement_scores(
@@ -4061,7 +4357,17 @@ def build_uq_scores(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[st
             continue
         distribution = label_distribution_from_rows(str(task), valid)
         consistency_method = "label_self_consistency" if task == "task1" else "modality_consistency"
-        scores.extend(distribution_score_rows(valid[0], item, distribution, len(valid), len(group), consistency_method))
+        scores.extend(
+            distribution_score_rows(
+                valid[0],
+                item,
+                distribution,
+                len(valid),
+                len(group),
+                consistency_method,
+                sample_rows=valid,
+            )
+        )
 
     scores.extend(build_ensemble_disagreement_scores(benchmark_rows, raw_rows))
     return scores
@@ -4122,7 +4428,17 @@ def build_task3_scores(task3_items: list[dict[str, Any]], raw_rows: list[dict[st
         if item.get("task3_gold_relation", "") not in TASK3_RELATIONS:
             continue
         distribution = label_distribution_from_rows("task3", valid)
-        scores.extend(distribution_score_rows(valid[0], item, distribution, len(valid), len(group), "relation_consistency"))
+        scores.extend(
+            distribution_score_rows(
+                valid[0],
+                item,
+                distribution,
+                len(valid),
+                len(group),
+                "relation_consistency",
+                sample_rows=valid,
+            )
+        )
 
     return scores
 
@@ -4619,6 +4935,16 @@ def write_preliminary_result_snapshot(
         "uncertainty_score",
         "uncertainty_measure",
         "label_distribution",
+        "semantic_embedding_backend",
+        "semantic_distance_threshold",
+        "semantic_cluster_count",
+        "semantic_cluster_distribution",
+        "semantic_cluster_entropy",
+        "semantic_cluster_variation_ratio",
+        "semantic_dominant_cluster_share",
+        "semantic_mean_pairwise_distance",
+        "semantic_dominant_cluster_mean_distance",
+        "semantic_uncertainty_score",
         "gold_modality",
         "pred_modality",
         "text_modality",
@@ -5316,6 +5642,220 @@ def error_detection_auroc(rows: list[dict[str, Any]], task: str) -> float:
     return auroc_score(errors, uncertainty_scores)
 
 
+def _float_or_nan(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return math.nan
+    return number if not math.isnan(number) else math.nan
+
+
+def _error_label_for_score_row(row: Mapping[str, Any]) -> int:
+    task = str(row.get("task", ""))
+    if task == "task1":
+        return 1 if int(row.get("y_true", 0)) != int(row.get("y_pred", 0)) else 0
+    if task in {"task2", "task3"}:
+        return 1 - int(row.get("y_true", 0))
+    raise ValueError(f"Unknown task: {task}")
+
+
+def _seed_split(seed_ids: Iterable[Any], calibration_fraction: float = ACSE_CALIBRATION_FRACTION) -> set[str]:
+    unique = sorted({str(seed_id) for seed_id in seed_ids if str(seed_id)})
+    if not unique:
+        return set()
+    rng = random.Random(ACSE_CALIBRATION_SEED)
+    shuffled = list(unique)
+    rng.shuffle(shuffled)
+    if len(shuffled) == 1:
+        return {shuffled[0]}
+    calibration_n = max(1, min(len(shuffled) - 1, int(math.ceil(len(shuffled) * float(calibration_fraction)))))
+    return set(shuffled[:calibration_n])
+
+
+def acse_normalized_score_rows(
+    scores: list[dict[str, Any]],
+    calibration_fraction: float = ACSE_CALIBRATION_FRACTION,
+) -> list[dict[str, Any]]:
+    acse_rows = [
+        row
+        for row in scores
+        if str(row.get("uq_method", "")) == ACSE_PROXY_METHOD
+        and not math.isnan(_float_or_nan(row.get("uncertainty_score", "")))
+    ]
+    normalized_rows: list[dict[str, Any]] = []
+    group_keys = ["run_id", "model", "task", "semantic_embedding_backend"]
+    for key, group_rows in grouped(acse_rows, group_keys).items():
+        raw_scores = [_float_or_nan(row.get("uncertainty_score", "")) for row in group_rows]
+        valid_scores = [score for score in raw_scores if not math.isnan(score)]
+        if not valid_scores:
+            continue
+        raw_min = min(valid_scores)
+        raw_max = max(valid_scores)
+        span = raw_max - raw_min
+        calibration_seed_ids = _seed_split(
+            [row.get("seed_id", "") for row in group_rows],
+            calibration_fraction=calibration_fraction,
+        )
+        for row in group_rows:
+            raw_score = _float_or_nan(row.get("uncertainty_score", ""))
+            normalized = 0.0 if span <= 1e-12 else min(1.0, max(0.0, (raw_score - raw_min) / span))
+            split = "calibration" if str(row.get("seed_id", "")) in calibration_seed_ids else "evaluation"
+            if not calibration_seed_ids:
+                split = "calibration"
+            normalized_rows.append(
+                {
+                    "run_id": key[0],
+                    "model": key[1],
+                    "task": key[2],
+                    "semantic_embedding_backend": key[3],
+                    "item_id": row.get("item_id", ""),
+                    "seed_id": row.get("seed_id", ""),
+                    "source_modality": row.get("source_modality", ""),
+                    "gold_modality": row.get("gold_modality", ""),
+                    "pred_modality": row.get("pred_modality", ""),
+                    "valid_n": row.get("valid_n", ""),
+                    "total_n": row.get("total_n", ""),
+                    "y_true": row.get("y_true", ""),
+                    "y_pred": row.get("y_pred", ""),
+                    "prediction_error": _error_label_for_score_row(row),
+                    "acse_raw_uncertainty_score": raw_score,
+                    "acse_normalized_uncertainty_score": normalized,
+                    "acse_raw_group_min": raw_min,
+                    "acse_raw_group_max": raw_max,
+                    "acse_calibration_split": split,
+                    "semantic_cluster_count": row.get("semantic_cluster_count", ""),
+                    "semantic_cluster_entropy": row.get("semantic_cluster_entropy", ""),
+                    "semantic_cluster_variation_ratio": row.get("semantic_cluster_variation_ratio", ""),
+                    "semantic_dominant_cluster_share": row.get("semantic_dominant_cluster_share", ""),
+                    "semantic_mean_pairwise_distance": row.get("semantic_mean_pairwise_distance", ""),
+                    "semantic_dominant_cluster_mean_distance": row.get("semantic_dominant_cluster_mean_distance", ""),
+                }
+            )
+    return sorted(
+        normalized_rows,
+        key=lambda row: (
+            str(row["model"]),
+            str(row["task"]),
+            str(row["semantic_embedding_backend"]),
+            str(row["item_id"]),
+        ),
+    )
+
+
+def _accepted_error_rate(rows: list[dict[str, Any]], threshold: float) -> tuple[int, float, float]:
+    accepted = [
+        row
+        for row in rows
+        if _float_or_nan(row.get("acse_normalized_uncertainty_score", "")) <= threshold
+    ]
+    if not rows:
+        return 0, math.nan, math.nan
+    coverage = len(accepted) / len(rows)
+    if not accepted:
+        return 0, coverage, math.nan
+    error_rate = sum(int(row["prediction_error"]) for row in accepted) / len(accepted)
+    return len(accepted), coverage, error_rate
+
+
+def _deferred_error_rate(rows: list[dict[str, Any]], threshold: float) -> float:
+    deferred = [
+        row
+        for row in rows
+        if _float_or_nan(row.get("acse_normalized_uncertainty_score", "")) > threshold
+    ]
+    if not deferred:
+        return math.nan
+    return sum(int(row["prediction_error"]) for row in deferred) / len(deferred)
+
+
+def _select_threshold_for_error_target(
+    rows: list[dict[str, Any]],
+    target_error_rate: float,
+) -> float | None:
+    if not rows:
+        return None
+    candidates = sorted(
+        {
+            _float_or_nan(row.get("acse_normalized_uncertainty_score", ""))
+            for row in rows
+            if not math.isnan(_float_or_nan(row.get("acse_normalized_uncertainty_score", "")))
+        }
+    )
+    selected: float | None = None
+    for threshold in candidates:
+        accepted_n, _, error_rate = _accepted_error_rate(rows, threshold)
+        if accepted_n and not math.isnan(error_rate) and error_rate <= float(target_error_rate) + 1e-12:
+            selected = threshold
+    return selected
+
+
+def acse_calibration_diagnostic_rows(
+    normalized_rows: list[dict[str, Any]],
+    target_error_rates: Iterable[float] = ACSE_TARGET_ACCEPTED_ERROR_RATES,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    group_keys = ["run_id", "model", "task", "semantic_embedding_backend"]
+    for key, group_rows in grouped(normalized_rows, group_keys).items():
+        calibration_rows = [row for row in group_rows if str(row.get("acse_calibration_split", "")) == "calibration"]
+        evaluation_rows = [row for row in group_rows if str(row.get("acse_calibration_split", "")) == "evaluation"]
+        evaluation_mode = "heldout_seed_split" if evaluation_rows else "resubstitution_no_heldout"
+        evaluation_source_rows = evaluation_rows or calibration_rows
+        all_errors = [int(row["prediction_error"]) for row in group_rows]
+        all_scores = [
+            _float_or_nan(row.get("acse_normalized_uncertainty_score", ""))
+            for row in group_rows
+        ]
+        error_detection = auroc_score(all_errors, all_scores)
+        for target in target_error_rates:
+            threshold = _select_threshold_for_error_target(calibration_rows, float(target))
+            if threshold is None:
+                calibration_accepted_n, calibration_coverage, calibration_error_rate = 0, 0.0, math.nan
+                evaluation_accepted_n, evaluation_coverage, evaluation_error_rate = 0, 0.0, math.nan
+                evaluation_deferred_error_rate = math.nan
+            else:
+                calibration_accepted_n, calibration_coverage, calibration_error_rate = _accepted_error_rate(
+                    calibration_rows,
+                    threshold,
+                )
+                evaluation_accepted_n, evaluation_coverage, evaluation_error_rate = _accepted_error_rate(
+                    evaluation_source_rows,
+                    threshold,
+                )
+                evaluation_deferred_error_rate = _deferred_error_rate(evaluation_source_rows, threshold)
+            rows.append(
+                {
+                    "run_id": key[0],
+                    "model": key[1],
+                    "task": key[2],
+                    "semantic_embedding_backend": key[3],
+                    "target_accepted_error_rate": float(target),
+                    "selected_normalized_threshold": "" if threshold is None else threshold,
+                    "calibration_n": len(calibration_rows),
+                    "calibration_accepted_n": calibration_accepted_n,
+                    "calibration_coverage": calibration_coverage,
+                    "calibration_accepted_error_rate": calibration_error_rate,
+                    "evaluation_mode": evaluation_mode,
+                    "evaluation_n": len(evaluation_source_rows),
+                    "evaluation_accepted_n": evaluation_accepted_n,
+                    "evaluation_coverage": evaluation_coverage,
+                    "evaluation_accepted_error_rate": evaluation_error_rate,
+                    "evaluation_deferred_error_rate": evaluation_deferred_error_rate,
+                    "all_n": len(group_rows),
+                    "all_error_rate": sum(all_errors) / len(all_errors) if all_errors else math.nan,
+                    "all_error_detection_auroc": error_detection,
+                }
+            )
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row["model"]),
+            str(row["task"]),
+            str(row["semantic_embedding_backend"]),
+            float(row["target_accepted_error_rate"]),
+        ),
+    )
+
+
 def selective_deferral_metrics(
     rows: list[dict[str, Any]],
     task: str,
@@ -5651,6 +6191,14 @@ def uq_method_inventory_rows() -> list[dict[str, Any]]:
             "extra_inference_cost": "reuses K stochastic calls",
             "headline": "yes",
             "notes": "One minus the empirical probability of the majority label; report as an uncertainty signal, not a separate prediction method.",
+        },
+        {
+            "uq_method": ACSE_PROXY_METHOD,
+            "survey_family": "semantic clustering UQ",
+            "access_requirement": "black-box stochastic answer texts",
+            "extra_inference_cost": "reuses K stochastic calls; TF-IDF fallback or optional local MLX embedding pass",
+            "headline": "diagnostic",
+            "notes": "ACSE-inspired 5-sample semantic dispersion score for ranking and triage; do not treat it as a conformal accept/abstain rule without held-out calibration.",
         },
         {
             "uq_method": "model_ensemble_disagreement",

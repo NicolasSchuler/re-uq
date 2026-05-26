@@ -773,6 +773,85 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertGreater(eu.normalized_predictive_entropy(distribution), 0.0)
         self.assertLess(eu.normalized_predictive_entropy(distribution), 1.0)
 
+    def test_acse_semantic_proxy_distinguishes_identical_from_divergent_samples(self):
+        identical = eu.acse_semantic_proxy_diagnostics(["decision: yes"] * 5)
+        divergent = eu.acse_semantic_proxy_diagnostics(
+            [
+                "decision: yes because export is mandatory",
+                "decision: no because export is optional",
+                "decision: yes because logging is mandatory",
+                "decision: no because deletion is out of scope",
+                "decision: yes because payment is required",
+            ]
+        )
+
+        self.assertEqual(identical["semantic_cluster_count"], 1)
+        self.assertEqual(identical["semantic_uncertainty_score"], 0.0)
+        self.assertGreater(divergent["semantic_cluster_count"], 1)
+        self.assertGreater(divergent["semantic_uncertainty_score"], identical["semantic_uncertainty_score"])
+
+    def test_acse_semantic_proxy_can_use_lazy_mlx_backend(self):
+        fake_embeddings = eu.np.asarray(
+            [
+                [1.0, 0.0],
+                [0.9, 0.1],
+                [0.0, 1.0],
+            ],
+            dtype=float,
+        )
+        with mock.patch.object(eu, "_mlx_text_embedding_matrix", return_value=fake_embeddings) as embed:
+            diagnostics = eu.acse_semantic_proxy_diagnostics(
+                ["alpha", "alpha-ish", "beta"],
+                embedding_backend="mlx",
+                mlx_model_name="mlx-community/fake-embedding",
+            )
+
+        embed.assert_called_once()
+        self.assertEqual(diagnostics["semantic_embedding_backend"], "mlx:mlx-community/fake-embedding")
+        self.assertGreater(diagnostics["semantic_cluster_count"], 1)
+
+    def test_acse_normalization_and_calibration_diagnostics(self):
+        base = {
+            "run_id": "r1",
+            "model": "m1",
+            "task": "task1",
+            "uq_method": eu.ACSE_PROXY_METHOD,
+            "seed_id": "S0001",
+            "source_modality": "mandatory",
+            "semantic_embedding_backend": "mlx:fake",
+            "valid_n": 5,
+            "total_n": 5,
+        }
+        scores = [
+            {
+                **base,
+                "item_id": "low-risk",
+                "y_true": 1,
+                "y_pred": 1,
+                "uncertainty_score": 0.2,
+                "semantic_cluster_count": 1,
+            },
+            {
+                **base,
+                "item_id": "high-risk",
+                "y_true": 0,
+                "y_pred": 1,
+                "uncertainty_score": 0.8,
+                "semantic_cluster_count": 2,
+            },
+        ]
+
+        normalized = eu.acse_normalized_score_rows(scores)
+        calibration = eu.acse_calibration_diagnostic_rows(normalized, target_error_rates=(0.0,))
+
+        by_item = {row["item_id"]: row for row in normalized}
+        self.assertEqual(by_item["low-risk"]["acse_normalized_uncertainty_score"], 0.0)
+        self.assertEqual(by_item["high-risk"]["acse_normalized_uncertainty_score"], 1.0)
+        self.assertEqual(len(calibration), 1)
+        self.assertEqual(calibration[0]["selected_normalized_threshold"], 0.0)
+        self.assertEqual(calibration[0]["calibration_coverage"], 0.5)
+        self.assertEqual(calibration[0]["calibration_accepted_error_rate"], 0.0)
+
     def test_monotonicity_violation(self):
         rows = [
             {"seed_id": "S1", "source_modality": "mandatory", "p_yes": 0.9},
@@ -1615,11 +1694,17 @@ class EvalUtilsTest(unittest.TestCase):
         scores = eu.build_uq_scores(benchmark, raw_rows)
         by_method = {row["uq_method"]: row for row in scores}
 
-        self.assertEqual(set(by_method), {"label_self_consistency", "predictive_entropy", "variation_ratio"})
+        self.assertEqual(
+            set(by_method),
+            {"label_self_consistency", "predictive_entropy", "variation_ratio", eu.ACSE_PROXY_METHOD},
+        )
         self.assertAlmostEqual(by_method["label_self_consistency"]["p_yes"], 0.8)
         self.assertAlmostEqual(by_method["variation_ratio"]["uncertainty_score"], 0.2)
         self.assertEqual(by_method["predictive_entropy"]["uncertainty_measure"], "normalized_entropy")
         self.assertGreater(by_method["predictive_entropy"]["uncertainty_score"], by_method["variation_ratio"]["uncertainty_score"])
+        self.assertEqual(by_method[eu.ACSE_PROXY_METHOD]["uncertainty_measure"], eu.ACSE_PROXY_MEASURE)
+        self.assertEqual(by_method[eu.ACSE_PROXY_METHOD]["semantic_embedding_backend"], eu.ACSE_PROXY_EMBEDDING_BACKEND)
+        self.assertEqual(by_method[eu.ACSE_PROXY_METHOD]["valid_n"], 5)
 
     def test_stochastic_parse_failures_are_retained_in_score_counts(self):
         benchmark = eu.build_benchmark_items(
@@ -3268,11 +3353,15 @@ class EvalUtilsTest(unittest.TestCase):
 
             self.assertTrue((output_dir / "metrics_summary.csv").exists())
             self.assertTrue((output_dir / "paper_results_table.md").exists())
+            self.assertTrue((output_dir / "acse_semantic_normalized_scores.csv").exists())
+            self.assertTrue((output_dir / "acse_semantic_calibration.csv").exists())
+            self.assertTrue((output_dir / "acse_semantic_calibration.md").exists())
             self.assertTrue((output_dir / "task1_p_yes_by_modality.svg").exists())
             self.assertTrue((output_dir / "provenance_manifest.json").exists())
             provenance = json.loads((output_dir / "provenance_manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(provenance["run_id"], "full-analysis")
             self.assertEqual(provenance["stale_item_count"], 0)
+            self.assertEqual(provenance["acse_normalized_rows"], 0)
 
     def test_analysis_rejects_legacy_task3_as_official_blind(self):
         with self.assertRaisesRegex(ValueError, "legacy"):
@@ -3664,6 +3753,7 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertTrue(paths["markdown"].exists())
             self.assertTrue(paths["csv"].exists())
             self.assertIn("predictive_entropy", paths["markdown"].read_text(encoding="utf-8"))
+            self.assertIn(eu.ACSE_PROXY_METHOD, paths["markdown"].read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

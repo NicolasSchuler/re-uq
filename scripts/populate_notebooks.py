@@ -543,11 +543,11 @@ def notebook_02() -> list[nbf.NotebookNode]:
                 ]
                 diagnostic_rows = [
                     row for row in pilot_scores
-                    if row["uq_method"] in {"label_self_consistency", "modality_consistency", "predictive_entropy", "variation_ratio"}
+                    if row["uq_method"] in {"label_self_consistency", "modality_consistency", "predictive_entropy", "variation_ratio", eu.ACSE_PROXY_METHOD}
                 ]
                 print(eu.markdown_table(diagnostic_rows[:24], fields))
             else:
-                print("No pilot rows available. Run the pilot to inspect entropy and variation-ratio diagnostics.")
+                print("No pilot rows available. Run the pilot to inspect stochastic UQ diagnostics.")
             """
         ),
         md("## Optional Logprob Capability Probe"),
@@ -1322,8 +1322,17 @@ def notebook_04() -> list[nbf.NotebookNode]:
             scores.extend(baseline_scores)
             scores_path = eu.artifact_path(PROJECT_ROOT / "data/processed/uq_scores.csv", DATASET_ID, BENCHMARK_VARIANT)
             eu.write_csv_rows(scores_path, scores)
+            acse_normalized = eu.acse_normalized_score_rows(scores)
+            acse_calibration = eu.acse_calibration_diagnostic_rows(acse_normalized)
+            acse_normalized_path = eu.artifact_path(PROJECT_ROOT / "data/processed/acse_semantic_normalized_scores.csv", DATASET_ID, BENCHMARK_VARIANT)
+            acse_calibration_path = eu.artifact_path(PROJECT_ROOT / "data/processed/acse_semantic_calibration.csv", DATASET_ID, BENCHMARK_VARIANT)
+            eu.write_csv_rows(acse_normalized_path, acse_normalized, fieldnames=eu.ACSE_NORMALIZED_SCORE_FIELDS)
+            eu.write_csv_rows(acse_calibration_path, acse_calibration, fieldnames=eu.ACSE_CALIBRATION_FIELDS)
             print(f"Wrote UQ scores: {scores_path}")
+            print(f"Wrote ACSE normalized scores: {acse_normalized_path}")
+            print(f"Wrote ACSE calibration diagnostics: {acse_calibration_path}")
             print(f"Score rows: {len(scores)} including {len(baseline_scores)} rule-baseline rows and {len(task3_scores)} Task 3 rows")
+            print(f"ACSE normalized rows: {len(acse_normalized)}; calibration rows: {len(acse_calibration)}")
             scores[:3]
             """
         ),
