@@ -3810,6 +3810,115 @@ def semantic_embedding_matrix(
     raise AssertionError(f"Unhandled embedding backend label: {backend_label}")
 
 
+def acse_cluster_labels_for_embeddings(
+    embeddings: np.ndarray,
+    distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
+) -> list[str]:
+    matrix = normalize_embedding_rows(embeddings)
+    sample_count = int(matrix.shape[0])
+    if sample_count <= 1:
+        return ["cluster_0"] * sample_count
+    distance_matrix = np.clip(1.0 - cosine_similarity(matrix), 0.0, 1.0)
+    distance_matrix[np.abs(distance_matrix) < 1e-12] = 0.0
+    np.fill_diagonal(distance_matrix, 0.0)
+    clusterer = AgglomerativeClustering(
+        n_clusters=None,
+        metric="precomputed",
+        linkage="average",
+        distance_threshold=float(distance_threshold),
+    )
+    raw_labels = [int(label) for label in clusterer.fit_predict(distance_matrix)]
+    counts = Counter(raw_labels)
+    ordered = sorted(counts, key=lambda label: (-counts[label], label))
+    remap = {label: f"cluster_{rank}" for rank, label in enumerate(ordered)}
+    return [remap[label] for label in raw_labels]
+
+
+def acse_semantic_diagnostics_from_embeddings(
+    embeddings: np.ndarray,
+    semantic_embedding_backend: str,
+    distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
+) -> dict[str, Any]:
+    matrix = normalize_embedding_rows(embeddings)
+    sample_count = int(matrix.shape[0])
+    if sample_count == 0:
+        return {
+            "semantic_embedding_backend": semantic_embedding_backend,
+            "semantic_distance_threshold": float(distance_threshold),
+            "semantic_cluster_count": 0,
+            "semantic_cluster_distribution": "",
+            "semantic_cluster_entropy": math.nan,
+            "semantic_cluster_variation_ratio": math.nan,
+            "semantic_dominant_cluster_share": math.nan,
+            "semantic_mean_pairwise_distance": math.nan,
+            "semantic_dominant_cluster_mean_distance": math.nan,
+            "semantic_uncertainty_score": math.nan,
+        }
+
+    if sample_count == 1:
+        distribution = {"cluster_0": 1.0}
+        return {
+            "semantic_embedding_backend": semantic_embedding_backend,
+            "semantic_distance_threshold": float(distance_threshold),
+            "semantic_cluster_count": 1,
+            "semantic_cluster_distribution": label_distribution_json(distribution),
+            "semantic_cluster_entropy": 0.0,
+            "semantic_cluster_variation_ratio": 0.0,
+            "semantic_dominant_cluster_share": 1.0,
+            "semantic_mean_pairwise_distance": 0.0,
+            "semantic_dominant_cluster_mean_distance": 0.0,
+            "semantic_uncertainty_score": 0.0,
+        }
+
+    distance_matrix = np.clip(1.0 - cosine_similarity(matrix), 0.0, 1.0)
+    distance_matrix[np.abs(distance_matrix) < 1e-12] = 0.0
+    np.fill_diagonal(distance_matrix, 0.0)
+
+    cluster_labels = acse_cluster_labels_for_embeddings(matrix, distance_threshold)
+    counts = Counter(cluster_labels)
+    ordered_counts = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    distribution = {
+        label: count / sample_count
+        for label, count in ordered_counts
+    }
+    cluster_entropy = normalized_predictive_entropy(distribution)
+    cluster_variation = variation_ratio(distribution)
+    dominant_label, dominant_count = ordered_counts[0]
+
+    pairwise = distance_matrix[np.triu_indices(sample_count, k=1)]
+    mean_pairwise_distance = float(np.mean(pairwise)) if pairwise.size else 0.0
+    dominant_indices = [index for index, label in enumerate(cluster_labels) if label == dominant_label]
+    if len(dominant_indices) > 1:
+        dominant_distances = distance_matrix[np.ix_(dominant_indices, dominant_indices)]
+        dominant_pairwise = dominant_distances[np.triu_indices(len(dominant_indices), k=1)]
+        dominant_mean_distance = float(np.mean(dominant_pairwise)) if dominant_pairwise.size else 0.0
+    else:
+        dominant_mean_distance = 0.0
+
+    dispersion_denominator = max(float(distance_threshold), 1e-12)
+    dispersion_component = min(1.0, max(mean_pairwise_distance, dominant_mean_distance) / dispersion_denominator)
+    entropy_weight = 1.0 - ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT
+    uncertainty_score = min(
+        1.0,
+        entropy_weight * float(cluster_entropy)
+        + ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT * dispersion_component,
+    )
+    if abs(uncertainty_score) < 1e-12:
+        uncertainty_score = 0.0
+    return {
+        "semantic_embedding_backend": semantic_embedding_backend,
+        "semantic_distance_threshold": float(distance_threshold),
+        "semantic_cluster_count": len(counts),
+        "semantic_cluster_distribution": label_distribution_json(distribution),
+        "semantic_cluster_entropy": float(cluster_entropy),
+        "semantic_cluster_variation_ratio": float(cluster_variation),
+        "semantic_dominant_cluster_share": dominant_count / sample_count,
+        "semantic_mean_pairwise_distance": mean_pairwise_distance,
+        "semantic_dominant_cluster_mean_distance": dominant_mean_distance,
+        "semantic_uncertainty_score": float(uncertainty_score),
+    }
+
+
 def acse_semantic_proxy_diagnostics(
     texts: list[str],
     distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
@@ -3853,59 +3962,7 @@ def acse_semantic_proxy_diagnostics(
         embedding_backend=embedding_backend,
         mlx_model_name=mlx_model_name,
     )
-    distance_matrix = np.clip(1.0 - cosine_similarity(embeddings), 0.0, 1.0)
-    distance_matrix[np.abs(distance_matrix) < 1e-12] = 0.0
-    np.fill_diagonal(distance_matrix, 0.0)
-
-    clusterer = AgglomerativeClustering(
-        n_clusters=None,
-        metric="precomputed",
-        linkage="average",
-        distance_threshold=float(distance_threshold),
-    )
-    labels = [int(label) for label in clusterer.fit_predict(distance_matrix)]
-    counts = Counter(labels)
-    ordered_counts = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
-    distribution = {
-        f"cluster_{rank}": count / sample_count
-        for rank, (_, count) in enumerate(ordered_counts)
-    }
-    cluster_entropy = normalized_predictive_entropy(distribution)
-    cluster_variation = variation_ratio(distribution)
-    dominant_label, dominant_count = ordered_counts[0]
-
-    pairwise = distance_matrix[np.triu_indices(sample_count, k=1)]
-    mean_pairwise_distance = float(np.mean(pairwise)) if pairwise.size else 0.0
-    dominant_indices = [index for index, label in enumerate(labels) if label == dominant_label]
-    if len(dominant_indices) > 1:
-        dominant_distances = distance_matrix[np.ix_(dominant_indices, dominant_indices)]
-        dominant_pairwise = dominant_distances[np.triu_indices(len(dominant_indices), k=1)]
-        dominant_mean_distance = float(np.mean(dominant_pairwise)) if dominant_pairwise.size else 0.0
-    else:
-        dominant_mean_distance = 0.0
-
-    dispersion_denominator = max(float(distance_threshold), 1e-12)
-    dispersion_component = min(1.0, max(mean_pairwise_distance, dominant_mean_distance) / dispersion_denominator)
-    entropy_weight = 1.0 - ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT
-    uncertainty_score = min(
-        1.0,
-        entropy_weight * float(cluster_entropy)
-        + ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT * dispersion_component,
-    )
-    if abs(uncertainty_score) < 1e-12:
-        uncertainty_score = 0.0
-    return {
-        "semantic_embedding_backend": backend_label,
-        "semantic_distance_threshold": float(distance_threshold),
-        "semantic_cluster_count": len(counts),
-        "semantic_cluster_distribution": label_distribution_json(distribution),
-        "semantic_cluster_entropy": float(cluster_entropy),
-        "semantic_cluster_variation_ratio": float(cluster_variation),
-        "semantic_dominant_cluster_share": dominant_count / sample_count,
-        "semantic_mean_pairwise_distance": mean_pairwise_distance,
-        "semantic_dominant_cluster_mean_distance": dominant_mean_distance,
-        "semantic_uncertainty_score": float(uncertainty_score),
-    }
+    return acse_semantic_diagnostics_from_embeddings(embeddings, backend_label, distance_threshold)
 
 
 def majority_label(distribution: dict[str, float], label_order: list[str]) -> str:

@@ -116,8 +116,13 @@ Compare complete runs in the configured matrix:
 ```bash
 .venv/bin/python scripts/compare_run_matrix.py \
   --config run_configs/current_run.json \
-  --dataset mlm_tapt
+  --dataset mlm_tapt \
+  --exclude-model-prefix azure.
 ```
+
+The official paper cohort excludes KIT Azure-hosted `azure.*` rows. Those raw
+registry entries can remain useful diagnostics, but do not count them in
+paper-facing model aggregates.
 
 ## 5. Task 3 Self-Audit Diagnostic
 

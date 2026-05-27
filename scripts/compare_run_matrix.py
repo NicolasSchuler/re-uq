@@ -36,7 +36,13 @@ SUMMARY_FIELDS = [
 ]
 
 
-def completed_registry_rows(registry_rows: list[dict[str, Any]], run_group_id: str, include_smoke: bool) -> list[dict[str, Any]]:
+def completed_registry_rows(
+    registry_rows: list[dict[str, Any]],
+    run_group_id: str,
+    include_smoke: bool,
+    exclude_model_prefixes: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    exclude_model_prefixes = exclude_model_prefixes or []
     rows = []
     for row in registry_rows:
         if str(row.get("run_group_id", "")) != run_group_id:
@@ -44,6 +50,9 @@ def completed_registry_rows(registry_rows: list[dict[str, Any]], run_group_id: s
         if str(row.get("status", "")) != "complete":
             continue
         if not include_smoke and str(row.get("run_id", "")).startswith("smoke-"):
+            continue
+        model = str(row.get("model", ""))
+        if any(model.startswith(prefix) for prefix in exclude_model_prefixes):
             continue
         rows.append(row)
     return rows
@@ -109,6 +118,12 @@ def main() -> None:
     parser.add_argument("--dataset")
     parser.add_argument("--variant")
     parser.add_argument("--include-smoke", action="store_true")
+    parser.add_argument(
+        "--exclude-model-prefix",
+        action="append",
+        default=[],
+        help="Exclude completed runs whose model id starts with this prefix. Can be repeated.",
+    )
     args = parser.parse_args()
 
     root = eu.project_root()
@@ -121,7 +136,12 @@ def main() -> None:
         for variant in variants:
             registry_path = eu.run_registry_path(root, dataset_id, variant)
             registry_rows = eu.read_csv_rows(registry_path) if registry_path.exists() else []
-            complete_rows = completed_registry_rows(registry_rows, run_group_id, include_smoke=args.include_smoke)
+            complete_rows = completed_registry_rows(
+                registry_rows,
+                run_group_id,
+                include_smoke=args.include_smoke,
+                exclude_model_prefixes=args.exclude_model_prefix,
+            )
             benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
             raw_path = eu.artifact_path(root / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
             benchmark = eu.read_csv_rows(benchmark_path)

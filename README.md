@@ -39,6 +39,81 @@ bash scripts/reproduce.sh smoke-fake
 
 For real provider runs, see the Task → Command cheat-sheet at the top of [`docs/reproduction.md`](docs/reproduction.md).
 
+## Reproduce The Main Results
+
+The commands below are templates for a real provider/model cell. Replace the
+provider placeholders in `run_configs/current_run.json`, then set `PROFILE` and
+`MODEL` to the profile and model IDs from that config. The canonical task order
+is: Task 1+2 first, blind Task 3 second, analysis last.
+
+```bash
+uv sync --group dev --locked
+.venv/bin/python -m unittest discover -s tests -v
+
+cp run_configs/full_matrix.example.json run_configs/current_run.json
+# Edit run_configs/current_run.json for your endpoint, API-key env var, profile, and model.
+
+PROFILE="your_profile_id"
+MODEL="your_model_id"
+DATASET="mlm_tapt"      # nice | mlm_tapt
+VARIANT="must"          # must | shall
+
+# Task 1 control + Task 2 extraction/text-drift run.
+.venv/bin/python scripts/run_experiment_from_config.py \
+  --config run_configs/current_run.json \
+  --profile "${PROFILE}" \
+  --model "${MODEL}" \
+  --dataset "${DATASET}" \
+  --variant "${VARIANT}" \
+  --task both \
+  --mode full
+```
+
+Take the completed Task 1+2 `RUN_ID` from the matching
+`data/processed/run_registry*.csv` file, then run official blind Task 3:
+
+```bash
+SOURCE_RUN_ID="full-..."
+
+.venv/bin/python scripts/run_task3_verification_from_config.py \
+  --config run_configs/current_run.json \
+  --profile "${PROFILE}" \
+  --model "${MODEL}" \
+  --dataset "${DATASET}" \
+  --variant "${VARIANT}" \
+  --source-run-id "${SOURCE_RUN_ID}" \
+  --audit-mode blind \
+  --mode full
+```
+
+Take the completed Task 3 `TASK3_RUN_ID` from
+`data/processed/run_registry_task3_verification*.csv`, then generate the
+paper-facing analysis:
+
+```bash
+TASK3_RUN_ID="task3-..."
+
+.venv/bin/python scripts/generate_evaluation_analysis.py \
+  --dataset "${DATASET}" \
+  --variant "${VARIANT}" \
+  --run-id "${SOURCE_RUN_ID}" \
+  --task3-run-id "${TASK3_RUN_ID}" \
+  --task3-audit-mode blind \
+  --profile "${PROFILE}" \
+  --model "${MODEL}"
+```
+
+Repeat the template for both datasets (`nice`, `mlm_tapt`) and both benchmark
+variants (`must`, `shall`). `must` is the primary mandatory-wording condition;
+`shall` is the robustness variant. The official model cohort excludes KIT
+Azure-hosted `azure.*` runs; those rows may remain in local registries as
+diagnostic attempts, but should not be counted in paper-facing results.
+Declared-modality Task 3 modes
+(`declared_text`, `declared_source`) are anchoring ablations, not official blind
+Task 3 results. If `docs/weak_modality_construct_review.csv` is incomplete, the
+analysis should be treated as diagnostic; use `--skip-construct-review-check`
+only for local inspection, not paper-ready results.
+
 ## Repository Map (Teaser)
 
 For the full map, conventions, and the variant-suffix table, see [`docs/repository_layout.md`](docs/repository_layout.md).

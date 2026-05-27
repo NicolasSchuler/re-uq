@@ -12,6 +12,7 @@ from scripts import eval_utils as eu
 from scripts import compare_run_matrix as compare_matrix
 from scripts import evaluate_external_ai_probe as external_eval
 from scripts import generate_evaluation_analysis as analysis_cli
+from scripts import plot_acse_global_embedding_projection as acse_global_projection
 from scripts import run_experiment_from_config as run_config_cli
 from scripts import run_task3_verification_from_config as task3_cli
 from scripts import show_run_progress
@@ -809,6 +810,62 @@ class EvalUtilsTest(unittest.TestCase):
         embed.assert_called_once()
         self.assertEqual(diagnostics["semantic_embedding_backend"], "mlx:mlx-community/fake-embedding")
         self.assertGreater(diagnostics["semantic_cluster_count"], 1)
+
+    def test_global_acse_loader_refits_tfidf_caches_in_shared_space(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            manifest_rows = []
+            for index, width in enumerate([2, 3]):
+                artifact_dir = root / f"run{index}"
+                artifact_dir.mkdir()
+                eu.np.savez_compressed(
+                    artifact_dir / "task2_acse_sample_embeddings.npz",
+                    embeddings=eu.np.ones((1, width), dtype=float),
+                )
+                eu.write_csv_rows(
+                    artifact_dir / "task2_acse_samples.csv",
+                    [
+                        {
+                            "embedding_index": 0,
+                            "item_id": f"item{index}",
+                            "seed_id": f"S{index:04d}",
+                            "sample_index": 0,
+                            "semantic_text": f"requirement: {'alpha' if index == 0 else 'beta gamma'}",
+                            "requirement": "",
+                            "pred_modality": "optional",
+                        }
+                    ],
+                )
+                eu.write_csv_rows(
+                    artifact_dir / "task2_acse_items.csv",
+                    [
+                        {
+                            "item_id": f"item{index}",
+                            "source_modality": "optional",
+                            "strict_text_overcommit": "0",
+                            "text_overcommit": "0",
+                            "acse_uncertainty_score": "0.1",
+                        }
+                    ],
+                )
+                manifest_rows.append(
+                    {
+                        "artifact_dir": str(artifact_dir),
+                        "dataset_id": "nice",
+                        "benchmark_variant": "must",
+                        "run_id": f"run{index}",
+                        "model": "m",
+                        "profile_id": "p",
+                        "embedding_backend": eu.ACSE_PROXY_EMBEDDING_BACKEND,
+                    }
+                )
+
+            embeddings, rows = acse_global_projection.load_embeddings_and_rows(manifest_rows)
+
+        self.assertEqual(embeddings.shape[0], 2)
+        self.assertGreater(embeddings.shape[1], 0)
+        self.assertEqual([row["global_embedding_index"] for row in rows], [0, 1])
+        self.assertEqual({row["global_embedding_source"] for row in rows}, {"shared_tfidf_refit"})
 
     def test_acse_normalization_and_calibration_diagnostics(self):
         base = {
@@ -3011,6 +3068,22 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual([row["run_id"] for row in selected], ["full-1"])
         self.assertEqual([row["run_id"] for row in selected_with_smoke], ["full-1", "smoke-1"])
+
+    def test_run_matrix_completed_rows_can_exclude_model_prefixes(self):
+        rows = [
+            {"run_group_id": "group1", "run_id": "full-1", "status": "complete", "model": "kit.gemma4-31b-it"},
+            {"run_group_id": "group1", "run_id": "full-2", "status": "complete", "model": "azure.gpt-5.4"},
+            {"run_group_id": "group1", "run_id": "full-3", "status": "complete", "model": "glm-5"},
+        ]
+
+        selected = compare_matrix.completed_registry_rows(
+            rows,
+            "group1",
+            include_smoke=False,
+            exclude_model_prefixes=["azure."],
+        )
+
+        self.assertEqual([row["run_id"] for row in selected], ["full-1", "full-3"])
 
     def test_fake_cli_smoke_writes_canonical_jsonl_and_registry(self):
         with tempfile.TemporaryDirectory() as tmpdir:

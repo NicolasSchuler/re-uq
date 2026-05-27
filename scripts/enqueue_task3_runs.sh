@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # Enqueue official blind Task 3 text-audit runs for completed Task 1/2 source runs.
-# The mlm_tapt azure.gpt-5.4 cells are intentionally omitted because their
-# synced Task 2 parse/scoring state was not usable for Task 3 source auditing.
+# KIT Azure model rows are intentionally omitted from the official cohort.
+# They remain in raw registries as diagnostic attempts, but should not be queued
+# for official blind Task 3 or counted in paper-facing results.
 #
 # Override for anchoring ablations, e.g.:
 #   TASK3_AUDIT_MODE=declared_source bash scripts/enqueue_task3_runs.sh
@@ -21,8 +22,6 @@ queue_task3() {
 
 # nice / must
 queue_task3 nice must kit_toolbox kit.gemma4-31b-it full-20260522-141406-962a3a84
-queue_task3 nice must kit_toolbox azure.gpt-5.4 full-20260522-162229-a1d98608
-queue_task3 nice must kit_toolbox azure.gpt-5-nano full-20260522-173231-29f884e0
 queue_task3 nice must zai glm-5.1 full-20260522-184142-83579d93
 queue_task3 nice must zai glm-5 full-20260522-200032-3a4c8216
 queue_task3 nice must zai glm-5-turbo full-20260522-211601-62e27962
@@ -31,8 +30,6 @@ queue_task3 nice must zai glm-4.5-air full-20260523-001117-467c466a
 
 # nice / shall
 queue_task3 nice shall kit_toolbox kit.gemma4-31b-it full-shall-20260522-151931-1f4cd32f
-queue_task3 nice shall kit_toolbox azure.gpt-5.4 full-shall-20260522-165758-bbdf9ab5
-queue_task3 nice shall kit_toolbox azure.gpt-5-nano full-shall-20260522-180736-b42c186e
 queue_task3 nice shall zai glm-5.1 full-shall-20260522-192121-e5eab752
 queue_task3 nice shall zai glm-5 full-shall-20260522-203850-9476f622
 queue_task3 nice shall zai glm-5-turbo full-shall-20260522-220118-d2b1aafc
