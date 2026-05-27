@@ -3071,7 +3071,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_run_matrix_completed_rows_can_exclude_model_prefixes(self):
         rows = [
-            {"run_group_id": "group1", "run_id": "full-1", "status": "complete", "model": "kit.gemma4-31b-it"},
+            {"run_group_id": "group1", "run_id": "full-1", "status": "complete", "model": "local.gemma4-31b-it"},
             {"run_group_id": "group1", "run_id": "full-2", "status": "complete", "model": "azure.gpt-5.4"},
             {"run_group_id": "group1", "run_id": "full-3", "status": "complete", "model": "glm-5"},
         ]

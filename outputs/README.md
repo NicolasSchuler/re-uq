@@ -25,10 +25,10 @@ When in doubt, final paper claims should come from `outputs/evaluation_<dataset>
   - `logprob_probe.json`
 - **External AI service probe** results under `outputs/external_ai_service_probe/` (evaluation Markdown, confusion matrices, source-condition summaries, comparison).
 
-Checked metric snapshots and legacy external-probe reports remain in the repository for traceability, but are diagnostic/stale until regenerated under the current confidence contract from a complete post-fix run.
+Checked metric snapshots and legacy external-probe reports are diagnostic/stale unless they are explicitly promoted in Git after regeneration under the current confidence contract from a complete post-fix run.
 
 ## Local-only
 
-Run-specific analysis directories (`outputs/evaluation_<dataset>_<variant>_<run_id>/`), capability-seed agent-repair artifacts, and any preliminary tables are gitignored. They are reproducibility evidence and are promoted to Git only when they become paper-facing.
+Run-specific analysis directories (`outputs/evaluation_<dataset>_<variant>_<run_id>/`), capability-seed agent-repair artifacts, root-level `paper_*` metric snapshots, qualitative example exports, and preliminary tables are gitignored. They are reproducibility evidence and are promoted to Git only when they become paper-facing.
 
 See `.gitignore` for the precise allow-list, and `docs/repository_layout.md` for the variant-suffix convention used across these files.

@@ -1,6 +1,8 @@
 import csv
 import json
 import math
+import re
+import subprocess
 import tempfile
 import unittest
 from collections import Counter
@@ -121,6 +123,43 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
     WEAK_TEMPLATES = {"future_enhancement", "low_priority_enhancement", "nice_if", "useful_if"}
     EXTERNAL_MAIN_CONDITIONS = {"mandatory", "recommended", "optional", "nice_to_have"}
     EXTERNAL_WEAK_CONDITIONS = {"weak_future_enhancement", "weak_low_priority_enhancement", "weak_nice_if"}
+    SUBMISSION_IDENTITY_PATTERN = re.compile(
+        "|".join(
+            [
+                r"nico" r"las",
+                r"schu" r"ler",
+                r"kit" r"\.edu",
+                r"kit[._-]?tool" r"box",
+                r"kit" r"\.gemma",
+                r"@nic" r"ol",
+            ]
+        ),
+        re.IGNORECASE,
+    )
+    SUBMISSION_IDENTITY_EXCLUDES = {"uv.lock", "docs/anonymization.md"}
+
+    def test_tracked_submission_artifacts_do_not_contain_identity_markers(self):
+        tracked_files = subprocess.run(
+            ["git", "ls-files"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        offenders: list[str] = []
+        for path_text in tracked_files:
+            if path_text in self.SUBMISSION_IDENTITY_EXCLUDES:
+                continue
+            path = Path(path_text)
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except UnicodeDecodeError:
+                continue
+            for line_number, line in enumerate(lines, start=1):
+                if self.SUBMISSION_IDENTITY_PATTERN.search(line):
+                    offenders.append(f"{path_text}:{line_number}")
+                    break
+
+        self.assertEqual([], offenders)
 
     def test_checked_benchmark_csvs_preserve_minimal_pair_contract(self):
         for path_text, keyword in self.BENCHMARK_FILES:

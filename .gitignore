@@ -7,6 +7,16 @@ __pycache__/
 .coverage.*
 .DS_Store
 tmp/
+.env
+.env.*
+!.env.example
+
+# Local manuscript and assistant-orchestration scratch files. Promote an
+# anonymized manuscript deliberately with `git add -f` only when publication
+# packaging requires it.
+/docs/paper_draft.*
+/o.sh
+/*.local.sh
 
 # Local settings and run definitions.
 config.json
@@ -21,6 +31,8 @@ data/processed/model_outputs_raw*.jsonl
 data/processed/run_events*.jsonl
 data/processed/run_progress*.csv
 data/processed/run_registry*.csv
+data/processed/task3_verification_items*.csv
+data/processed/task3_verification_items/
 data/processed/uq_scores*.csv
 
 outputs/*

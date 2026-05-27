@@ -21,6 +21,8 @@ git grep -nE -i 'nicolas|schuler|kit\.edu|kit[._-]?toolbox|kit\.gemma|@nicol' --
 git grep -nE 'Co-authored|Signed-off-by' -- ':!uv.lock' ':!docs/anonymization.md'
 ```
 
+This preflight only scans tracked files. Local manuscript drafts, prompt bundles, and assistant-orchestration scripts are intentionally ignored by `.gitignore`; inspect and anonymize any such file separately before forcing it into a submission branch.
+
 Replacement convention:
 
 - Reviewer identities use the anonymous slot IDs already adopted by `docs/weak_modality_construct_review.csv`: `R1`, `R2`.

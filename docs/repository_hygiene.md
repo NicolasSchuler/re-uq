@@ -12,9 +12,10 @@ This project is a research-engineering artifact: Git should preserve code, promp
 ## Artifact policy
 
 - Track durable inputs and curated artifacts: prompts, stripped notebooks, tests, benchmark item CSVs, selected/reviewed seed files, benchmark manifests, final seed documents, and compact paper-facing summaries.
-- Keep raw and run-level outputs out of Git by default: `model_outputs_raw*.jsonl`, run registries/progress files, `uq_scores*.csv`, provider matrix current-run configs, generated `outputs/evaluation_*` directories, and scratch files under `tmp/`.
+- Keep raw and run-level outputs out of Git by default: `model_outputs_raw*.jsonl`, run registries/progress files, `uq_scores*.csv`, Task 3 item CSVs, provider matrix current-run configs, generated `outputs/evaluation_*` directories, and scratch files under `tmp/`.
 - If a generated output becomes paper-facing, promote it deliberately in a small commit whose message explains why it belongs in the repository.
 - Remove accidental tracked generated files with `git rm --cached <path>` so the local file is preserved.
+- Keep local manuscript drafts and assistant-orchestration scripts out of normal commits. In particular, `docs/paper_draft.*`, `o.sh`, and `*.local.sh` are ignored because they commonly contain author identity, local paths, or one-off prompt bundles. Promote an anonymized manuscript deliberately with `git add -f` only when packaging a publication artifact.
 
 ## Local verification before commit
 
@@ -26,6 +27,16 @@ git diff --check
 ```
 
 The unit suite includes notebook boundary tests that verify checked-in notebooks match `scripts/populate_notebooks.py` and contain no stored execution outputs.
+
+For a quick working-tree hygiene audit before committing, run:
+
+```bash
+git status --short
+git status --ignored --short
+git ls-files outputs data/processed docs | sort
+```
+
+The first command should be empty except for intentional tracked edits. The ignored-status view should contain local run outputs and caches, not files that you intend to publish. Run the content preflight in `docs/anonymization.md` before sharing an artifact; it only checks tracked files, so inspect any ignored or untracked manuscript candidate separately before forcing it into Git.
 
 ## Publication release checklist
 

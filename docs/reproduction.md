@@ -120,7 +120,7 @@ Compare complete runs in the configured matrix:
   --exclude-model-prefix azure.
 ```
 
-The official paper cohort excludes KIT Azure-hosted `azure.*` rows. Those raw
+The official paper cohort excludes private Azure-hosted `azure.*` rows. Those raw
 registry entries can remain useful diagnostics, but do not count them in
 paper-facing model aggregates.
 
@@ -154,7 +154,7 @@ Run the full Task 3 diagnostic:
   --mode full
 ```
 
-Task 3 writes local-only raw outputs to `data/processed/model_outputs_raw_task3_verification*.jsonl`, run-specific item CSVs under `data/processed/task3_verification_items/`, plus Task 3 registry/progress files. Existing Task 3 rows without `task3_audit_mode=blind` are legacy anchored diagnostics.
+Task 3 writes local-only raw outputs to `data/processed/model_outputs_raw_task3_verification*.jsonl`, run-specific item CSVs under `data/processed/task3_verification_items/`, plus Task 3 registry/progress files. Legacy flat `data/processed/task3_verification_items*.csv` files from earlier runs are also local-only. Existing Task 3 rows without `task3_audit_mode=blind` are legacy anchored diagnostics.
 
 ## 6. Generate Final Analysis
 

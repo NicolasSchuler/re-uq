@@ -105,7 +105,7 @@ TASK3_RUN_ID="task3-..."
 
 Repeat the template for both datasets (`nice`, `mlm_tapt`) and both benchmark
 variants (`must`, `shall`). `must` is the primary mandatory-wording condition;
-`shall` is the robustness variant. The official model cohort excludes KIT
+`shall` is the robustness variant. The official model cohort excludes private
 Azure-hosted `azure.*` runs; those rows may remain in local registries as
 diagnostic attempts, but should not be counted in paper-facing results.
 Declared-modality Task 3 modes

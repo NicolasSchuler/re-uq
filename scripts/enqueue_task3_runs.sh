@@ -2,12 +2,17 @@
 set -euo pipefail
 
 # Enqueue official blind Task 3 text-audit runs for completed Task 1/2 source runs.
-# KIT Azure model rows are intentionally omitted from the official cohort.
+# Private Azure model rows are intentionally omitted from the official cohort.
 # They remain in raw registries as diagnostic attempts, but should not be queued
 # for official blind Task 3 or counted in paper-facing results.
 #
 # Override for anchoring ablations, e.g.:
 #   TASK3_AUDIT_MODE=declared_source bash scripts/enqueue_task3_runs.sh
+# Override TASK3_LOCAL_PROFILE and TASK3_LOCAL_MODEL to match local config names
+# for the private/local model row.
+
+LOCAL_PROFILE="${TASK3_LOCAL_PROFILE:-local_toolbox}"
+LOCAL_MODEL="${TASK3_LOCAL_MODEL:-local.gemma4-31b-it}"
 
 queue_task3() {
   local dataset="$1"
@@ -21,7 +26,7 @@ queue_task3() {
 }
 
 # nice / must
-queue_task3 nice must kit_toolbox kit.gemma4-31b-it full-20260522-141406-962a3a84
+queue_task3 nice must "${LOCAL_PROFILE}" "${LOCAL_MODEL}" full-20260522-141406-962a3a84
 queue_task3 nice must zai glm-5.1 full-20260522-184142-83579d93
 queue_task3 nice must zai glm-5 full-20260522-200032-3a4c8216
 queue_task3 nice must zai glm-5-turbo full-20260522-211601-62e27962
@@ -29,7 +34,7 @@ queue_task3 nice must zai glm-4.7 full-20260522-224445-fa160fed
 queue_task3 nice must zai glm-4.5-air full-20260523-001117-467c466a
 
 # nice / shall
-queue_task3 nice shall kit_toolbox kit.gemma4-31b-it full-shall-20260522-151931-1f4cd32f
+queue_task3 nice shall "${LOCAL_PROFILE}" "${LOCAL_MODEL}" full-shall-20260522-151931-1f4cd32f
 queue_task3 nice shall zai glm-5.1 full-shall-20260522-192121-e5eab752
 queue_task3 nice shall zai glm-5 full-shall-20260522-203850-9476f622
 queue_task3 nice shall zai glm-5-turbo full-shall-20260522-220118-d2b1aafc
@@ -37,7 +42,7 @@ queue_task3 nice shall zai glm-4.7 full-shall-20260522-232742-55d639a2
 queue_task3 nice shall zai glm-4.5-air full-shall-20260523-005713-bd7b7969
 
 # mlm_tapt / must
-queue_task3 mlm_tapt must kit_toolbox kit.gemma4-31b-it full-20260523-014135-78ceaa43
+queue_task3 mlm_tapt must "${LOCAL_PROFILE}" "${LOCAL_MODEL}" full-20260523-014135-78ceaa43
 queue_task3 mlm_tapt must zai glm-5.1 full-20260523-052426-36e8cef4
 queue_task3 mlm_tapt must zai glm-5 full-20260523-065237-ce677096
 queue_task3 mlm_tapt must zai glm-5-turbo full-20260523-082104-e8b8f0ba
@@ -45,7 +50,7 @@ queue_task3 mlm_tapt must zai glm-4.7 full-20260523-120814-aa161ed3
 queue_task3 mlm_tapt must zai glm-4.5-air full-20260523-141326-7124ae7d
 
 # mlm_tapt / shall
-queue_task3 mlm_tapt shall kit_toolbox kit.gemma4-31b-it full-shall-20260523-030706-5f16ae1d
+queue_task3 mlm_tapt shall "${LOCAL_PROFILE}" "${LOCAL_MODEL}" full-shall-20260523-030706-5f16ae1d
 queue_task3 mlm_tapt shall zai glm-5.1 full-shall-20260523-060859-8a3926a6
 queue_task3 mlm_tapt shall zai glm-5 full-shall-20260523-073541-467f276c
 queue_task3 mlm_tapt shall zai glm-5-turbo full-shall-20260523-102508-fe8e153c
