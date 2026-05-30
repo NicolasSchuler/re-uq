@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 from textwrap import dedent
+from typing import Sequence
 
 import nbformat as nbf
 
 
 ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK_DIR = ROOT / "notebooks"
+NOTEBOOK_BUILDERS = [
+    ("00_prepare_data.ipynb", "notebook_00"),
+    ("01_build_modality_benchmark.ipynb", "notebook_01"),
+    ("02_pilot_local_llms.ipynb", "notebook_02"),
+    ("02b_weak_modality_robustness_probe.ipynb", "notebook_02b"),
+    ("03_run_experiments.ipynb", "notebook_03"),
+    ("03b_run_modality_verification.ipynb", "notebook_03b"),
+    ("04_compute_uq_and_metrics.ipynb", "notebook_04"),
+    ("05_analyze_and_export_results.ipynb", "notebook_05"),
+]
 
 
 def md(source: str) -> nbf.NotebookNode:
@@ -51,8 +63,8 @@ PROJECT_ROOT, CONFIG_PATH, DATASET_ID, BENCHMARK_VARIANT
 """
 
 
-def write_notebook(name: str, cells: list[nbf.NotebookNode]) -> None:
-    path = NOTEBOOK_DIR / name
+def notebook_document(cells: list[nbf.NotebookNode]) -> nbf.NotebookNode:
+    """Build a stripped notebook document with stable kernel metadata."""
     notebook = nbf.v4.new_notebook(cells=cells)
     notebook.metadata["kernelspec"] = {
         "display_name": "Python 3",
@@ -63,7 +75,32 @@ def write_notebook(name: str, cells: list[nbf.NotebookNode]) -> None:
         "name": "python",
         "pygments_lexer": "ipython3",
     }
+    return notebook
+
+
+def write_notebook(name: str, cells: list[nbf.NotebookNode], notebook_dir: Path = NOTEBOOK_DIR) -> None:
+    """Write one generated companion notebook into the target directory."""
+    path = notebook_dir / name
+    notebook = notebook_document(cells)
     nbf.write(notebook, path)
+
+
+def populate_notebooks(notebook_dir: Path = NOTEBOOK_DIR, *, dry_run: bool = False) -> list[Path]:
+    """Generate all companion notebooks, optionally validating without writes."""
+    paths: list[Path] = []
+    for name, builder_name in NOTEBOOK_BUILDERS:
+        cells = globals()[builder_name]()
+        path = notebook_dir / name
+        # Exercise full notebook serialization even in dry-run mode so a reviewer
+        # can probe the generator without rewriting tracked notebooks.
+        nbf.writes(notebook_document(cells))
+        paths.append(path)
+        if dry_run:
+            print(f"Would write: {path}")
+        else:
+            write_notebook(name, cells, notebook_dir)
+            print(f"Wrote: {path}")
+    return paths
 
 
 def notebook_00() -> list[nbf.NotebookNode]:
@@ -1598,15 +1635,19 @@ def notebook_05() -> list[nbf.NotebookNode]:
     ]
 
 
-def main() -> None:
-    write_notebook("00_prepare_data.ipynb", notebook_00())
-    write_notebook("01_build_modality_benchmark.ipynb", notebook_01())
-    write_notebook("02_pilot_local_llms.ipynb", notebook_02())
-    write_notebook("02b_weak_modality_robustness_probe.ipynb", notebook_02b())
-    write_notebook("03_run_experiments.ipynb", notebook_03())
-    write_notebook("03b_run_modality_verification.ipynb", notebook_03b())
-    write_notebook("04_compute_uq_and_metrics.ipynb", notebook_04())
-    write_notebook("05_analyze_and_export_results.ipynb", notebook_05())
+def main(argv: Sequence[str] | None = None) -> None:
+    """CLI entry point for regenerating or dry-running companion notebooks."""
+    parser = argparse.ArgumentParser(description="Generate the stripped companion notebooks from source builders.")
+    parser.add_argument(
+        "--notebook-dir",
+        type=Path,
+        default=NOTEBOOK_DIR,
+        help="Directory to write notebooks into. Defaults to this checkout's notebooks/ directory.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Build and serialize notebooks without writing files.")
+    args = parser.parse_args(argv)
+
+    populate_notebooks(args.notebook_dir, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import random
 import textwrap
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 try:
     import eval_utils as eu
@@ -36,6 +37,7 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def build_external_probe_rows(root: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return blinded external-probe inputs plus the local gold key."""
     config = eu.load_config(root / "config.example.json")
     pilot_seed_count = int(config["project"]["pilot_seed_count"])
 
@@ -212,11 +214,8 @@ def readme_markdown() -> str:
     )
 
 
-def main() -> None:
-    root = eu.project_root()
-    output_dir = root / "outputs" / OUTPUT_DIR_NAME
-    output_dir.mkdir(parents=True, exist_ok=True)
-
+def export_external_probe_bundle(root: Path, output_dir: Path, *, dry_run: bool = False) -> list[Path]:
+    """Export the blind input bundle, or report target paths without writing."""
     inputs, key = build_external_probe_rows(root)
 
     input_csv = output_dir / "external_task2_inputs.csv"
@@ -224,6 +223,15 @@ def main() -> None:
     key_csv = output_dir / "external_task2_gold_key.csv"
     prompt_path = output_dir / "external_task2_prompt.md"
     readme_path = output_dir / "README.md"
+    paths = [input_csv, input_jsonl, key_csv, prompt_path, readme_path]
+
+    if dry_run:
+        print(f"Would write {len(inputs)} blind input rows")
+        for path in paths:
+            print(f"Would write: {path}")
+        return paths
+
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     write_csv(input_csv, inputs, ["external_item_id", "source_statement"])
     write_jsonl(input_jsonl, inputs)
@@ -250,6 +258,26 @@ def main() -> None:
     print(f"Inputs CSV: {input_csv}")
     print(f"Inputs JSONL: {input_jsonl}")
     print(f"Gold key: {key_csv}")
+    return paths
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """CLI entry point for exporting or dry-running the external probe bundle."""
+    parser = argparse.ArgumentParser(description="Export the blind Task 2 input bundle for external AI-service probes.")
+    parser.add_argument("--root", type=Path, default=eu.project_root(), help="Repository root. Defaults to this checkout.")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help=f"Output directory. Defaults to outputs/{OUTPUT_DIR_NAME} under --root.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Validate inputs and show target files without writing.")
+    args = parser.parse_args(argv)
+
+    root = args.root.resolve()
+    output_dir = args.output_dir or root / "outputs" / OUTPUT_DIR_NAME
+    if not output_dir.is_absolute():
+        output_dir = root / output_dir
+    export_external_probe_bundle(root, output_dir, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

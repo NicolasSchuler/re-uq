@@ -42,7 +42,7 @@ The first command should be empty except for intentional tracked edits. The igno
 
 Before tagging or archiving a publication artifact:
 
-- Confirm `README.md`, `docs/evaluation.md`, `docs/reproduction.md`, and `docs/paper_framing.md` agree on Task 1/2 as the primary experiment and Task 3 as a diagnostic.
+- Confirm `README.md`, `docs/evaluation.md`, `docs/reproduction.md`, and `docs/results_mapping.md` agree on Task 1/2 as the primary experiment and Task 3 as a diagnostic.
 - Run the command-first reproduction path in `docs/reproduction.md` or document exactly which provider cells could not be rerun.
 - Complete `docs/weak_modality_construct_review.csv` before making weak-intent paper claims.
 - Generate final analysis with `scripts/generate_evaluation_analysis.py` and inspect the exported table, figure, qualitative examples, and provenance manifest.

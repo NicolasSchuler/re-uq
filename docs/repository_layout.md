@@ -7,8 +7,8 @@ This document is the single source of truth for the repository map. The `README.
 | Path | Purpose |
 | --- | --- |
 | `README.md` | Reader entry point: study abstract and pointers into the docs. |
-| `docs/` | Reader-facing documentation (evaluation spec, reproduction guide, paper framing, results mapping, FAQ). |
-| `docs/internal/` | Internal build logs and design notes preserved for traceability. Not required for reproduction. |
+| `docs/` | Reader-facing documentation (evaluation spec, reproduction guide, results mapping, FAQ) plus archived internal planning notes. |
+| `docs/archive/` | Compressed planning/framing notes preserved for traceability. Not required for reproduction. |
 | `scripts/` | Canonical CLI entry points and shared evaluation utilities. The `scripts/*.py` files are the publication reproduction interface. |
 | `prompts/` | Frozen task prompt contracts (Task 1, Task 2, Task 3, plus prompt-sensitivity variants). |
 | `run_configs/` | Tracked example provider matrices. Local `current_run*.json` files are gitignored. |
@@ -43,7 +43,7 @@ Many curated artifacts under `outputs/` and `docs/final_seed_documents/` exist a
 
 | You want to … | Go to … |
 | --- | --- |
-| Understand the study claim and framing | `docs/paper_framing.md`, `docs/evaluation.md` |
+| Understand the study claim and evaluation design | `docs/evaluation.md` |
 | Reproduce the pipeline end-to-end | `docs/reproduction.md`, `scripts/reproduce.sh` |
 | See how artifacts map to paper figures/tables | `docs/results_mapping.md` |
 | Understand pipeline code architecture | `docs/architecture.md` |

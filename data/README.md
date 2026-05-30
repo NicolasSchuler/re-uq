@@ -7,13 +7,13 @@ This directory holds dataset inputs and curated/derived data products.
 | Path | Tracked in Git? | Purpose |
 | --- | --- | --- |
 | `data/raw/` | Selectively | Raw seed inputs needed to rebuild curated benchmark tables. Additional local downloads remain untracked. |
-| `data/processed/` | Selectively | Curated benchmark CSVs, reviewed seed tables, compact metric summaries. Raw run outputs (`model_outputs_raw*.jsonl`), run registries, progress files, and UQ score CSVs are gitignored and remain local. |
+| `data/processed/` | Selectively | Curated benchmark CSVs, reviewed seed tables, and compact diagnostic metric snapshots. Raw run outputs (`model_outputs_raw*.jsonl`), run registries, progress files, and UQ score CSVs are gitignored and remain local. |
 
 ## What is tracked under `data/processed/`
 
 - `benchmark_items*.csv` — frozen benchmark inputs for each dataset/variant.
 - `seeds_review*.csv`, `seeds_selected*.csv` — reviewed seed tables.
-- `metrics_summary*.csv`, `bootstrap_seed_ci.csv` — compact paper-facing metric snapshots.
+- `metrics_summary*.csv`, `bootstrap_seed_ci.csv` — compact metric snapshots; treat them as diagnostic/stale unless regenerated from a complete current run.
 - `weak_modality_probe_items.csv` — robustness probe inputs.
 
 Variant suffixes are documented in `docs/repository_layout.md`.

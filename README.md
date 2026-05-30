@@ -1,19 +1,56 @@
-# Modality-Conditioned Uncertainty in LLM-Assisted Requirements Engineering
+# When Weak Intent Becomes a Requirement
 
-> **Why this matters.** LLMs increasingly help extract requirements from raw stakeholder text. They handle the *what* (the functional content) reasonably well, but they routinely upgrade the *how strongly the stakeholder meant it* — turning "it would be nice if …" into something a downstream specification will read as a hard obligation. If the model is confident while doing this, no lightweight uncertainty signal will catch it. This repository is the evaluation artifact for a short empirical study of that specific failure mode.
+> **Why this matters.** LLMs increasingly help extract requirements from raw stakeholder text. Requirements carry both *what* is requested and *how strongly* the stakeholder commits to it. If "it would be nice if ..." becomes "the system should ..." or "the system must ...", downstream design, validation, effort estimation, and stakeholder expectations can shift even when the functional capability is preserved.
 
-This repository supports an IST short communication on **modality-conditioned uncertainty** in LLM-assisted RE. The study holds the *functional capability* constant and varies only the *source modality* (`mandatory` / `recommended` / `optional` / `nice_to_have`), and asks two questions:
+This repository supports the IST short communication **"When Weak Intent Becomes a Requirement: Limits of Uncertainty Signals for Modal-Force Strengthening in LLM-Assisted Requirements Engineering."** The study holds the *functional capability* constant and varies only the *source modal force* (`mandatory` / `recommended` / `optional` / `nice_to_have`), then asks:
 
-1. Do LLMs preserve stakeholder commitment when extracting requirements?
-2. Do lightweight black-box UQ signals reveal it when they do not?
+1. To what extent do LLMs preserve source modal force in labels and generated text?
+2. Do lightweight black-box uncertainty signals expose text-level modal-force strengthening?
+3. Can audits detect extractions that change source modal force?
 
-The headline observable is **high-confidence over-commitment of weak stakeholder intent**: a model can be stable and confident while systematically wrong about modality.
+The headline observable is **high-confidence over-commitment of weak stakeholder intent**: a model can return the correct modality label while generating requirement text that strengthens the source.
+
+## Paper Motivation And Findings
+
+Requirement modal force is treated as an ordinal commitment signal:
+`mandatory > recommended > optional > weak stakeholder intent`. The benchmark
+uses 360 reviewed capability seeds from NICE/PROMISE and
+`limsc/mlm-tapt-requirements`, rewritten into four controlled source variants,
+for 1440 benchmark items. The main mandatory wording is `MUST`; `SHALL` is a
+supplementary robustness variant.
+
+The paper evaluates three tasks:
+
+- **Task 1:** mandatory-requirement entailment, a control for unsupported upgrades to mandatory language.
+- **Task 2:** modality-preserving extraction, the primary LLM-assisted RE workflow.
+- **Task 3:** blind source-grounded audit, a diagnostic check over deterministic Task 2 outputs.
+
+Key reported observations from the manuscript-level macro summary:
+
+- Declared modality labels are preserved, but generated requirement text still strengthens source modal force in 8.6% of cases under strict evidence and 13.9% under broad evidence.
+- For weak stakeholder-intent sources, strict text strengthening reaches 29.8%.
+- Strengthened outputs are typically high-confidence and sample-stable: 98.4% high-confidence rate and 100.0% repeated-sample agreement in the reported macro summary.
+- Semantic dispersion and supervised embedding probes provide partial diagnostic signal, but source-controlled probes and blind audits are not reliable certification mechanisms.
+
+The practical takeaway is that UQ for LLM-assisted RE should test whether
+generated requirement text preserves stakeholder commitment, not only whether a
+declared label is correct or stable.
+
+## Artifact Status
+
+This checkout is organized as a reviewer-facing artifact. The tracked prompts,
+reviewed seeds, benchmark CSVs, manifests, and documentation are the durable
+inputs. Checked metric snapshots and legacy external-probe reports are
+diagnostic or stale unless regenerated from a complete post-fix run and marked
+paper-ready in [`outputs/README.md`](outputs/README.md). Raw model outputs and
+run registries are local reproducibility evidence by default; see
+[`docs/repository_hygiene.md`](docs/repository_hygiene.md) for promotion rules.
 
 ## Reading Order
 
 | You want to … | Go to |
 | --- | --- |
-| Understand the study and its framing | [`docs/evaluation.md`](docs/evaluation.md), [`docs/paper_framing.md`](docs/paper_framing.md) |
+| Understand the study and evaluation design | [`docs/evaluation.md`](docs/evaluation.md) |
 | Understand what is where in the repo | [`docs/repository_layout.md`](docs/repository_layout.md) |
 | Understand the pipeline architecture | [`docs/architecture.md`](docs/architecture.md) |
 | Reproduce the pipeline (command-first) | [`docs/reproduction.md`](docs/reproduction.md) |
@@ -130,6 +167,15 @@ For the full map, conventions, and the variant-suffix table, see [`docs/reposito
 
 The project uses a `uv`-managed virtual environment at `.venv/`. Dependencies are declared in `pyproject.toml` and locked in `uv.lock`. The intentional scientific stack is `pandas`, `numpy`, `scipy`, `scikit-learn`, `matplotlib`, `openai`, `requests`, `instructor`, `pydantic`, and `nbformat`.
 
+## License, Citation, And Maintainers
+
+The code and documentation are distributed under the MIT license in
+[`LICENSE`](LICENSE). During double-blind review, authors and maintainers are
+listed as **Anonymous Authors**; the deanonymized release should add final
+citation metadata after submission identity constraints are lifted. See
+[`docs/anonymization.md`](docs/anonymization.md) for the submission sanitization
+plan.
+
 ## Threats To Validity
 
 Two scope notes carry over into the paper and should travel with this artifact:
@@ -137,4 +183,4 @@ Two scope notes carry over into the paper and should travel with this artifact:
 - Paper-facing weak-intent claims are gated on `docs/weak_modality_construct_review.csv`. Until both reviewer slots have judged every weak template as weaker than `SHOULD/recommended`, weak-class results are diagnostic, not headline.
 - The metric snapshots checked in at the time of writing are diagnostic/stale until a clean post-fix full run regenerates paper-facing tables and figures from raw outputs. The analysis script refuses stale prompts, mixed confidence scales, or incomplete registries.
 
-See `docs/paper_framing.md` for the full framing, `docs/results_mapping.md` for the artifact-to-claim trail, and `outputs/README.md` for artifact status.
+See `docs/evaluation.md` for the study design, `docs/results_mapping.md` for the artifact-to-claim trail, and `outputs/README.md` for artifact status.

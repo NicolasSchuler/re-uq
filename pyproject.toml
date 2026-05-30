@@ -1,7 +1,7 @@
 [project]
 name = "re-uq"
 version = "0.1.0"
-description = "Notebook-based evaluation pipeline for modality-conditioned uncertainty in LLM-assisted requirements engineering."
+description = "Command-first evaluation artifact for modality-conditioned uncertainty in LLM-assisted requirements engineering."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Anonymous Authors" }]

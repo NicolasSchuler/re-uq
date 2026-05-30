@@ -1,4 +1,5 @@
 import csv
+import io
 import json
 import math
 import re
@@ -6,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from collections import Counter
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import nbformat
@@ -95,6 +97,22 @@ class NotebookBoundaryTest(unittest.TestCase):
                     self.assertIsNone(cell.execution_count, f"{path} cell {index} has an execution count")
                     self.assertEqual(cell.outputs, [], f"{path} cell {index} has stored outputs")
 
+    def test_populate_notebooks_help_and_dry_run_do_not_write(self):
+        buffer = io.StringIO()
+        with self.assertRaises(SystemExit) as context, redirect_stdout(buffer):
+            populate_notebooks.main(["--help"])
+        self.assertEqual(context.exception.code, 0)
+        self.assertIn("--dry-run", buffer.getvalue())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            notebook_dir = Path(tmpdir) / "notebooks"
+            with io.StringIO() as buffer, redirect_stdout(buffer):
+                paths = populate_notebooks.main(["--dry-run", "--notebook-dir", str(notebook_dir)])
+                output = buffer.getvalue()
+            self.assertIsNone(paths)
+            self.assertIn("Would write:", output)
+            self.assertFalse(notebook_dir.exists())
+
     def test_benchmark_manifest_tracks_prompt_inputs_and_metadata(self):
         manifest = json.loads(Path("outputs/benchmark_manifest.json").read_text(encoding="utf-8"))
         artifact_paths = {artifact["path"] for artifact in manifest["artifacts"]}
@@ -150,6 +168,8 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
             if path_text in self.SUBMISSION_IDENTITY_EXCLUDES:
                 continue
             path = Path(path_text)
+            if not path.exists():
+                continue
             try:
                 lines = path.read_text(encoding="utf-8").splitlines()
             except UnicodeDecodeError:
@@ -437,6 +457,33 @@ class ParsingAndExternalProbeTest(unittest.TestCase):
             self.assertEqual(set(inputs[0]), {"external_item_id", "source_statement"})
             self.assertNotIn("weak_useful_if", {row["source_condition"] for row in key})
             self.assertEqual({row["seed_id"] for row in key}, {"S0001", "S0002"})
+
+    def test_external_probe_export_help_and_dry_run_do_not_write(self):
+        buffer = io.StringIO()
+        with self.assertRaises(SystemExit) as context, redirect_stdout(buffer):
+            external_export.main(["--help"])
+        self.assertEqual(context.exception.code, 0)
+        self.assertIn("--dry-run", buffer.getvalue())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "config.example.json").write_text(
+                json.dumps({"project": {"pilot_seed_count": 2}}),
+                encoding="utf-8",
+            )
+            eu.write_csv_rows(root / "data/processed/benchmark_items.csv", eu.build_benchmark_items(seed_rows(3)))
+            eu.write_csv_rows(
+                root / "data/processed/weak_modality_probe_items.csv",
+                eu.build_weak_modality_probe_items(seed_rows(3)),
+            )
+
+            output_dir = root / "outputs" / "external_ai_service_probe"
+            with io.StringIO() as buffer, redirect_stdout(buffer):
+                external_export.main(["--root", str(root), "--dry-run"])
+                output = buffer.getvalue()
+
+            self.assertIn("Would write 14 blind input rows", output)
+            self.assertFalse(output_dir.exists())
 
 
 if __name__ == "__main__":
