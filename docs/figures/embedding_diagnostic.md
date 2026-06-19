@@ -18,7 +18,7 @@ the **input commitment level**, not the **modal-force drift**.
   requirement came from, but not whether the model strengthened it.} Task~2 generated
   requirements are embedded with \texttt{Qwen3-Embedding-0.6B} using the
   \emph{requirement text only}. \textbf{(a)}~A 2-D t-SNE of distinct generated
-  requirements coloured by input strength and \textbf{(b)}~the same map coloured by
+  requirements colored by input strength and \textbf{(b)}~the same map colored by
   whether the requirement's strength was increased show no separation by either
   property. \textbf{(c)}~The \emph{detection score} is the held-out ability of a
   histogram gradient-boosted tree ensemble (\texttt{HistGradientBoosting} on PCA-128

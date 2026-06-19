@@ -78,12 +78,12 @@ def set_style() -> None:
             "font.family": "serif",
             "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
             "mathtext.fontset": "stix",
-            "font.size": 8.5,
-            "axes.titlesize": 9.0,
-            "axes.labelsize": 8.5,
-            "legend.fontsize": 7.3,
-            "xtick.labelsize": 7.5,
-            "ytick.labelsize": 7.5,
+            "font.size": 12.0,
+            "axes.titlesize": 12.5,
+            "axes.labelsize": 12.0,
+            "legend.fontsize": 10.5,
+            "xtick.labelsize": 11.0,
+            "ytick.labelsize": 11.0,
             "axes.spines.top": False,
             "axes.spines.right": False,
             "axes.linewidth": 0.6,
@@ -191,7 +191,7 @@ def panel_projection(ax, coords, rows, color_field: str, title: str, rng: np.ran
         for handle in leg.legend_handles:
             handle.set_alpha(1.0)
             handle.set_sizes([16])
-    ax.set_title(title, fontsize=9.0)
+    ax.set_title(title, fontsize=12.5)
     ax.set_xticks([])
     ax.set_yticks([])
     ax.margins(0.02)
@@ -231,9 +231,9 @@ def hbar_detection(ax, labels, values, colors) -> np.ndarray:
         if np.isnan(val):
             continue
         ax.barh(yi, val - 0.5, left=0.5, color=color, height=0.52, zorder=2)
-        ax.text(val + 0.012, yi, f"{val:.2f}", va="center", ha="left", fontsize=8.6, color="#0f172a")
+        ax.text(val + 0.012, yi, f"{val:.2f}", va="center", ha="left", fontsize=11.5, color="#0f172a")
     ax.set_yticks(y)
-    ax.set_yticklabels(labels, fontsize=8.8)
+    ax.set_yticklabels(labels, fontsize=11.0)
     ax.set_ylim(-0.5, len(labels) - 0.5)
     return y
 
@@ -267,10 +267,10 @@ def panel_readout(ax, summary, group_mode: str, model: str) -> None:
     ax.annotate("", xy=(0.5 + 0.001, y[3] - 0.33), xytext=(0.5 + 0.001, y[2] + 0.33),
                 arrowprops=dict(arrowstyle="-", lw=0.0))
     ax.text(max(strengthen_emb, strengthen_kw) + 0.05, mid, "≈ coin flip\n(neither works)",
-            va="center", ha="left", fontsize=8.0, color="#D55E00", fontstyle="italic")
+            va="center", ha="left", fontsize=10.5, color="#D55E00", fontstyle="italic")
     style_detection_axis(ax)
-    ax.set_title("(c) What can be read from a generated requirement  (HistGradientBoosting, held out on unseen requirements)",
-                 fontsize=9.0)
+    ax.set_title("(c) What can be read from a generated requirement  (HistGradientBoosting)",
+                 fontsize=12.0)
 
 
 def main() -> None:
@@ -320,7 +320,7 @@ def main() -> None:
     coords = compute_projection(reqonly[global_idx], args.method, args.random_state)
 
     set_style()
-    fig = plt.figure(figsize=(8.0, 5.4), layout="constrained")
+    fig = plt.figure(figsize=(8.0, 5.7), layout="constrained")
     fig.get_layout_engine().set(w_pad=0.015, h_pad=0.015, wspace=0.05, hspace=0.05)
     gs = fig.add_gridspec(2, 12, height_ratios=[1.62, 0.68])
     ax_a = fig.add_subplot(gs[0, 0:6])
@@ -328,10 +328,11 @@ def main() -> None:
     ax_c = fig.add_subplot(gs[1, 1:11])
 
     panel_projection(ax_a, coords, sub_rows, "source_modality",
-                     "(a) Generated requirements, by input strength", rng=rng)
+                     "(a) Colored by input strength", rng=rng)
     panel_projection(ax_b, coords, sub_rows, "drift",
-                     "(b) Generated requirements, by strength increase")
+                     "(b) Colored by strength increase")
     panel_readout(ax_c, summary, args.group_mode, args.model)
+    fig.suptitle("Generated requirements", fontsize=14.0, fontweight="bold")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path)
