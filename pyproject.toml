@@ -1,10 +1,14 @@
 [project]
 name = "re-uq"
-version = "0.1.0"
+version = "1.0.0"
 description = "Command-first evaluation artifact for modality-conditioned uncertainty in LLM-assisted requirements engineering."
 readme = "README.md"
 license = { text = "MIT" }
-authors = [{ name = "Anonymous Authors" }]
+authors = [
+    { name = "Nicolas Schuler" },
+    { name = "Vincenzo Scotti" },
+    { name = "Raffaela Mirandola" },
+]
 requires-python = ">=3.13"
 dependencies = [
     "datasets>=2.20.0",

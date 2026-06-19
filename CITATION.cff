@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this artifact, please cite it using the metadata below."
+title: "When Weak Intent Becomes a Requirement — evaluation artifact"
+type: software
+version: 1.0.0
+date-released: 2026-06-19
+license: MIT
+repository-code: "https://github.com/NicolasSchuler/re-uq"
+url: "https://github.com/NicolasSchuler/re-uq"
+authors:
+  - family-names: Schuler
+    given-names: Nicolas
+    affiliation: "Karlsruhe Institute of Technology (KIT)"
+  - family-names: Scotti
+    given-names: Vincenzo
+    affiliation: "Karlsruhe Institute of Technology (KIT)"
+  - family-names: Mirandola
+    given-names: Raffaela
+    affiliation: "Karlsruhe Institute of Technology (KIT)"
+keywords:
+  - requirements engineering
+  - large language models
+  - uncertainty quantification
+  - modality
+  - natural language processing

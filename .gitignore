@@ -11,9 +11,9 @@ tmp/
 .env.*
 !.env.example
 
-# Local manuscript and assistant-orchestration scratch files. Promote an
-# anonymized manuscript deliberately with `git add -f` only when publication
-# packaging requires it.
+# Local manuscript and assistant-orchestration scratch files. Promote a
+# manuscript deliberately with `git add -f` only when publication packaging
+# requires it.
 /docs/paper_draft.*
 /o.sh
 /*.local.sh

@@ -32,10 +32,6 @@ No. The scripts under `scripts/` are the canonical reproduction interface for th
 
 Task 3 is a **diagnostic** blind text audit, not the headline. It asks whether the deterministic Task 2 extracted text preserved, strengthened, weakened, or changed the source, without revealing the Task 2 declared modality. Declared-modality Task 3 runs are anchoring ablations. See `docs/architecture.md` and `docs/evaluation.md`.
 
-## Why is the repository preserved without anonymized commit history?
-
-Per the project decision documented in [`docs/anonymization.md`](anonymization.md), the multi-commit history is preserved during development for traceability. A scripted `git filter-repo` rewrite runs on a dedicated submission branch at submission time, producing a clean anonymous history without the author having to do ad-hoc edits.
-
 ## What if the construct-validity gate is incomplete?
 
 Then `scripts/generate_evaluation_analysis.py` will refuse to write paper-facing artifacts and weak-intent results stay diagnostic. Complete [`docs/weak_modality_construct_review.csv`](weak_modality_construct_review.csv) with two reviewer judgments per template before claiming weak-intent results in the paper. See `docs/evaluation.md` for the gate definition.

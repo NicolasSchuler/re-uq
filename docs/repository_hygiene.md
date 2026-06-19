@@ -15,7 +15,7 @@ This project is a research-engineering artifact: Git should preserve code, promp
 - Keep raw and run-level outputs out of Git by default: `model_outputs_raw*.jsonl`, run registries/progress files, `uq_scores*.csv`, Task 3 item CSVs, provider matrix current-run configs, generated `outputs/evaluation_*` directories, and scratch files under `tmp/`.
 - If a generated output becomes paper-facing, promote it deliberately in a small commit whose message explains why it belongs in the repository.
 - Remove accidental tracked generated files with `git rm --cached <path>` so the local file is preserved.
-- Keep local manuscript drafts and assistant-orchestration scripts out of normal commits. In particular, `docs/paper_draft.*`, `o.sh`, and `*.local.sh` are ignored because they commonly contain author identity, local paths, or one-off prompt bundles. Promote an anonymized manuscript deliberately with `git add -f` only when packaging a publication artifact.
+- Keep local manuscript drafts and assistant-orchestration scripts out of normal commits. In particular, `docs/paper_draft.*`, `o.sh`, and `*.local.sh` are ignored because they commonly contain credentials, local paths, or one-off prompt bundles. Promote a manuscript deliberately with `git add -f` only when packaging a publication artifact.
 
 ## Local verification before commit
 
@@ -36,7 +36,7 @@ git status --ignored --short
 git ls-files outputs data/processed docs | sort
 ```
 
-The first command should be empty except for intentional tracked edits. The ignored-status view should contain local run outputs and caches, not files that you intend to publish. Run the content preflight in `docs/anonymization.md` before sharing an artifact; it only checks tracked files, so inspect any ignored or untracked manuscript candidate separately before forcing it into Git.
+The first command should be empty except for intentional tracked edits. The ignored-status view should contain local run outputs and caches, not files that you intend to publish. Before sharing an artifact, inspect any ignored or untracked manuscript candidate for credentials or local paths separately before forcing it into Git.
 
 ## Publication release checklist
 

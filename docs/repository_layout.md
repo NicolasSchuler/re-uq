@@ -48,5 +48,4 @@ Many curated artifacts under `outputs/` and `docs/final_seed_documents/` exist a
 | See how artifacts map to paper figures/tables | `docs/results_mapping.md` |
 | Understand pipeline code architecture | `docs/architecture.md` |
 | Understand Git/artifact policy | `docs/repository_hygiene.md` |
-| Understand anonymization plan for submission | `docs/anonymization.md` |
 | Common reviewer questions | `docs/faq.md` |

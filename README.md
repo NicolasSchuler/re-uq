@@ -64,6 +64,118 @@ source modal force changes:
 Task 3 is not a final verifier. It is a stress test for whether an audit prompt
 can catch text-level modal-force changes.
 
+## Prompts Per Task
+
+The findings here are not the product of one carefully tuned prompt. Every prompt
+is frozen as a plain text file, content-addressed by SHA-256 in
+[`outputs/benchmark_manifest*.json`](outputs/), and verified by the analysis gate.
+Each task also ships **sensitivity/ablation variants** that exist specifically to
+show the effect is not an artifact of a single phrasing (see
+[`prompts/README.md`](prompts/README.md) for the full index). The verbatim main
+prompts are reproduced below. The `{{...}}` braces are literal in the frozen file;
+`{source_statement}` and similar are the only substituted fields.
+
+### Task 1 — Mandatory Entailment (control)
+
+Does the source statement entail the candidate *mandatory* requirement?
+Source: [`prompts/mandatory_entailment.txt`](prompts/mandatory_entailment.txt).
+
+```text
+You are reviewing software requirements.
+
+Source statement:
+"{source_statement}"
+
+Candidate requirement:
+"{candidate_requirement}"
+
+Question:
+Is the candidate a faithful mandatory requirement entailed by the source?
+
+Return JSON only:
+{{
+  "decision": "yes" | "no",
+  "confidence": 0.0-1.0,
+  "brief_reason": "<max 12 words>"
+}}
+
+Use confidence as a decimal probability for confidence in the selected decision.
+Do not return percentages such as 95 or strings such as "95%".
+```
+
+Robustness variant: [`prompts/mandatory_entailment_strict.txt`](prompts/mandatory_entailment_strict.txt)
+(stricter wording, run on the pilot subset).
+
+### Task 2 — Modality-Preserving Extraction (main task)
+
+Extract one requirement and label its modality, preserving the source modal force.
+Source: [`prompts/modality_extraction.txt`](prompts/modality_extraction.txt).
+
+```text
+Extract exactly one requirement from the source statement.
+Preserve the modality of the source.
+
+Source:
+"{source_statement}"
+
+Return JSON only:
+{{
+  "requirement": "...",
+  "modality": "mandatory" | "recommended" | "optional" | "nice_to_have",
+  "confidence": 0.0-1.0
+}}
+
+Use confidence as a decimal probability for confidence in the selected modality.
+Do not return percentages such as 95 or strings such as "95%".
+```
+
+Robustness variant: [`prompts/modality_extraction_labels_only.txt`](prompts/modality_extraction_labels_only.txt)
+(states the allowed labels without mapping rules or examples).
+
+### Task 3 — Blind Text Audit (diagnostic)
+
+Given the source and the Task 2 output, judge whether the requirement preserves,
+strengthens, weakens, or changes the content — **without** seeing the declared
+Task 2 modality. Source: [`prompts/modality_verification.txt`](prompts/modality_verification.txt).
+
+```text
+You are auditing whether an extracted software requirement preserves the source statement.
+
+Source statement:
+"{source_statement}"
+
+Extracted requirement:
+"{extracted_requirement}"
+
+Question:
+Compared with the source statement, does the extracted requirement preserve, strengthen, weaken, or change the functional content?
+
+Use these labels:
+- preserves: same functional content and same modality strength
+- strengthens: same functional content but stronger modality or stakeholder commitment
+- weakens: same functional content but weaker modality or stakeholder commitment
+- content_changed: functional content was added, removed, or changed
+
+Return JSON only:
+{{
+  "relation": "preserves" | "strengthens" | "weakens" | "content_changed",
+  "confidence": 0.0-1.0,
+  "evidence_phrase": "<exact phrase from the source that supports the relation>",
+  "brief_reason": "<max 16 words>"
+}}
+
+Use confidence as a decimal probability for confidence in the selected relation.
+Do not return percentages such as 95 or strings such as "95%".
+```
+
+Ablation variant: [`prompts/modality_verification_declared.txt`](prompts/modality_verification_declared.txt)
+(reveals the declared Task 2 modality to measure anchoring).
+
+The allowed labels and the `0.0-1.0` confidence contract are not free text: they
+are enforced as Pydantic models in
+[`scripts/structured_outputs.py`](scripts/structured_outputs.py) and covered by
+[`tests/test_structured_outputs.py`](tests/test_structured_outputs.py).
+
 ## Reported Paper Findings
 
 From the manuscript-level macro summary:
@@ -92,7 +204,6 @@ complete current run.
 | Understand the code/data layout | [`docs/repository_layout.md`](docs/repository_layout.md) |
 | Understand the pipeline architecture | [`docs/architecture.md`](docs/architecture.md) |
 | Understand artifact policy | [`docs/repository_hygiene.md`](docs/repository_hygiene.md) |
-| Understand double-blind anonymization | [`docs/anonymization.md`](docs/anonymization.md) |
 | See common reviewer questions | [`docs/faq.md`](docs/faq.md) |
 
 ## Quick Check
@@ -230,12 +341,16 @@ Dependencies are declared in `pyproject.toml` and locked in `uv.lock`.
 Core libraries include `pandas`, `numpy`, `scipy`, `scikit-learn`,
 `matplotlib`, `openai`, `requests`, `instructor`, `pydantic`, and `nbformat`.
 
-## License, Citation, And Maintainers
+## Authors, License, And Citation
+
+This artifact is developed and maintained by:
+
+- **Nicolas Schuler** — Karlsruhe Institute of Technology (KIT)
+- **Vincenzo Scotti** — Karlsruhe Institute of Technology (KIT)
+- **Raffaela Mirandola** — Karlsruhe Institute of Technology (KIT)
 
 The code and documentation use the MIT license in [`LICENSE`](LICENSE).
 
-During double-blind review, authors and maintainers are listed as
-**Anonymous Authors**. The deanonymized release should add final citation
-metadata after submission identity constraints are lifted.
-
-See [`docs/anonymization.md`](docs/anonymization.md) for the sanitization plan.
+To cite this repository, use the metadata in [`CITATION.cff`](CITATION.cff)
+(GitHub renders a "Cite this repository" button from it). Manuscript citation
+details will be added on acceptance.
