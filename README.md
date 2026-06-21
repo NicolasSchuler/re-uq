@@ -4,6 +4,10 @@ This repository is the evaluation artifact for the IST short communication
 **"When Weak Intent Becomes a Requirement: Limits of Uncertainty Signals for
 Modal-Force Strengthening in LLM-Assisted Requirements Engineering."**
 
+## Graphical Abstract
+
+[![Graphical abstract showing a controlled modality benchmark feeding an LLM-assisted requirements engineering evaluation and uncertainty-quantification metrics.](docs/figures/graphical_abstract.png)](docs/figures/graphical_abstract.pdf)
+
 ## In One Minute
 
 LLMs can extract the right feature from a stakeholder statement but change how
