@@ -10,6 +10,11 @@ from pathlib import Path
 
 import nbformat
 
+try:
+    from conftest import raw_record
+except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
+    from tests.conftest import raw_record
+
 from scripts import eval_utils as eu
 from scripts import evaluate_external_ai_probe as external_eval
 from scripts import export_external_ai_probe as external_export
@@ -26,40 +31,6 @@ def seed_rows(count=1):
         }
         for index in range(1, count + 1)
     ]
-
-
-def raw_record(
-    item,
-    *,
-    task,
-    parsed_json,
-    run_id="r1",
-    model="m1",
-    sample_kind="deterministic",
-    parse_status="ok",
-):
-    record = {
-        "run_id": run_id,
-        "model": model,
-        "host": "http://localhost:8000/v1",
-        "task": task,
-        "item_id": item["item_id"],
-        "seed_id": item["seed_id"],
-        "source_modality": item["source_modality"],
-        "sample_index": 0,
-        "sample_kind": sample_kind,
-        "temperature": 0.0,
-        "top_p": 1.0,
-        "prompt_version": "v1",
-        "raw_text": "",
-        "parsed_json": parsed_json,
-        "parse_status": parse_status,
-        "latency_s": 0.1,
-        "error": "",
-    }
-    if "template_id" in item:
-        record["template_id"] = item["template_id"]
-    return record
 
 
 class NotebookBoundaryTest(unittest.TestCase):

@@ -35,15 +35,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 try:
     import eval_utils as eu
+    from plot_acse_global_embedding_projection import DRIFT_COLORS, drift_status
 except ModuleNotFoundError:  # pragma: no cover
     from scripts import eval_utils as eu
+    from scripts.plot_acse_global_embedding_projection import DRIFT_COLORS, drift_status
 
 
-STATUS_COLORS = {
-    "strict_text_oc": "#b91c1c",
-    "broad_text_oc": "#f97316",
-    "clean": "#64748b",
-}
 SOURCE_MARKERS = {
     "mandatory": "s",
     "recommended": "^",
@@ -69,24 +66,8 @@ def finite_float(value: Any, default: float = math.nan) -> float:
         return default
 
 
-def truthy(value: Any) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes"}
-
-
-def task2_raw_path(root: Path, dataset_id: str, variant: str) -> Path:
-    return eu.artifact_path(root / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
-
-
 def default_analysis_dir(root: Path, dataset_id: str, variant: str, run_id: str) -> Path:
     return root / "outputs" / f"evaluation_{dataset_id}_{variant}_{eu.safe_identifier(run_id)}"
-
-
-def score_status(row: dict[str, Any]) -> str:
-    if truthy(row.get("strict_text_overcommit")):
-        return "strict_text_oc"
-    if truthy(row.get("text_overcommit")):
-        return "broad_text_oc"
-    return "clean"
 
 
 def cluster_labels_for_embeddings(
@@ -128,10 +109,10 @@ def load_task2_rows(
     run_id: str,
     model: str,
     profile: str | None,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], list[dict[str, str]]]:
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
     raw_rows = [
         row
-        for row in eu.read_jsonl(task2_raw_path(root, dataset_id, variant))
+        for row in eu.read_jsonl(eu.model_outputs_raw_path(root, dataset_id, variant))
         if str(row.get("run_id", "")) == run_id
         and str(row.get("model", "")) == model
         and str(row.get("task", "")) == "task2"
@@ -149,11 +130,7 @@ def load_task2_rows(
         row["item_id"]: row
         for row in eu.read_csv_rows(eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant))
     }
-    return stochastic, benchmark_rows, raw_rows
-
-
-def cache_dir_for_backend(analysis_dir: Path, backend_label: str) -> Path:
-    return analysis_dir / f"acse_semantic_{eu.safe_identifier(backend_label)}"
+    return stochastic, benchmark_rows
 
 
 def load_cached_projection_inputs(
@@ -220,7 +197,7 @@ def load_cached_projection_inputs(
             row["x"] = 0.0
             row["y"] = 0.0
             row["z"] = 0.0
-        row["status"] = score_status(row)
+        row["status"] = drift_status(row)
         row["acse_score"] = finite_float(row.get("acse_uncertainty_score", ""))
         row.setdefault("task2_requirement", row.get("task2_requirement", ""))
     return sample_rows, item_rows, embeddings, backend_label
@@ -263,7 +240,7 @@ def plot_item_centroids(
         ]
     else:
         fig, axes = plt.subplots(1, 2, figsize=(13, 5.6), constrained_layout=True)
-    for status, color in STATUS_COLORS.items():
+    for status, color in DRIFT_COLORS.items():
         subset = [row for row in item_rows if row["status"] == status]
         if not subset:
             continue
@@ -425,7 +402,7 @@ def main() -> None:
         raise FileNotFoundError(f"Missing analysis scores: {scores_path}")
 
     requested_backend_label, _ = eu.semantic_embedding_backend_label(args.backend, args.mlx_model)
-    cache_dir = args.cache_dir or cache_dir_for_backend(analysis_dir, requested_backend_label)
+    cache_dir = args.cache_dir or eu.acse_semantic_cache_dir(analysis_dir, requested_backend_label)
     cache_used = False
     if cache_dir.exists() and not args.recompute_embeddings:
         sample_output_rows, item_output_rows, embeddings, backend_label = load_cached_projection_inputs(
@@ -437,7 +414,7 @@ def main() -> None:
         )
         cache_used = True
     else:
-        stochastic_rows, benchmark_by_item, _ = load_task2_rows(
+        stochastic_rows, benchmark_by_item = load_task2_rows(
             root,
             dataset_id,
             variant,
@@ -466,7 +443,7 @@ def main() -> None:
         rows_by_item: dict[str, list[dict[str, Any]]] = defaultdict(list)
         deterministic_requirements = {
             str(row.get("item_id", "")): str(row.get("parsed_json", {}).get("requirement", ""))
-            for row in eu.read_jsonl(task2_raw_path(root, dataset_id, variant))
+            for row in eu.read_jsonl(eu.model_outputs_raw_path(root, dataset_id, variant))
             if str(row.get("run_id", "")) == args.run_id
             and str(row.get("model", "")) == args.model
             and str(row.get("task", "")) == "task2"
@@ -541,7 +518,7 @@ def main() -> None:
                     "item_id": item_id,
                     "seed_id": det.get("seed_id", ""),
                     "source_modality": det.get("source_modality", ""),
-                    "status": score_status(det),
+                    "status": drift_status(det),
                     "x": centroid[0, 0],
                     "y": centroid[0, 1],
                     "z": centroid[0, 2] if args.components == 3 else 0.0,

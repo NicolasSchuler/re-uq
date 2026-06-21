@@ -64,10 +64,6 @@ DEFAULT_WITHIN_TARGETS = [
 ]
 
 
-def truthy(value: Any) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes"}
-
-
 def clean_label(value: Any) -> str:
     text = str(value or "").strip()
     return text if text else "unknown"
@@ -85,17 +81,15 @@ def sample_text_fields(row: dict[str, Any]) -> dict[str, Any]:
 def add_probe_labels(rows: list[dict[str, Any]]) -> None:
     for row in rows:
         fields = sample_text_fields(row)
-        row["deterministic_strict_text_overcommit"] = "1" if truthy(row.get("strict_text_overcommit", "")) else "0"
-        row["deterministic_broad_text_overcommit"] = "1" if truthy(row.get("text_overcommit", "")) else "0"
-        row["sample_strict_text_overcommit"] = "1" if truthy(fields.get("strict_text_overcommit", "")) else "0"
-        row["sample_broad_text_overcommit"] = "1" if truthy(fields.get("text_overcommit", "")) else "0"
-        row["sample_text_modality"] = fields.get("text_modality", "")
-        row["sample_text_modality_basis"] = fields.get("text_modality_basis", "")
+        row["deterministic_strict_text_overcommit"] = "1" if eu.is_truthy_strict(row.get("strict_text_overcommit", "")) else "0"
+        row["deterministic_broad_text_overcommit"] = "1" if eu.is_truthy_strict(row.get("text_overcommit", "")) else "0"
+        row["sample_strict_text_overcommit"] = "1" if eu.is_truthy_strict(fields.get("strict_text_overcommit", "")) else "0"
+        row["sample_broad_text_overcommit"] = "1" if eu.is_truthy_strict(fields.get("text_overcommit", "")) else "0"
 
 
 def target_values(rows: list[dict[str, Any]], target: str) -> np.ndarray:
     if target in BINARY_TARGETS:
-        return np.asarray([1 if truthy(row.get(target, "")) else 0 for row in rows], dtype=int)
+        return np.asarray([1 if eu.is_truthy_strict(row.get(target, "")) else 0 for row in rows], dtype=int)
     if target in MULTICLASS_TARGETS:
         return np.asarray([clean_label(row.get(target, "")) for row in rows], dtype=object)
     raise ValueError(f"Unknown target: {target}")
@@ -184,15 +178,13 @@ def fold_metrics(
     if target in BINARY_TARGETS:
         y = y_raw.astype(int)
         class_labels = np.asarray([0, 1])
-        y_for_split = y
     else:
         encoder = LabelEncoder()
         y = encoder.fit_transform(y_raw)
         class_labels = np.arange(len(encoder.classes_))
-        y_for_split = y
     splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
     rows: list[dict[str, Any]] = []
-    for fold_index, (train_index, test_index) in enumerate(splitter.split(X, y_for_split, groups=groups)):
+    for fold_index, (train_index, test_index) in enumerate(splitter.split(X, y, groups=groups)):
         estimator = make_estimator(model_name, random_state + fold_index)
         estimator.fit(X[train_index], y[train_index])
         pred = estimator.predict(X[test_index])
@@ -283,7 +275,7 @@ def filtered_scope(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run grouped supervised probes on cached ACSE embeddings.")
-    parser.add_argument("--manifest", type=Path, default=Path("outputs/acse_semantic_artifact_manifest.csv"))
+    parser.add_argument("--manifest", type=Path, default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME)
     parser.add_argument("--backend-prefix", default="mlx:")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/acse_embedding_separability_probe"))
     parser.add_argument("--targets", nargs="+", default=DEFAULT_TARGETS)
@@ -341,7 +333,7 @@ def main() -> None:
     summary_path = output_dir / "summary.csv"
     eu.write_csv_rows(fold_path, fold_rows)
     eu.write_csv_rows(summary_path, summary_rows)
-    (output_dir / "summary.md").write_text(eu.markdown_table(summary_rows, list(summary_rows[0])) + "\n", encoding="utf-8")
+    (output_dir / "summary.md").write_text(eu.markdown_table(summary_rows, (list(summary_rows[0]) if summary_rows else [])) + "\n", encoding="utf-8")
     manifest = {
         "backend_prefix": args.backend_prefix,
         "embedding_backend_rows": len(rows),

@@ -41,8 +41,6 @@ from sklearn.manifold import TSNE
 try:
     import eval_utils as eu
     from plot_acse_global_embedding_projection import (
-        DRIFT_COLORS,
-        SOURCE_COLORS,
         drift_status,
         load_embeddings_and_rows,
         manifest_rows,
@@ -50,8 +48,6 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     from scripts import eval_utils as eu
     from scripts.plot_acse_global_embedding_projection import (
-        DRIFT_COLORS,
-        SOURCE_COLORS,
         drift_status,
         load_embeddings_and_rows,
         manifest_rows,
@@ -64,14 +60,6 @@ SOURCE_LABEL = {
     "optional": "optional",
     "nice_to_have": "weak intent",
 }
-SCOPE_LABEL = {
-    "global": "global\n(all inputs)",
-    "source_modality=nice_to_have": "within\nweak intent",
-    "source_modality=optional": "within\noptional",
-    "source_modality=recommended": "within\nrecommended",
-}
-
-
 def set_style() -> None:
     plt.rcParams.update(
         {
@@ -275,7 +263,7 @@ def panel_readout(ax, summary, group_mode: str, model: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=Path("outputs/acse_semantic_artifact_manifest.csv"))
+    parser.add_argument("--manifest", type=Path, default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME)
     parser.add_argument("--diagnostic-dir", type=Path, default=Path("outputs/embedding_diagnostic"))
     parser.add_argument("--output", type=Path, default=Path("docs/figures/embedding_diagnostic.pdf"))
     parser.add_argument("--method", choices=["tsne", "pca"], default="tsne")

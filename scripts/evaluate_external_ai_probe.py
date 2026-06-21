@@ -39,7 +39,7 @@ def validation_blockers(validation: dict[str, Any]) -> list[str]:
 
 
 def valid_probability_confidence(value: Any) -> bool:
-    if isinstance(value, bool) or isinstance(value, str):
+    if isinstance(value, (bool, str)):
         return False
     try:
         confidence = float(value)
@@ -49,8 +49,7 @@ def valid_probability_confidence(value: Any) -> bool:
 
 
 def slugify(value: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower()).strip("_")
-    return slug or "external_model"
+    return eu.safe_identifier(value, fallback="external_model")
 
 
 def read_jsonl_records(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -77,14 +76,13 @@ def read_jsonl_records(path: Path) -> tuple[list[dict[str, Any]], list[dict[str,
 def evaluate_outputs(output_path: Path, gold_key_path: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
     records, parse_errors = read_jsonl_records(output_path)
     outputs = pd.DataFrame.from_records(records)
-    gold = pd.read_csv(gold_key_path, dtype=str, keep_default_na=False)
+    gold = eu.read_csv_frame(gold_key_path)
 
     required_fields = {"external_item_id", "requirement", "modality", "confidence"}
     missing_fields = sorted(required_fields - set(outputs.columns))
     if missing_fields:
         raise ValueError(f"Output file is missing required fields: {missing_fields}")
 
-    outputs["confidence_num"] = pd.to_numeric(outputs["confidence"], errors="coerce")
     outputs["valid_label"] = outputs["modality"].isin(ALLOWED_MODALITIES)
     outputs["valid_confidence"] = outputs["confidence"].map(valid_probability_confidence)
 
@@ -276,7 +274,7 @@ def write_external_comparison_report(output_dir: Path) -> Path | None:
         paper_ready = evaluation_report_paper_ready(output_dir / f"{model_slug}_evaluation.md")
         if paper_ready is None:
             continue
-        scored = pd.read_csv(scored_path, dtype=str, keep_default_na=False)
+        scored = eu.read_csv_frame(scored_path)
         if scored.empty:
             continue
         for column in [

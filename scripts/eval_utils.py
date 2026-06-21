@@ -61,6 +61,7 @@ LEGACY_TASK3_AUDIT_MODE = "legacy_declared"
 ACSE_PROXY_METHOD = "acse_semantic_entropy"
 ACSE_PROXY_MEASURE = "acse_proxy_semantic_dispersion"
 ACSE_PROXY_EMBEDDING_BACKEND = "tfidf_char_wb_3_5"
+ACSE_SEMANTIC_MANIFEST_FILENAME = "acse_semantic_artifact_manifest.csv"
 ACSE_MLX_EMBEDDING_BACKEND = "mlx"
 ACSE_MLX_DEFAULT_MODEL = "mlx-community/Qwen3-Embedding-0.6B-8bit"
 ACSE_EMBEDDING_BACKEND_ENV = "RE_UQ_ACSE_EMBEDDING_BACKEND"
@@ -540,20 +541,7 @@ def dataset_suffix(dataset_id: str | None) -> str:
 
 
 def variant_suffix(variant: str | None) -> str:
-    normalized = str(variant or "must").strip().lower()
-    if normalized in {"", "must", "main"}:
-        return ""
-    if normalized == "shall":
-        return "_shall"
-    raise ValueError(f"Unknown benchmark variant: {variant}")
-
-
-def variant_path(path: str | Path, variant: str | None) -> Path:
-    path = Path(path)
-    suffix = variant_suffix(variant)
-    if not suffix:
-        return path
-    return path.with_name(f"{path.stem}{suffix}{path.suffix}")
+    return "" if normalize_benchmark_variant(variant) == "must" else "_shall"
 
 
 def dataset_variant_suffix(dataset_id: str | None, variant: str | None = None) -> str:
@@ -649,6 +637,30 @@ def normalize_benchmark_variant(variant: str | None) -> str:
     raise ValueError(f"Unknown benchmark variant: {variant}")
 
 
+def selected_values(values: list[str], requested: str | None, name: str) -> list[str]:
+    if not requested:
+        return values
+    normalized = normalize_dataset_id(requested) if name == "dataset" else normalize_benchmark_variant(requested)
+    if normalized not in values:
+        raise ValueError(f"Requested {name} {normalized!r} is not present in the run config.")
+    return [normalized]
+
+
+def logging_config_from_args(run_config: Mapping[str, Any], args: Any) -> dict[str, Any]:
+    return normalize_run_logging_config(
+        run_config.get("logging"),
+        overrides={
+            "progress_every_records": args.progress_every_records,
+            "progress_every_seconds": args.progress_every_seconds,
+            "warn_after_records": args.warn_after_records,
+            "warn_parse_failure_rate": args.warn_parse_failure_rate,
+            "warn_request_error_rate": args.warn_request_error_rate,
+            "write_progress_csv": False if args.no_progress_artifacts else None,
+            "write_event_jsonl": False if args.no_progress_artifacts else None,
+        },
+    )
+
+
 def normalize_task3_audit_mode(value: Any) -> str:
     normalized = str(value or OFFICIAL_TASK3_AUDIT_MODE).strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
@@ -680,7 +692,7 @@ def _string_list(value: Any, name: str) -> list[str]:
         values = [str(part).strip() for part in value]
     else:
         raise ValueError(f"{name} must be a string or list of strings.")
-    return [value for value in values if value]
+    return [item for item in values if item]
 
 
 def normalize_run_logging_config(
@@ -917,11 +929,40 @@ def validate_manual_server_profile(profile: Mapping[str, Any]) -> None:
 # Section 2: Artifact paths, manifests, and JSON/JSONL IO
 # =============================================================================
 # Path resolution for run registries, SHA-256 hashing for provenance, the
-# benchmark manifest writer, and append-only JSONL/JSON readers and writers.
+# benchmark manifest writer, and the JSONL/JSON readers and writers
+# (append_jsonl appends; write_json overwrites).
 
 
 def run_registry_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
     return artifact_path(Path(root) / "data/processed/run_registry.csv", dataset_id, variant)
+
+
+def model_outputs_raw_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
+    return artifact_path(Path(root) / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
+
+
+def task3_raw_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
+    return artifact_path(Path(root) / "data/processed/model_outputs_raw_task3_verification.jsonl", dataset_id, variant)
+
+
+def task3_registry_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
+    return artifact_path(Path(root) / "data/processed/run_registry_task3_verification.csv", dataset_id, variant)
+
+
+def task3_progress_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
+    return artifact_path(Path(root) / "data/processed/run_progress_live_task3_verification.csv", dataset_id, variant)
+
+
+def task3_events_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
+    return artifact_path(Path(root) / "data/processed/run_events_task3_verification.jsonl", dataset_id, variant)
+
+
+def acse_semantic_cache_dir(analysis_dir: str | Path, backend_label: str) -> Path:
+    return Path(analysis_dir) / f"acse_semantic_{safe_identifier(backend_label)}"
+
+
+def utc_now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def sha256_file(path: str | Path) -> str:
@@ -959,7 +1000,7 @@ def write_benchmark_manifest(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "created_at_utc": utc_now_iso(),
         "metadata": metadata or {},
         "artifacts": [artifact_metadata(path, root=root) for path in paths],
     }
@@ -981,16 +1022,15 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
 
 
 def latest_run_id(raw_rows: list[dict[str, Any]], prefix: str | None = None) -> str | None:
-    selected: list[str] = []
+    latest: str | None = None
     for row in raw_rows:
         run_id = str(row.get("run_id", "")).strip()
         if not run_id:
             continue
         if not run_id_matches_prefix(run_id, prefix):
             continue
-        if not selected or selected[-1] != run_id:
-            selected.append(run_id)
-    return selected[-1] if selected else None
+        latest = run_id
+    return latest
 
 
 def select_run_rows(
@@ -1214,7 +1254,7 @@ def find_requirement_text_column(rows: list[dict[str, str]]) -> str:
 def make_seed_candidates(
     dataset_rows: list[dict[str, str]],
     target_count: int = DEFAULT_CONFIG["project"]["target_seed_count"],
-    source_dataset: str = "NICE",
+    source_dataset: str = SOURCE_DATASET_LABELS[DATASET_NICE],
     text_column: str | None = None,
     source_corpus_field: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -1488,11 +1528,6 @@ def weak_modality_template_by_id(template_id: str) -> dict[str, str]:
     raise ValueError(f"Unknown weak-modality probe template: {template_id}")
 
 
-def weak_modality_probe_source_statement(capability: str, template_id: str) -> str:
-    template = weak_modality_template_by_id(template_id)
-    return template["source_template"].format(capability=capability_clause(capability))
-
-
 def build_weak_modality_probe_items(
     seed_rows: list[dict[str, Any]],
     templates: list[dict[str, str]] | None = None,
@@ -1545,9 +1580,9 @@ def build_task3_verification_items(
             continue
         text_diagnostic = requirement_text_modality_diagnostic(parsed.get("requirement", ""))
         text_modality = normalize_modality(text_diagnostic["text_modality"])
-        text_parse_status = "ok" if text_modality in MODALITIES else "unknown"
         if text_modality is None:
             continue
+        text_parse_status = "ok"
         model = str(raw.get("model", ""))
         source_item_id = str(source_item["item_id"])
         dedupe_key = (model, source_item_id)
@@ -1686,18 +1721,6 @@ def weak_modality_sanity_status(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "incomplete_template_ids": incomplete,
         "disagreeing_template_ids": disagreeing,
     }
-
-
-def require_weak_modality_sanity(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    status = weak_modality_sanity_status(rows)
-    if not status["valid"]:
-        raise ValueError(
-            "Weak-modality sanity check is incomplete or disagrees with the construct: "
-            f"missing={status['missing_template_ids']}, "
-            f"incomplete={status['incomplete_template_ids']}, "
-            f"disagreeing={status['disagreeing_template_ids']}"
-        )
-    return status
 
 
 def weak_modality_construct_review_rows(reviewer_ids: Iterable[str] = ("R1", "R2")) -> list[dict[str, Any]]:
@@ -1921,13 +1944,13 @@ def task_response_schema(task: str, *, batched: bool = False) -> dict[str, Any]:
     elif task == "task2":
         properties = {
             "requirement": {"type": "string"},
-            "modality": {"type": "string", "enum": ["mandatory", "recommended", "optional", "nice_to_have"]},
+            "modality": {"type": "string", "enum": list(MODALITIES)},
             "confidence": confidence,
         }
         required = ["requirement", "modality", "confidence"]
     elif task == "task3":
         properties = {
-            "relation": {"type": "string", "enum": ["preserves", "strengthens", "weakens", "content_changed"]},
+            "relation": {"type": "string", "enum": list(TASK3_RELATIONS)},
             "confidence": confidence,
             "evidence_phrase": {"type": "string", "maxLength": 240},
             "brief_reason": {"type": "string", "maxLength": 240},
@@ -2056,6 +2079,80 @@ def completion_request_job(
     }
 
 
+def _append_completion_jobs(
+    jobs: list[dict[str, Any]],
+    *,
+    item: Mapping[str, Any],
+    task: str,
+    prompt: str,
+    prompt_version: str,
+    model: str,
+    host: str,
+    run_id: str,
+    deterministic: Mapping[str, Any],
+    stochastic: Mapping[str, Any],
+    max_tokens: int,
+    timeout_s: int,
+    api_key_env: str,
+    provider_id: str,
+    profile_id: str,
+    run_group_id: str,
+    json_mode: bool,
+    structured_output: str | None,
+    response_format: Mapping[str, Any] | None,
+    extra_body: Mapping[str, Any] | None,
+    instructor_mode: str,
+    validation_retries: int,
+    fallback_batch_size: int,
+    server_model_probe: Mapping[str, Any] | str | None,
+) -> None:
+    """Append the deterministic job and any stochastic samples for one rendered prompt."""
+    shared = dict(
+        item=item,
+        task=task,
+        model=model,
+        host=host,
+        run_id=run_id,
+        prompt=prompt,
+        prompt_version=prompt_version,
+        max_tokens=max_tokens,
+        timeout_s=timeout_s,
+        api_key_env=api_key_env,
+        provider_id=provider_id,
+        profile_id=profile_id,
+        run_group_id=run_group_id,
+        json_mode=json_mode,
+        structured_output=structured_output,
+        response_format=response_format,
+        extra_body=extra_body,
+        instructor_mode=instructor_mode,
+        validation_retries=validation_retries,
+        fallback_batch_size=fallback_batch_size,
+        server_model_probe=server_model_probe,
+    )
+    jobs.append(
+        completion_request_job(
+            sample_kind="deterministic",
+            sample_index=0,
+            temperature=float(deterministic["temperature"]),
+            top_p=float(deterministic["top_p"]),
+            request_index=len(jobs),
+            **shared,
+        )
+    )
+    for sample_index in range(max(0, int(stochastic.get("samples", 0)))):
+        jobs.append(
+            completion_request_job(
+                sample_kind="stochastic",
+                sample_index=sample_index,
+                temperature=float(stochastic["temperature"]),
+                top_p=float(stochastic["top_p"]),
+                request_index=len(jobs),
+                **shared,
+            )
+        )
+
+
 def planned_completion_jobs(
     benchmark_rows: list[dict[str, Any]],
     *,
@@ -2085,71 +2182,96 @@ def planned_completion_jobs(
 ) -> list[dict[str, Any]]:
     jobs: list[dict[str, Any]] = []
     task_list = normalize_task_filter(tasks)
-    stochastic_samples = max(0, int(stochastic.get("samples", 0)))
     for item in benchmark_rows:
         for task in task_list:
-            prompt = prompt_for_benchmark_task(task, item, task1_template, task2_template)
-            jobs.append(
-                completion_request_job(
-                    item=item,
-                    task=task,
-                    model=model,
-                    host=host,
-                    run_id=run_id,
-                    sample_kind="deterministic",
-                    sample_index=0,
-                    temperature=float(deterministic["temperature"]),
-                    top_p=float(deterministic["top_p"]),
-                    prompt=prompt,
-                    prompt_version=prompt_version,
-                    max_tokens=max_tokens,
-                    timeout_s=timeout_s,
-                    api_key_env=api_key_env,
-                    request_index=len(jobs),
-                    provider_id=provider_id,
-                    profile_id=profile_id,
-                    run_group_id=run_group_id,
-                    json_mode=json_mode,
-                    structured_output=structured_output,
-                    response_format=response_format,
-                    extra_body=extra_body,
-                    instructor_mode=instructor_mode,
-                    validation_retries=validation_retries,
-                    fallback_batch_size=fallback_batch_size,
-                    server_model_probe=server_model_probe,
-                )
+            _append_completion_jobs(
+                jobs,
+                item=item,
+                task=task,
+                prompt=prompt_for_benchmark_task(task, item, task1_template, task2_template),
+                prompt_version=prompt_version,
+                model=model,
+                host=host,
+                run_id=run_id,
+                deterministic=deterministic,
+                stochastic=stochastic,
+                max_tokens=max_tokens,
+                timeout_s=timeout_s,
+                api_key_env=api_key_env,
+                provider_id=provider_id,
+                profile_id=profile_id,
+                run_group_id=run_group_id,
+                json_mode=json_mode,
+                structured_output=structured_output,
+                response_format=response_format,
+                extra_body=extra_body,
+                instructor_mode=instructor_mode,
+                validation_retries=validation_retries,
+                fallback_batch_size=fallback_batch_size,
+                server_model_probe=server_model_probe,
             )
-            for sample_index in range(stochastic_samples):
-                jobs.append(
-                    completion_request_job(
-                        item=item,
-                        task=task,
-                        model=model,
-                        host=host,
-                        run_id=run_id,
-                        sample_kind="stochastic",
-                        sample_index=sample_index,
-                        temperature=float(stochastic["temperature"]),
-                        top_p=float(stochastic["top_p"]),
-                        prompt=prompt,
-                        prompt_version=prompt_version,
-                        max_tokens=max_tokens,
-                        timeout_s=timeout_s,
-                        api_key_env=api_key_env,
-                        request_index=len(jobs),
-                        provider_id=provider_id,
-                        profile_id=profile_id,
-                        run_group_id=run_group_id,
-                        json_mode=json_mode,
-                        structured_output=structured_output,
-                        response_format=response_format,
-                        extra_body=extra_body,
-                        instructor_mode=instructor_mode,
-                        validation_retries=validation_retries,
-                        fallback_batch_size=fallback_batch_size,
-                        server_model_probe=server_model_probe,
-                    )
-                )
+    return jobs
+
+
+def planned_completion_jobs_for_items(
+    items: list[dict[str, Any]],
+    *,
+    prompt_fn: Callable[[Mapping[str, Any]], str],
+    prompt_version: str,
+    model: str,
+    host: str,
+    run_id: str,
+    deterministic: Mapping[str, Any],
+    stochastic: Mapping[str, Any],
+    max_tokens: int,
+    timeout_s: int,
+    api_key_env: str,
+    task: str = "task3",
+    provider_id: str = "",
+    profile_id: str = "",
+    run_group_id: str = "",
+    json_mode: bool = False,
+    structured_output: str | None = None,
+    response_format: Mapping[str, Any] | None = None,
+    extra_body: Mapping[str, Any] | None = None,
+    instructor_mode: str = "json",
+    validation_retries: int = 2,
+    fallback_batch_size: int = 1,
+    server_model_probe: Mapping[str, Any] | str | None = None,
+) -> list[dict[str, Any]]:
+    """Plan deterministic + stochastic jobs for pre-built items with a per-item prompt.
+
+    The Task 3 runner renders one prompt per audit item (rather than per task as in
+    planned_completion_jobs); prompt_fn maps each item to that rendered prompt.
+    """
+    jobs: list[dict[str, Any]] = []
+    for item in items:
+        _append_completion_jobs(
+            jobs,
+            item=item,
+            task=task,
+            prompt=prompt_fn(item),
+            prompt_version=prompt_version,
+            model=model,
+            host=host,
+            run_id=run_id,
+            deterministic=deterministic,
+            stochastic=stochastic,
+            max_tokens=max_tokens,
+            timeout_s=timeout_s,
+            api_key_env=api_key_env,
+            provider_id=provider_id,
+            profile_id=profile_id,
+            run_group_id=run_group_id,
+            json_mode=json_mode,
+            structured_output=structured_output,
+            response_format=response_format,
+            extra_body=extra_body,
+            instructor_mode=instructor_mode,
+            validation_retries=validation_retries,
+            fallback_batch_size=fallback_batch_size,
+            server_model_probe=server_model_probe,
+        )
     return jobs
 
 
@@ -2369,9 +2491,9 @@ def task3_gold_relation(source_modality: str, extracted_modality: str) -> str:
     return "preserves"
 
 
-def safe_identifier(value: Any) -> str:
+def safe_identifier(value: Any, fallback: str = "value") -> str:
     text = re.sub(r"[^A-Za-z0-9]+", "_", str(value).strip()).strip("_").lower()
-    return text or "value"
+    return text or fallback
 
 
 def evidence_phrase_in_source(evidence_phrase: Any, source_statement_text: Any) -> bool:
@@ -2456,10 +2578,6 @@ def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, str
     if re.match(r"^(?:the\s+)?system\s+\w+", text):
         return {"text_modality": "mandatory", "text_modality_basis": "heuristic_system_verb"}
     return {"text_modality": "unknown", "text_modality_basis": "unknown"}
-
-
-def requirement_text_modality(requirement_text: Any) -> str:
-    return requirement_text_modality_diagnostic(requirement_text)["text_modality"]
 
 
 def empty_text_modality_fields() -> dict[str, Any]:
@@ -2782,15 +2900,12 @@ def instructor_mode_value(value: Any) -> Any:
     import instructor
 
     mode = normalize_instructor_mode_name(value)
-    if mode == "json":
-        return instructor.Mode.JSON
-    if mode == "tools":
-        return instructor.Mode.TOOLS
-    if mode == "tools_strict":
-        return instructor.Mode.TOOLS_STRICT
-    if mode == "md_json":
-        return instructor.Mode.MD_JSON
-    raise ValueError(f"Unknown Instructor mode: {value}")
+    return {
+        "json": instructor.Mode.JSON,
+        "tools": instructor.Mode.TOOLS,
+        "tools_strict": instructor.Mode.TOOLS_STRICT,
+        "md_json": instructor.Mode.MD_JSON,
+    }[mode]
 
 
 def instructor_extra_body(extra_body: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -2817,7 +2932,8 @@ def instructor_completion(
     validation_retries: int = 2,
     response_model: Any | None = None,
 ) -> dict[str, Any]:
-    del response_format
+    # response_format is accepted for call-signature parity with chat_completion;
+    # Instructor derives the schema from response_model instead.
     import instructor
 
     api_key = os.getenv(api_key_env, "EMPTY")
@@ -2916,10 +3032,6 @@ def response_logprob_tokens(response_json: dict[str, Any] | None) -> list[dict[s
             return tokens
 
     return normalize_logprob_tokens(response_json.get("logprobs"))
-
-
-def completion_has_logprobs(response_json: dict[str, Any] | None) -> bool:
-    return bool(response_logprob_tokens(response_json))
 
 
 def responses_endpoint_url(host: str) -> str:
@@ -3151,6 +3263,59 @@ def build_raw_record(
     return record
 
 
+def _job_record(
+    job: Mapping[str, Any],
+    *,
+    completion: dict[str, Any],
+    request_index: int | None,
+    response_format: Mapping[str, Any] | None,
+    request_extra_body: Mapping[str, Any] | None,
+    batch_id: str = "",
+    batch_size: int | str = "",
+    batch_item_count: int | str = "",
+    batch_prompt_hash: str = "",
+    output_contract_version: str = "",
+    confidence_scale: str = "",
+) -> dict[str, Any]:
+    """Map a planned job dict and its completion onto a raw output record.
+
+    Centralizes the ~20 job-derived fields shared by the single, batch, and
+    instructor-batch completion paths; callers supply only the fields that
+    genuinely differ between paths.
+    """
+    return build_raw_record(
+        run_id=str(job["run_id"]),
+        model=str(job["model"]),
+        host=str(job["host"]),
+        task=str(job["task"]),
+        item=dict(job["item"]),
+        sample_index=int(job["sample_index"]),
+        sample_kind=str(job["sample_kind"]),
+        temperature=float(job["temperature"]),
+        top_p=float(job["top_p"]),
+        prompt_version=str(job["prompt_version"]),
+        prompt=str(job["prompt"]),
+        completion=completion,
+        request_index=request_index,
+        provider_id=str(job.get("provider_id", "")),
+        profile_id=str(job.get("profile_id", "")),
+        run_group_id=str(job.get("run_group_id", "")),
+        base_url=str(job.get("base_url", job.get("host", ""))),
+        api_key_env=str(job.get("api_key_env", "")),
+        json_mode=bool(job.get("json_mode", False)),
+        structured_output=str(job.get("structured_output", "none")),
+        response_format=response_format,
+        request_extra_body=request_extra_body,
+        server_model_probe=job.get("server_model_probe"),
+        batch_id=batch_id,
+        batch_size=batch_size,
+        batch_item_count=batch_item_count,
+        batch_prompt_hash=batch_prompt_hash,
+        output_contract_version=output_contract_version,
+        confidence_scale=confidence_scale,
+    )
+
+
 def job_uses_instructor(job: Mapping[str, Any]) -> bool:
     return normalize_structured_output_mode(job.get("structured_output")) == "instructor"
 
@@ -3229,30 +3394,12 @@ def run_completion_job(
         )
     )
     request_index = job.get("request_index")
-    return build_raw_record(
-        run_id=str(job["run_id"]),
-        model=str(job["model"]),
-        host=str(job["host"]),
-        task=str(job["task"]),
-        item=dict(job["item"]),
-        sample_index=int(job["sample_index"]),
-        sample_kind=str(job["sample_kind"]),
-        temperature=float(job["temperature"]),
-        top_p=float(job["top_p"]),
-        prompt_version=str(job["prompt_version"]),
-        prompt=str(job["prompt"]),
+    return _job_record(
+        job,
         completion=completion,
         request_index=int(request_index) if request_index is not None else None,
-        provider_id=str(job.get("provider_id", "")),
-        profile_id=str(job.get("profile_id", "")),
-        run_group_id=str(job.get("run_group_id", "")),
-        base_url=str(job.get("base_url", job.get("host", ""))),
-        api_key_env=str(job.get("api_key_env", "")),
-        json_mode=bool(job.get("json_mode", False)),
-        structured_output=str(job.get("structured_output", "none")),
         response_format=job.get("response_format"),
         request_extra_body=instructor_extra_body(job.get("extra_body")) if job_uses_instructor(job) else job.get("extra_body"),
-        server_model_probe=job.get("server_model_probe"),
         output_contract_version=output_contract_version_for_job(job),
         confidence_scale=confidence_scale_for_job(job),
     )
@@ -3377,30 +3524,12 @@ def run_instructor_completion_batch(
                     "latency_s": completion.get("latency_s", ""),
                     "error": "",
                 }
-                records_by_request_index[request_index] = build_raw_record(
-                    run_id=str(job["run_id"]),
-                    model=str(job["model"]),
-                    host=str(job["host"]),
-                    task=str(job["task"]),
-                    item=dict(job["item"]),
-                    sample_index=int(job["sample_index"]),
-                    sample_kind=str(job["sample_kind"]),
-                    temperature=float(job["temperature"]),
-                    top_p=float(job["top_p"]),
-                    prompt_version=str(job["prompt_version"]),
-                    prompt=str(job["prompt"]),
+                records_by_request_index[request_index] = _job_record(
+                    job,
                     completion=item_completion,
                     request_index=request_index,
-                    provider_id=str(job.get("provider_id", "")),
-                    profile_id=str(job.get("profile_id", "")),
-                    run_group_id=str(job.get("run_group_id", "")),
-                    base_url=str(job.get("base_url", job.get("host", ""))),
-                    api_key_env=str(job.get("api_key_env", "")),
-                    json_mode=bool(job.get("json_mode", False)),
-                    structured_output=str(job.get("structured_output", "none")),
                     response_format=None,
                     request_extra_body=instructor_extra_body(job.get("extra_body")),
-                    server_model_probe=job.get("server_model_probe"),
                     batch_id=batch_id,
                     batch_size=len(jobs),
                     batch_item_count=len(jobs),
@@ -3490,30 +3619,12 @@ def run_completion_batch(
             item_completion = completion
 
         records.append(
-            build_raw_record(
-                run_id=str(job["run_id"]),
-                model=str(job["model"]),
-                host=str(job["host"]),
-                task=str(job["task"]),
-                item=dict(job["item"]),
-                sample_index=int(job["sample_index"]),
-                sample_kind=str(job["sample_kind"]),
-                temperature=float(job["temperature"]),
-                top_p=float(job["top_p"]),
-                prompt_version=str(job["prompt_version"]),
-                prompt=str(job["prompt"]),
+            _job_record(
+                job,
                 completion=item_completion,
                 request_index=request_index,
-                provider_id=str(job.get("provider_id", "")),
-                profile_id=str(job.get("profile_id", "")),
-                run_group_id=str(job.get("run_group_id", "")),
-                base_url=str(job.get("base_url", job.get("host", ""))),
-                api_key_env=str(job.get("api_key_env", "")),
-                json_mode=bool(job.get("json_mode", False)),
-                structured_output=str(job.get("structured_output", "none")),
                 response_format=batch_response_format,
                 request_extra_body=batch_extra_body,
-                server_model_probe=job.get("server_model_probe"),
                 batch_id=batch_id,
                 batch_size=len(jobs),
                 batch_item_count=len(jobs),
@@ -3996,14 +4107,6 @@ def task3_score_fields(item: dict[str, Any], pred_relation: str, evidence_phrase
     }
 
 
-def monotonicity_violation_rate(
-    rows: list[dict[str, Any]],
-    score_field: str = "p_yes",
-    tolerance: float = MONOTONICITY_TOLERANCE,
-) -> float:
-    return monotonicity_violation_diagnostics(rows, score_field=score_field, tolerance=tolerance)["monotonicity_violations"]
-
-
 def monotonicity_violation_diagnostics(
     rows: list[dict[str, Any]],
     score_field: str = "p_yes",
@@ -4055,29 +4158,6 @@ def monotonicity_violation_diagnostics(
         "monotonicity_mean_max_increase": float(np.mean(max_increases)),
         "monotonicity_max_increase": float(np.max(max_increases)),
     }
-
-
-def bootstrap_ci(
-    values: list[Any],
-    statistic: Callable[[list[Any]], float],
-    iterations: int = 1000,
-    seed: int = 20260518,
-    alpha: float = 0.05,
-) -> tuple[float, float, float]:
-    if not values:
-        return math.nan, math.nan, math.nan
-    rng = np.random.default_rng(seed)
-    point = statistic(values)
-    samples = []
-    for _ in range(iterations):
-        indices = rng.integers(0, len(values), size=len(values))
-        resampled = [values[index] for index in indices]
-        samples.append(statistic(resampled))
-    sample_array = np.asarray([x for x in samples if not math.isnan(x)], dtype=float)
-    if sample_array.size == 0:
-        return point, math.nan, math.nan
-    low, high = np.quantile(sample_array, [alpha / 2, 1 - alpha / 2])
-    return float(point), float(low), float(high)
 
 
 def bootstrap_seed_metric(
@@ -4242,61 +4322,25 @@ def distribution_score_rows(
     return rows
 
 
-def build_ensemble_disagreement_scores(
+def _build_ensemble_disagreement_scores(
     benchmark_rows: list[dict[str, Any]],
     raw_rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
-    raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, raw_rows)
-    raw_frame = pd.DataFrame.from_records(raw_rows)
-    required_columns = {"sample_kind", "run_id", "task", "item_id", "model"}
-    if raw_frame.empty or not required_columns.issubset(raw_frame.columns):
-        return []
-    deterministic_frame = raw_frame[raw_frame["sample_kind"] == "deterministic"]
-    if deterministic_frame.empty:
-        return []
-
-    scores: list[dict[str, Any]] = []
-    for (_, task, item_id), group_frame in deterministic_frame.groupby(["run_id", "task", "item_id"], sort=False):
-        item = benchmark_by_item.get(item_id)
-        if not item:
-            continue
-        total_models = group_frame["model"].astype(str).nunique()
-        valid_by_model: dict[str, dict[str, Any]] = {}
-        for row in group_frame.to_dict(orient="records"):
-            if row.get("parse_status") != "ok" or not isinstance(row.get("parsed_json"), dict):
-                continue
-            valid_by_model.setdefault(str(row.get("model", "")), row)
-        if len(valid_by_model) < 2:
-            continue
-        valid_rows = list(valid_by_model.values())
-        distribution = label_distribution_from_rows(str(task), valid_rows)
-        model_name = f"{ENSEMBLE_MODEL_PREFIX}:{len(valid_by_model)}_models"
-        scores.append(
-            score_from_distribution(
-                valid_rows[0],
-                item,
-                "model_ensemble_disagreement",
-                distribution,
-                valid_n=len(valid_by_model),
-                total_n=total_models,
-                uncertainty_measure="variation_ratio",
-                uncertainty_score=variation_ratio(distribution),
-                model_name=model_name,
-            )
-        )
-    return scores
-
-
-def build_run_group_ensemble_disagreement_scores(
-    benchmark_rows: list[dict[str, Any]],
-    raw_rows: list[dict[str, Any]],
+    *,
+    group_columns: list[str],
+    required_columns: set[str],
+    member_key: Callable[[Mapping[str, Any]], str],
+    uq_method: str,
+    model_name_builder: Callable[[Any, int], str],
     run_group_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Score cross-member label disagreement over deterministic outputs.
+
+    Shared by the per-run-id and per-run-group ensemble views; callers supply the
+    grouping columns, how an ensemble member is keyed, and the score labels.
+    """
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
     raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, raw_rows)
     raw_frame = pd.DataFrame.from_records(raw_rows)
-    required_columns = {"sample_kind", "run_group_id", "task", "item_id", "model"}
     if raw_frame.empty or not required_columns.issubset(raw_frame.columns):
         return []
     deterministic_frame = raw_frame[raw_frame["sample_kind"] == "deterministic"]
@@ -4306,39 +4350,68 @@ def build_run_group_ensemble_disagreement_scores(
         return []
 
     scores: list[dict[str, Any]] = []
-    for (group_id, task, item_id), group_frame in deterministic_frame.groupby(["run_group_id", "task", "item_id"], sort=False):
+    for group_values, group_frame in deterministic_frame.groupby(group_columns, sort=False):
+        group_id, task, item_id = group_values
         item = benchmark_by_item.get(item_id)
         if not item:
             continue
-        total_models = group_frame.apply(
-            lambda row: f"{row.get('provider_id', '')}:{row.get('model', '')}:{row.get('run_id', '')}",
-            axis=1,
-        ).nunique()
+        records = group_frame.to_dict(orient="records")
+        total_members = len({member_key(row) for row in records})
         valid_by_member: dict[str, dict[str, Any]] = {}
-        for row in group_frame.to_dict(orient="records"):
+        for row in records:
             if row.get("parse_status") != "ok" or not isinstance(row.get("parsed_json"), dict):
                 continue
-            member = f"{row.get('provider_id', '')}:{row.get('model', '')}:{row.get('run_id', '')}"
-            valid_by_member.setdefault(member, row)
+            valid_by_member.setdefault(member_key(row), row)
         if len(valid_by_member) < 2:
             continue
         valid_rows = list(valid_by_member.values())
         distribution = label_distribution_from_rows(str(task), valid_rows)
-        model_name = f"{ENSEMBLE_MODEL_PREFIX}:run_group:{group_id}:{len(valid_by_member)}_models"
         scores.append(
             score_from_distribution(
                 valid_rows[0],
                 item,
-                "model_ensemble_disagreement_run_group",
+                uq_method,
                 distribution,
                 valid_n=len(valid_by_member),
-                total_n=total_models,
+                total_n=total_members,
                 uncertainty_measure="variation_ratio",
                 uncertainty_score=variation_ratio(distribution),
-                model_name=model_name,
+                model_name=model_name_builder(group_id, len(valid_by_member)),
             )
         )
     return scores
+
+
+def build_ensemble_disagreement_scores(
+    benchmark_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return _build_ensemble_disagreement_scores(
+        benchmark_rows,
+        raw_rows,
+        group_columns=["run_id", "task", "item_id"],
+        required_columns={"sample_kind", "run_id", "task", "item_id", "model"},
+        member_key=lambda row: str(row.get("model", "")),
+        uq_method="model_ensemble_disagreement",
+        model_name_builder=lambda group_id, n_members: f"{ENSEMBLE_MODEL_PREFIX}:{n_members}_models",
+    )
+
+
+def build_run_group_ensemble_disagreement_scores(
+    benchmark_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+    run_group_id: str | None = None,
+) -> list[dict[str, Any]]:
+    return _build_ensemble_disagreement_scores(
+        benchmark_rows,
+        raw_rows,
+        group_columns=["run_group_id", "task", "item_id"],
+        required_columns={"sample_kind", "run_group_id", "task", "item_id", "model"},
+        member_key=lambda row: f"{row.get('provider_id', '')}:{row.get('model', '')}:{row.get('run_id', '')}",
+        uq_method="model_ensemble_disagreement_run_group",
+        model_name_builder=lambda group_id, n_members: f"{ENSEMBLE_MODEL_PREFIX}:run_group:{group_id}:{n_members}_models",
+        run_group_id=run_group_id,
+    )
 
 
 def build_uq_scores(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -4806,7 +4879,7 @@ def format_live_progress_line(run_id: str, counters: Mapping[str, Any]) -> str:
 
 
 def append_run_event(path: str | Path, event: Mapping[str, Any]) -> None:
-    append_jsonl(path, {"created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **dict(event)})
+    append_jsonl(path, {"created_at_utc": utc_now_iso(), **dict(event)})
 
 
 def write_live_progress_csv(
@@ -4931,6 +5004,62 @@ def provider_preflight(
         "latency_s": completion.get("latency_s", ""),
         "raw_text": str(completion.get("raw_text", ""))[:240],
     }
+
+
+def select_model_run_rows(
+    rows: list[dict[str, Any]], run_id: str, model: str, tasks: Iterable[str]
+) -> list[dict[str, Any]]:
+    task_set = {str(task) for task in tasks}
+    return [
+        row
+        for row in rows
+        if str(row.get("run_id", "")) == str(run_id)
+        and str(row.get("model", "")) == str(model)
+        and str(row.get("task", "")) in task_set
+    ]
+
+
+def preflight_profile(
+    profile: Mapping[str, Any],
+    *,
+    model: str,
+    prompt_version: str,
+    completion_fn: Callable[..., dict[str, Any]] = chat_completion,
+) -> dict[str, Any]:
+    preflight = provider_preflight(
+        host=profile["base_url"],
+        model=model,
+        api_key_env=profile["api_key_env"],
+        timeout_s=int(profile["timeout_s"]),
+        prompt_version=prompt_version,
+        json_mode=bool(profile["json_mode"]),
+        structured_output=str(profile.get("structured_output", "none")),
+        response_format=profile.get("response_format"),
+        extra_body=profile.get("extra_body"),
+        instructor_mode=str(profile.get("instructor_mode", "json")),
+        validation_retries=int(profile.get("validation_retries", 2)),
+        completion_fn=completion_fn,
+    )
+    if not preflight["ok"]:
+        raise RuntimeError(f"Provider preflight failed for {profile['profile_id']} / {model}: {preflight}")
+    return preflight
+
+
+def emit_warning_events(
+    counters: Mapping[str, Any],
+    *,
+    logging_config: Mapping[str, Any],
+    emitted_warning_types: set[str],
+    context: Mapping[str, Any],
+    events_path: str | Path,
+) -> None:
+    run_id = str(context.get("run_id", ""))
+    for warning_event in warning_events_for_counters(counters, logging_config, emitted_warning_types):
+        emitted_warning_types.add(str(warning_event["warning_type"]))
+        warning_event.update(context)
+        if logging_config["write_event_jsonl"]:
+            append_run_event(events_path, warning_event)
+        print(f"WARNING {run_id}: {warning_event['message']}", flush=True)
 
 
 # =============================================================================
@@ -5178,14 +5307,14 @@ def prompt_sensitivity_summary(benchmark_rows: list[dict[str, Any]], raw_rows: l
     if frame.empty:
         return []
     rows: list[dict[str, Any]] = []
-    for (model, prompt_version), group_frame in frame.groupby(["model", "run_id"], sort=False):
+    for (model, run_id), group_frame in frame.groupby(["model", "run_id"], sort=False):
         group_rows = group_frame.to_dict(orient="records")
         task1 = group_frame[group_frame["task"] == "task1"]
         weak = task1[task1["y_true"].astype(int) == 0].copy()
         rows.append(
             {
                 "model": model,
-                "prompt_run_id": prompt_version,
+                "prompt_run_id": run_id,
                 "n": len(task1),
                 "accuracy": accuracy_score(task1["y_true"].astype(int).tolist(), task1["y_pred"].astype(int).tolist()) if not task1.empty else math.nan,
                 "weak_source_high_p_yes_80": high_confidence_overcommitment_rate(group_rows, "task1", 0.80),
@@ -5260,7 +5389,7 @@ def task2_prompt_sensitivity_summary(benchmark_rows: list[dict[str, Any]], raw_r
                 if nice_rows
                 else math.nan,
                 "nice_to_have_to_recommended_rate": len(nice_to_recommended) / len(nice_rows) if nice_rows else math.nan,
-                "over_commitment": overcommitment_metrics(score_rows)[0] if score_rows else math.nan,
+                "over_commitment": overcommitment_summary_metrics(score_rows)["over_commitment"] if score_rows else math.nan,
                 "high_conf_overcommit_80": high_confidence_overcommitment_rate(score_rows, "task2", 0.80),
                 "high_conf_overcommit_90": high_confidence_overcommitment_rate(score_rows, "task2", 0.90),
             }
@@ -5395,15 +5524,6 @@ def overcommitment_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, floa
     }
 
 
-def overcommitment_metrics(rows: list[dict[str, Any]]) -> tuple[float, float, float]:
-    metrics = overcommitment_summary_metrics(rows)
-    return (
-        metrics["over_commitment"],
-        metrics["under_commitment"],
-        metrics["over_commitment_severity_all"],
-    )
-
-
 def unsupported_mandatory_acceptance_rate(rows: list[dict[str, Any]], threshold: float) -> float:
     weak_rows = [row for row in rows if str(row.get("task", "")) == "task1" and int(row["y_true"]) == 0]
     if not weak_rows:
@@ -5499,10 +5619,14 @@ def high_confidence_overcommitment_rate(rows: list[dict[str, Any]], task: str, t
     return math.nan
 
 
-def _truthy(value: Any) -> bool:
+def is_truthy_strict(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes"}
+
+
+# Internal short alias retained for the strict-truthy call sites in this module.
+_truthy = is_truthy_strict
 
 
 def text_modality_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, float | str]:
@@ -5669,13 +5793,21 @@ def calibration_probabilities(rows: list[dict[str, Any]], task: str) -> list[flo
     return [float(row["confidence"]) for row in rows]
 
 
+def _error_label(task: str, y_true: int, y_pred: int) -> int:
+    if task == "task1":
+        return 1 if y_true != y_pred else 0
+    if task in {"task2", "task3"}:
+        return 1 - y_true
+    raise ValueError(f"Unknown task: {task}")
+
+
 def prediction_error_labels(rows: list[dict[str, Any]], task: str) -> list[int]:
     labels: list[int] = []
     for row in rows:
         if task == "task1":
-            labels.append(1 if int(row["y_true"]) != int(row["y_pred"]) else 0)
+            labels.append(_error_label(task, int(row["y_true"]), int(row["y_pred"])))
         elif task in {"task2", "task3"}:
-            labels.append(1 - int(row["y_true"]))
+            labels.append(_error_label(task, int(row["y_true"]), 0))
         else:
             raise ValueError(f"Unknown task: {task}")
     return labels
@@ -5710,10 +5842,8 @@ def _float_or_nan(value: Any) -> float:
 def _error_label_for_score_row(row: Mapping[str, Any]) -> int:
     task = str(row.get("task", ""))
     if task == "task1":
-        return 1 if int(row.get("y_true", 0)) != int(row.get("y_pred", 0)) else 0
-    if task in {"task2", "task3"}:
-        return 1 - int(row.get("y_true", 0))
-    raise ValueError(f"Unknown task: {task}")
+        return _error_label(task, int(row.get("y_true", 0)), int(row.get("y_pred", 0)))
+    return _error_label(task, int(row.get("y_true", 0)), 0)
 
 
 def _seed_split(seed_ids: Iterable[Any], calibration_fraction: float = ACSE_CALIBRATION_FRACTION) -> set[str]:

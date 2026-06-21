@@ -84,7 +84,7 @@ def print_progress(
     profile_id: str | None = None,
 ) -> None:
     benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
-    raw_path = eu.artifact_path(root / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
+    raw_path = eu.model_outputs_raw_path(root, dataset_id, variant)
     registry_path = eu.run_registry_path(root, dataset_id, variant)
     live_progress_path = eu.run_progress_live_path(root, dataset_id, variant)
     events_path = eu.run_events_path(root, dataset_id, variant)

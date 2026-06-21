@@ -20,6 +20,7 @@ behind an AUROC near 0.5.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -74,9 +75,15 @@ def embed_requirement_only(
     reuse_cache: bool,
 ) -> np.ndarray:
     """Embed each row's requirement text with MLX, deduplicating first."""
+    # Bind the cache to the exact requirement texts (and backend), not just the row
+    # count, so a stale cache from a different run of equal length is not reused.
+    requirements_digest = hashlib.sha256(
+        ("mlx\x00" + "\x00".join(requirements)).encode("utf-8")
+    ).hexdigest()
     if reuse_cache and cache_path.exists():
         cached = np.load(cache_path, allow_pickle=False)
-        if int(cached["n_rows"]) == len(requirements):
+        cached_digest = str(cached["requirements_digest"]) if "requirements_digest" in cached.files else ""
+        if int(cached["n_rows"]) == len(requirements) and cached_digest == requirements_digest:
             print(f"[reqonly-mlx] reuse cache {cache_path} ({cached['embeddings'].shape})")
             return cached["embeddings"].astype(np.float32, copy=False)
 
@@ -99,6 +106,7 @@ def embed_requirement_only(
         embeddings=row_embeddings.astype(np.float32),
         n_rows=np.asarray(len(requirements)),
         dim=np.asarray(row_embeddings.shape[1]),
+        requirements_digest=np.asarray(requirements_digest),
     )
     print(f"[reqonly-mlx] cached -> {cache_path} ({row_embeddings.shape})")
     return row_embeddings.astype(np.float32, copy=False)
@@ -243,7 +251,7 @@ def summarize_grid(fold_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=Path("outputs/acse_semantic_artifact_manifest.csv"))
+    parser.add_argument("--manifest", type=Path, default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/embedding_diagnostic"))
     parser.add_argument("--models", nargs="+", default=["hgb", "logreg"], choices=["hgb", "logreg"])
     parser.add_argument("--pca-components", type=int, default=128)
@@ -286,7 +294,7 @@ def main() -> None:
     eu.write_csv_rows(output_dir / "probe_grid_folds.csv", fold_rows)
     eu.write_csv_rows(output_dir / "probe_grid_summary.csv", summary)
     (output_dir / "probe_grid_summary.md").write_text(
-        eu.markdown_table(summary, list(summary[0])) + "\n", encoding="utf-8"
+        eu.markdown_table(summary, (list(summary[0]) if summary else [])) + "\n", encoding="utf-8"
     )
     manifest = {
         "n_samples": len(sample_rows),

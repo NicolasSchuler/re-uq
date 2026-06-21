@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -138,10 +137,6 @@ class CompletedRun:
     profile: str
 
 
-def task2_raw_path(root: Path, dataset_id: str, variant: str) -> Path:
-    return eu.artifact_path(root / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
-
-
 def completed_runs_from_analysis_dirs(root: Path, output_root: Path) -> list[CompletedRun]:
     runs: list[CompletedRun] = []
     for manifest_path in sorted(output_root.glob("evaluation_*/provenance_manifest.json")):
@@ -199,10 +194,6 @@ def backend_values(raw_values: list[str] | None) -> list[str]:
     return result
 
 
-def backend_cache_dir(analysis_dir: Path, backend_label: str) -> Path:
-    return analysis_dir / f"acse_semantic_{eu.safe_identifier(backend_label)}"
-
-
 def existing_backend_manifests(output_root: Path) -> list[dict[str, Any]]:
     manifests: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str, str]] = set()
@@ -232,7 +223,7 @@ def sample_sort_key(row: dict[str, Any]) -> tuple[int, str]:
 def load_run_rows(root: Path, run: CompletedRun) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
     raw_rows = [
         row
-        for row in eu.read_jsonl(task2_raw_path(root, run.dataset_id, run.variant))
+        for row in eu.read_jsonl(eu.model_outputs_raw_path(root, run.dataset_id, run.variant))
         if str(row.get("run_id", "")) == run.run_id
         and str(row.get("model", "")) == run.model
         and str(row.get("task", "")) == "task2"
@@ -323,7 +314,7 @@ def compute_run_backend(
     force: bool,
 ) -> dict[str, Any]:
     backend_label, _ = eu.semantic_embedding_backend_label(embedding_backend, mlx_model_name)
-    output_dir = backend_cache_dir(run.analysis_dir, backend_label)
+    output_dir = eu.acse_semantic_cache_dir(run.analysis_dir, backend_label)
     manifest_path = output_dir / "manifest.json"
     if manifest_path.exists() and not force:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -365,7 +356,7 @@ def compute_run_backend(
         mlx_model_name,
         embedding_batch_size,
     )
-    output_dir = backend_cache_dir(run.analysis_dir, backend_label)
+    output_dir = eu.acse_semantic_cache_dir(run.analysis_dir, backend_label)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     deterministic_requirements = deterministic_requirement(raw_rows)
@@ -496,7 +487,7 @@ def compute_run_backend(
     ]
     manifest = {
         "status": "computed",
-        "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "created_at_utc": eu.utc_now_iso(),
         "dataset_id": run.dataset_id,
         "benchmark_variant": run.variant,
         "run_id": run.run_id,
@@ -583,11 +574,11 @@ def main() -> None:
             "stochastic_sample_rows": row["stochastic_sample_rows"],
             "embedding_shape": json.dumps(row["embedding_shape"]),
             "analysis_dir": row["analysis_dir"],
-            "artifact_dir": str(backend_cache_dir(Path(row["analysis_dir"]), row["embedding_backend"])),
+            "artifact_dir": str(eu.acse_semantic_cache_dir(Path(row["analysis_dir"]), row["embedding_backend"])),
         }
         for row in all_manifests
     ]
-    eu.write_csv_rows(output_root / "acse_semantic_artifact_manifest.csv", manifest_rows)
+    eu.write_csv_rows(output_root / eu.ACSE_SEMANTIC_MANIFEST_FILENAME, manifest_rows)
     (output_root / "acse_semantic_artifact_manifest.json").write_text(
         json.dumps(all_manifests, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

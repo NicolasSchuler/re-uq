@@ -12,16 +12,6 @@ import nbformat as nbf
 
 ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK_DIR = ROOT / "notebooks"
-NOTEBOOK_BUILDERS = [
-    ("00_prepare_data.ipynb", "notebook_00"),
-    ("01_build_modality_benchmark.ipynb", "notebook_01"),
-    ("02_pilot_local_llms.ipynb", "notebook_02"),
-    ("02b_weak_modality_robustness_probe.ipynb", "notebook_02b"),
-    ("03_run_experiments.ipynb", "notebook_03"),
-    ("03b_run_modality_verification.ipynb", "notebook_03b"),
-    ("04_compute_uq_and_metrics.ipynb", "notebook_04"),
-    ("05_analyze_and_export_results.ipynb", "notebook_05"),
-]
 
 
 def md(source: str) -> nbf.NotebookNode:
@@ -85,22 +75,19 @@ def write_notebook(name: str, cells: list[nbf.NotebookNode], notebook_dir: Path 
     nbf.write(notebook, path)
 
 
-def populate_notebooks(notebook_dir: Path = NOTEBOOK_DIR, *, dry_run: bool = False) -> list[Path]:
+def populate_notebooks(notebook_dir: Path = NOTEBOOK_DIR, *, dry_run: bool = False) -> None:
     """Generate all companion notebooks, optionally validating without writes."""
-    paths: list[Path] = []
-    for name, builder_name in NOTEBOOK_BUILDERS:
-        cells = globals()[builder_name]()
+    for name, builder in NOTEBOOK_BUILDERS:
+        cells = builder()
         path = notebook_dir / name
         # Exercise full notebook serialization even in dry-run mode so a reviewer
         # can probe the generator without rewriting tracked notebooks.
         nbf.writes(notebook_document(cells))
-        paths.append(path)
         if dry_run:
             print(f"Would write: {path}")
         else:
             write_notebook(name, cells, notebook_dir)
             print(f"Wrote: {path}")
-    return paths
 
 
 def notebook_00() -> list[nbf.NotebookNode]:
@@ -1633,6 +1620,18 @@ def notebook_05() -> list[nbf.NotebookNode]:
             """
         ),
     ]
+
+
+NOTEBOOK_BUILDERS = [
+    ("00_prepare_data.ipynb", notebook_00),
+    ("01_build_modality_benchmark.ipynb", notebook_01),
+    ("02_pilot_local_llms.ipynb", notebook_02),
+    ("02b_weak_modality_robustness_probe.ipynb", notebook_02b),
+    ("03_run_experiments.ipynb", notebook_03),
+    ("03b_run_modality_verification.ipynb", notebook_03b),
+    ("04_compute_uq_and_metrics.ipynb", notebook_04),
+    ("05_analyze_and_export_results.ipynb", notebook_05),
+]
 
 
 def main(argv: Sequence[str] | None = None) -> None:

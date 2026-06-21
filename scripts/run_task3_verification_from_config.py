@@ -22,19 +22,6 @@ except ModuleNotFoundError:  # pragma: no cover
     from scripts import eval_utils as eu
 
 
-def utc_now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def selected_values(values: list[str], requested: str | None, name: str) -> list[str]:
-    if not requested:
-        return values
-    normalized = eu.normalize_dataset_id(requested) if name == "dataset" else eu.normalize_benchmark_variant(requested)
-    if normalized not in values:
-        raise ValueError(f"Requested {name} {normalized!r} is not present in the run config.")
-    return [normalized]
-
-
 def source_run_prefix(variant: str) -> str:
     return "full" if variant == "must" else f"full-{variant}"
 
@@ -44,32 +31,6 @@ def task3_run_prefix(mode: str, variant: str, audit_mode: str = eu.OFFICIAL_TASK
     audit_suffix = "" if audit_mode == eu.OFFICIAL_TASK3_AUDIT_MODE else f"-{audit_mode.replace('_', '-')}"
     base = f"task3{audit_suffix}" if variant == "must" else f"task3{audit_suffix}-{variant}"
     return f"{base}-smoke" if mode == "smoke" else base
-
-
-def task3_raw_path(root: Path, dataset_id: str, variant: str) -> Path:
-    return eu.artifact_path(root / "data/processed/model_outputs_raw_task3_verification.jsonl", dataset_id, variant)
-
-
-def task3_registry_path(root: Path, dataset_id: str, variant: str) -> Path:
-    return eu.artifact_path(root / "data/processed/run_registry_task3_verification.csv", dataset_id, variant)
-
-
-def task3_progress_path(root: Path, dataset_id: str, variant: str) -> Path:
-    return eu.artifact_path(root / "data/processed/run_progress_live_task3_verification.csv", dataset_id, variant)
-
-
-def task3_events_path(root: Path, dataset_id: str, variant: str) -> Path:
-    return eu.artifact_path(root / "data/processed/run_events_task3_verification.jsonl", dataset_id, variant)
-
-
-def run_rows_for(rows: list[dict[str, Any]], run_id: str, model: str) -> list[dict[str, Any]]:
-    return [
-        row
-        for row in rows
-        if str(row.get("run_id", "")) == str(run_id)
-        and str(row.get("model", "")) == str(model)
-        and str(row.get("task", "")) == "task3"
-    ]
 
 
 def task3_prompt_path(root: Path, audit_mode: str) -> Path:
@@ -188,54 +149,33 @@ def main() -> None:
     root = eu.project_root()
     run_config = eu.load_run_config(args.config)
     profiles = eu.filter_run_profiles(run_config, profile_id=args.profile, model=args.model)
-    datasets = selected_values(list(run_config["datasets"]), args.dataset, "dataset")
-    variants = selected_values(list(run_config["benchmark_variants"]), args.variant, "variant")
-    logging_config = eu.normalize_run_logging_config(
-        run_config.get("logging"),
-        overrides={
-            "progress_every_records": args.progress_every_records,
-            "progress_every_seconds": args.progress_every_seconds,
-            "warn_after_records": args.warn_after_records,
-            "warn_parse_failure_rate": args.warn_parse_failure_rate,
-            "warn_request_error_rate": args.warn_request_error_rate,
-            "write_progress_csv": False if args.no_progress_artifacts else None,
-            "write_event_jsonl": False if args.no_progress_artifacts else None,
-        },
-    )
+    datasets = eu.selected_values(list(run_config["datasets"]), args.dataset, "dataset")
+    variants = eu.selected_values(list(run_config["benchmark_variants"]), args.variant, "variant")
+    logging_config = eu.logging_config_from_args(run_config, args)
     task3_template = eu.load_prompt(task3_prompt_path(root, audit_mode))
     completion_fn = fake_completion if args.fake_completion else eu.chat_completion
 
     for profile in profiles:
         eu.validate_manual_server_profile(profile)
         for model in profile["models"]:
-            preflight = eu.provider_preflight(
-                host=profile["base_url"],
+            preflight = eu.preflight_profile(
+                profile,
                 model=model,
-                api_key_env=profile["api_key_env"],
-                timeout_s=int(profile["timeout_s"]),
                 prompt_version=run_config["prompt_version"],
-                json_mode=bool(profile["json_mode"]),
-                structured_output=str(profile.get("structured_output", "none")),
-                response_format=profile.get("response_format"),
-                extra_body=profile.get("extra_body"),
-                instructor_mode=str(profile.get("instructor_mode", "json")),
-                validation_retries=int(profile.get("validation_retries", 2)),
                 completion_fn=completion_fn,
             )
-            if not preflight["ok"]:
-                raise RuntimeError(f"Provider preflight failed for {profile['profile_id']} / {model}: {preflight}")
 
             for dataset_id in datasets:
                 for variant in variants:
                     prefix = task3_run_prefix(args.mode, variant, audit_mode)
                     run_id = args.run_id or eu.new_run_id(prefix)
-                    started_at = utc_now()
+                    started_at = eu.utc_now_iso()
                     benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
-                    source_raw_path = eu.artifact_path(root / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
-                    output_path = task3_raw_path(root, dataset_id, variant)
-                    registry_path = task3_registry_path(root, dataset_id, variant)
-                    progress_path = task3_progress_path(root, dataset_id, variant)
-                    events_path = task3_events_path(root, dataset_id, variant)
+                    source_raw_path = eu.model_outputs_raw_path(root, dataset_id, variant)
+                    output_path = eu.task3_raw_path(root, dataset_id, variant)
+                    registry_path = eu.task3_registry_path(root, dataset_id, variant)
+                    progress_path = eu.task3_progress_path(root, dataset_id, variant)
+                    events_path = eu.task3_events_path(root, dataset_id, variant)
 
                     benchmark = eu.read_csv_rows(benchmark_path)
                     source_run_id, source_rows = eu.select_run_rows(
@@ -276,71 +216,31 @@ def main() -> None:
                         all_task3_items[: max(1, args.smoke_items)] if args.mode == "smoke" else all_task3_items
                     )
 
-                    jobs: list[dict[str, Any]] = []
                     stochastic_samples = int(run_config["stochastic"]["samples"])
-                    for item in task3_items_for_run:
-                        prompt = task3_prompt_for(task3_template, item, audit_mode=audit_mode)
-                        jobs.append(
-                            eu.completion_request_job(
-                                item=item,
-                                task="task3",
-                                model=model,
-                                host=profile["base_url"],
-                                run_id=run_id,
-                                sample_kind="deterministic",
-                                sample_index=0,
-                                temperature=float(run_config["deterministic"]["temperature"]),
-                                top_p=float(run_config["deterministic"]["top_p"]),
-                                prompt=prompt,
-                                prompt_version=f"{run_config['prompt_version']}:task3:{audit_mode}",
-                                max_tokens=int(profile["max_tokens"]),
-                                timeout_s=int(profile["timeout_s"]),
-                                api_key_env=profile["api_key_env"],
-                                request_index=len(jobs),
-                                provider_id=profile["provider_id"],
-                                profile_id=profile["profile_id"],
-                                run_group_id=run_config["run_group_id"],
-                                json_mode=bool(profile["json_mode"]),
-                                structured_output=str(profile.get("structured_output", "none")),
-                                response_format=profile.get("response_format"),
-                                extra_body=profile.get("extra_body"),
-                                instructor_mode=str(profile.get("instructor_mode", "json")),
-                                validation_retries=int(profile.get("validation_retries", 2)),
-                                fallback_batch_size=int(profile.get("fallback_batch_size", 1)),
-                                server_model_probe=preflight,
-                            )
-                        )
-                        for sample_index in range(stochastic_samples):
-                            jobs.append(
-                                eu.completion_request_job(
-                                    item=item,
-                                    task="task3",
-                                    model=model,
-                                    host=profile["base_url"],
-                                    run_id=run_id,
-                                    sample_kind="stochastic",
-                                    sample_index=sample_index,
-                                    temperature=float(run_config["stochastic"]["temperature"]),
-                                    top_p=float(run_config["stochastic"]["top_p"]),
-                                    prompt=prompt,
-                                    prompt_version=f"{run_config['prompt_version']}:task3:{audit_mode}",
-                                    max_tokens=int(profile["max_tokens"]),
-                                    timeout_s=int(profile["timeout_s"]),
-                                    api_key_env=profile["api_key_env"],
-                                    request_index=len(jobs),
-                                    provider_id=profile["provider_id"],
-                                    profile_id=profile["profile_id"],
-                                    run_group_id=run_config["run_group_id"],
-                                    json_mode=bool(profile["json_mode"]),
-                                    structured_output=str(profile.get("structured_output", "none")),
-                                    response_format=profile.get("response_format"),
-                                    extra_body=profile.get("extra_body"),
-                                    instructor_mode=str(profile.get("instructor_mode", "json")),
-                                    validation_retries=int(profile.get("validation_retries", 2)),
-                                    fallback_batch_size=int(profile.get("fallback_batch_size", 1)),
-                                    server_model_probe=preflight,
-                                )
-                            )
+                    jobs = eu.planned_completion_jobs_for_items(
+                        task3_items_for_run,
+                        prompt_fn=lambda item: task3_prompt_for(task3_template, item, audit_mode=audit_mode),
+                        prompt_version=f"{run_config['prompt_version']}:task3:{audit_mode}",
+                        model=model,
+                        host=profile["base_url"],
+                        run_id=run_id,
+                        deterministic=run_config["deterministic"],
+                        stochastic=run_config["stochastic"],
+                        max_tokens=int(profile["max_tokens"]),
+                        timeout_s=int(profile["timeout_s"]),
+                        api_key_env=profile["api_key_env"],
+                        provider_id=profile["provider_id"],
+                        profile_id=profile["profile_id"],
+                        run_group_id=run_config["run_group_id"],
+                        json_mode=bool(profile["json_mode"]),
+                        structured_output=str(profile.get("structured_output", "none")),
+                        response_format=profile.get("response_format"),
+                        extra_body=profile.get("extra_body"),
+                        instructor_mode=str(profile.get("instructor_mode", "json")),
+                        validation_retries=int(profile.get("validation_retries", 2)),
+                        fallback_batch_size=int(profile.get("fallback_batch_size", 1)),
+                        server_model_probe=preflight,
+                    )
 
                     existing_rows = eu.read_jsonl(output_path)
                     pending_jobs = eu.pending_completion_jobs(jobs, existing_rows, run_id)
@@ -350,7 +250,7 @@ def main() -> None:
                     emitted_warning_types: set[str] = set()
 
                     def refresh_live_progress(event_type: str, finished_at_utc: str = "", print_line: bool = True) -> dict[str, Any]:
-                        run_rows = run_rows_for(current_rows, run_id, model)
+                        run_rows = eu.select_model_run_rows(current_rows, run_id, model, ("task3",))
                         pending_jobs_now = eu.pending_completion_jobs(jobs, current_rows, run_id)
                         pending_api_calls_now = len(eu.completion_job_batches(pending_jobs_now, int(profile["batch_size"])))
                         status = "running" if event_type in {"start", "progress"} and pending_jobs_now else None
@@ -495,22 +395,21 @@ def main() -> None:
                             counters = refresh_live_progress("progress")
                             last_progress_record_index = index
                             last_progress_monotonic = now_monotonic
-                            for warning_event in eu.warning_events_for_counters(counters, logging_config, emitted_warning_types):
-                                emitted_warning_types.add(str(warning_event["warning_type"]))
-                                warning_event.update(
-                                    {
-                                        "run_id": run_id,
-                                        "run_group_id": run_config["run_group_id"],
-                                        "dataset_id": dataset_id,
-                                        "benchmark_variant": variant,
-                                        "provider_id": profile["provider_id"],
-                                        "profile_id": profile["profile_id"],
-                                        "model": model,
-                                    }
-                                )
-                                if logging_config["write_event_jsonl"]:
-                                    eu.append_run_event(events_path, warning_event)
-                                print(f"WARNING {run_id}: {warning_event['message']}", flush=True)
+                            eu.emit_warning_events(
+                                counters,
+                                logging_config=logging_config,
+                                emitted_warning_types=emitted_warning_types,
+                                context={
+                                    "run_id": run_id,
+                                    "run_group_id": run_config["run_group_id"],
+                                    "dataset_id": dataset_id,
+                                    "benchmark_variant": variant,
+                                    "provider_id": profile["provider_id"],
+                                    "profile_id": profile["profile_id"],
+                                    "model": model,
+                                },
+                                events_path=events_path,
+                            )
 
                     finish_row = eu.run_registry_summary(
                         task3_items_for_run,
@@ -525,7 +424,7 @@ def main() -> None:
                         tasks=["task3"],
                         expected_stochastic_samples=stochastic_samples,
                         started_at_utc=started_at,
-                        finished_at_utc=utc_now(),
+                        finished_at_utc=eu.utc_now_iso(),
                         base_url=profile["base_url"],
                         api_key_env=profile["api_key_env"],
                         concurrency=profile["concurrency"],

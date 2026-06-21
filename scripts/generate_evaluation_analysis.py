@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import time
+from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -51,14 +51,6 @@ PAPER_RESULT_FIELDS = [
     "evidence_phrase_source_rate",
     "parse_failure_rate",
 ]
-
-
-def task3_raw_path(root: Path, dataset_id: str, variant: str) -> Path:
-    return eu.artifact_path(root / "data/processed/model_outputs_raw_task3_verification.jsonl", dataset_id, variant)
-
-
-def task3_registry_path(root: Path, dataset_id: str, variant: str) -> Path:
-    return eu.artifact_path(root / "data/processed/run_registry_task3_verification.csv", dataset_id, variant)
 
 
 def task3_audit_modes_in_rows(rows: list[dict[str, Any]]) -> set[str]:
@@ -124,11 +116,7 @@ def load_task3_items_for_analysis(
 
 
 def parse_status_counts(rows: Iterable[dict[str, Any]]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for row in rows:
-        status = str(row.get("parse_status", ""))
-        counts[status] = counts.get(status, 0) + 1
-    return counts
+    return dict(Counter(str(row.get("parse_status", "")) for row in rows))
 
 
 def parse_failure_rate(rows: list[dict[str, Any]]) -> float:
@@ -279,11 +267,11 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
-    raw_path = eu.artifact_path(root / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
+    raw_path = eu.model_outputs_raw_path(root, dataset_id, variant)
     registry_path = eu.run_registry_path(root, dataset_id, variant)
     construct_review_path = root / "docs/weak_modality_construct_review.csv"
     task3_legacy_items_path = eu.artifact_path(root / "data/processed/task3_verification_items.csv", dataset_id, variant)
-    task3_path = task3_raw_path(root, dataset_id, variant)
+    task3_path = eu.task3_raw_path(root, dataset_id, variant)
     task3_audit_mode = eu.normalize_task3_audit_mode(args.task3_audit_mode)
 
     benchmark = eu.read_csv_rows(benchmark_path)
@@ -342,7 +330,7 @@ def main() -> None:
                 "new Task 3 rows should contain item provenance, or the run-specific item CSV must exist."
             )
         if not args.skip_registry_check:
-            require_registry_complete(task3_registry_path(root, dataset_id, variant), args.task3_run_id, model=args.model, profile_id=args.profile)
+            require_registry_complete(eu.task3_registry_path(root, dataset_id, variant), args.task3_run_id, model=args.model, profile_id=args.profile)
         require_parse_quality("Task 3 run", task3_rows, args.max_parse_failure_rate)
         require_probability_confidence("Task 3 run", task3_rows)
 
@@ -408,7 +396,7 @@ def main() -> None:
     write_result_notes_template(output_dir / "result_notes_template.md")
 
     provenance = {
-        "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "created_at_utc": eu.utc_now_iso(),
         "dataset_id": dataset_id,
         "benchmark_variant": variant,
         "run_id": args.run_id,

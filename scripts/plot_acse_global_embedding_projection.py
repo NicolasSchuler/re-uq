@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import tempfile
@@ -50,21 +49,16 @@ DRIFT_COLORS = {
 }
 
 
-def truthy(value: Any) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes"}
-
-
 def drift_status(row: dict[str, str]) -> str:
-    if truthy(row.get("strict_text_overcommit", "")):
+    if eu.is_truthy_strict(row.get("strict_text_overcommit", "")):
         return "strict_text_oc"
-    if truthy(row.get("text_overcommit", "")):
+    if eu.is_truthy_strict(row.get("text_overcommit", "")):
         return "broad_text_oc"
     return "clean"
 
 
 def read_csv_by_key(path: Path, key: str) -> dict[str, dict[str, str]]:
-    with path.open(newline="", encoding="utf-8") as handle:
-        return {row[key]: row for row in csv.DictReader(handle)}
+    return {row[key]: row for row in eu.read_csv_rows(path)}
 
 
 def is_tfidf_backend(backend_label: str) -> bool:
@@ -72,12 +66,11 @@ def is_tfidf_backend(backend_label: str) -> bool:
 
 
 def manifest_rows(path: Path, backend_prefix: str) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8") as handle:
-        rows = [
-            row
-            for row in csv.DictReader(handle)
-            if str(row.get("embedding_backend", "")).startswith(backend_prefix)
-        ]
+    rows = [
+        row
+        for row in eu.read_csv_rows(path)
+        if str(row.get("embedding_backend", "")).startswith(backend_prefix)
+    ]
     if not rows:
         raise ValueError(f"No manifest rows found for backend prefix {backend_prefix!r} in {path}.")
     return rows
@@ -99,8 +92,7 @@ def load_embeddings_and_rows(rows: list[dict[str, str]]) -> tuple[np.ndarray, li
             raise FileNotFoundError("Incomplete ACSE cache: " + ", ".join(str(path) for path in missing))
 
         embeddings = np.load(embeddings_path, allow_pickle=False)["embeddings"].astype(np.float32, copy=False)
-        with samples_path.open(newline="", encoding="utf-8") as handle:
-            samples = list(csv.DictReader(handle))
+        samples = eu.read_csv_rows(samples_path)
         if embeddings.shape[0] != len(samples):
             raise ValueError(f"Embedding/sample row mismatch in {artifact_dir}: {embeddings.shape[0]} != {len(samples)}")
         backend_label = str(manifest_row.get("embedding_backend", ""))
@@ -207,7 +199,7 @@ def plot_grouped_3d(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create a global 3D projection over cached ACSE sample embeddings.")
-    parser.add_argument("--manifest", type=Path, default=Path("outputs/acse_semantic_artifact_manifest.csv"))
+    parser.add_argument("--manifest", type=Path, default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME)
     parser.add_argument("--backend-prefix", default="mlx:")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--method", choices=["pca", "tsne"], default="pca")

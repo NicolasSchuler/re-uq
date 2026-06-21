@@ -143,7 +143,7 @@ def main() -> None:
                 exclude_model_prefixes=args.exclude_model_prefix,
             )
             benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
-            raw_path = eu.artifact_path(root / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
+            raw_path = eu.model_outputs_raw_path(root, dataset_id, variant)
             benchmark = eu.read_csv_rows(benchmark_path)
             all_raw_rows = eu.read_jsonl(raw_path)
             summary_rows: list[dict[str, Any]] = []

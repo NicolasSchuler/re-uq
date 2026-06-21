@@ -28,7 +28,7 @@ class StrictResponseModel(BaseModel):
     @field_validator("confidence", check_fields=False, mode="before")
     @classmethod
     def reject_non_numeric_confidence(cls, value: Any) -> Any:
-        if isinstance(value, bool) or isinstance(value, str):
+        if isinstance(value, (bool, str)):
             raise ValueError("confidence must be a numeric decimal from 0.0 to 1.0")
         return value
 

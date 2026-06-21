@@ -8,6 +8,13 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+from pydantic import ValidationError
+
+try:
+    from conftest import raw_record
+except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
+    from tests.conftest import raw_record
+
 from scripts import eval_utils as eu
 from scripts import compare_run_matrix as compare_matrix
 from scripts import evaluate_external_ai_probe as external_eval
@@ -19,8 +26,40 @@ from scripts import show_run_progress
 from scripts import structured_outputs as so
 
 
+def export_report_seeds():
+    """Return the canonical single ``export reports`` seed row as a fresh list."""
+    return [
+        {
+            "seed_id": "S0001",
+            "source_dataset": "NICE",
+            "original_requirement": "The system shall export reports.",
+            "capability_text_final": "export reports",
+        }
+    ]
+
+
+def _scaffold_project_root(root, *, with_prompts=True):
+    """Create the standard temp-project layout used by CLI integration tests."""
+    if with_prompts:
+        (root / "prompts").mkdir(parents=True)
+    (root / "data/processed").mkdir(parents=True)
+    (root / "AGENTS.md").write_text("", encoding="utf-8")
+    (root / "docs").mkdir()
+    (root / "docs/evaluation.md").write_text("", encoding="utf-8")
+
+
 class EvalUtilsTest(unittest.TestCase):
-    def _instructor_task1_jobs(self, seed_count=1):
+    _INSTRUCTOR_EXTRA_BODY_DEFAULT = object()
+
+    def _instructor_task1_jobs(
+        self,
+        seed_count=1,
+        *,
+        extra_body=_INSTRUCTOR_EXTRA_BODY_DEFAULT,
+        validation_retries=3,
+    ):
+        if extra_body is self._INSTRUCTOR_EXTRA_BODY_DEFAULT:
+            extra_body = {"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}}
         seeds = [
             {
                 "seed_id": f"S{index + 1:04d}",
@@ -47,19 +86,12 @@ class EvalUtilsTest(unittest.TestCase):
             timeout_s=30,
             api_key_env="LOCAL_OPENAI_API_KEY",
             structured_output="instructor",
-            extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
-            validation_retries=3,
+            extra_body=extra_body,
+            validation_retries=validation_retries,
         )
 
     def test_benchmark_labels(self):
-        seeds = [
-            {
-                "seed_id": "S0001",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall export reports.",
-                "capability_text_final": "export reports",
-            }
-        ]
+        seeds = export_report_seeds()
         items = eu.build_benchmark_items(seeds)
         self.assertEqual(len(items), 4)
         by_modality = {row["source_modality"]: row for row in items}
@@ -69,14 +101,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertGreater(by_modality["mandatory"]["ordinal_strength"], by_modality["nice_to_have"]["ordinal_strength"])
 
     def test_benchmark_statement_review_export(self):
-        seeds = [
-            {
-                "seed_id": "S0001",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall export reports.",
-                "capability_text_final": "export reports",
-            }
-        ]
+        seeds = export_report_seeds()
         benchmark = eu.build_benchmark_items(seeds)
         with tempfile.TemporaryDirectory() as tmpdir:
             export_paths = eu.write_benchmark_statement_review(benchmark, tmpdir)
@@ -89,14 +114,7 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertTrue(export_paths["csv"].exists())
 
     def test_shall_benchmark_uses_shall_but_keeps_labels(self):
-        seeds = [
-            {
-                "seed_id": "S0001",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall export reports.",
-                "capability_text_final": "export reports",
-            }
-        ]
+        seeds = export_report_seeds()
         items = eu.build_benchmark_items(seeds, mandatory_keyword="SHALL")
         self.assertEqual(len(items), 4)
         self.assertEqual(len({row["item_id"] for row in items}), 4)
@@ -188,7 +206,7 @@ class EvalUtilsTest(unittest.TestCase):
 
         for text, expected in cases:
             with self.subTest(text=text):
-                self.assertEqual(eu.requirement_text_modality(text), expected)
+                self.assertEqual(eu.requirement_text_modality_diagnostic(text)["text_modality"], expected)
 
         self.assertEqual(
             eu.requirement_text_modality_diagnostic("The system SHOULD export reports.")["text_modality_basis"],
@@ -251,14 +269,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_rule_baseline_scores_are_perfect_on_controlled_benchmark(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         scores = eu.build_rule_baseline_scores(benchmark)
         summary = eu.metric_summary_by_model_task_method(scores)
@@ -283,7 +294,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(parsed.confidence, 0.95)
         for bad_confidence in ["0.95", -0.1, 1.1, 95]:
             with self.subTest(confidence=bad_confidence):
-                with self.assertRaises(Exception):
+                with self.assertRaises(ValidationError):
                     so.Task2Response.model_validate(
                         {
                             "requirement": "The system MAY export reports.",
@@ -325,14 +336,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_v2_raw_records_mark_probability_confidence_for_non_instructor_runs(self):
         item = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )[0]
 
         record = eu.build_raw_record(
@@ -363,14 +367,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_raw_records_infer_probability_scale_from_prompt_contract(self):
         item = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )[0]
 
         record = eu.build_raw_record(
@@ -400,14 +397,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_v2_raw_records_reject_percentage_confidence_without_legacy_marker(self):
         item = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )[0]
 
         record = eu.build_raw_record(
@@ -435,14 +425,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_task1_selected_label_confidence_sets_p_yes_for_yes_and_no(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         item_by_modality = {row["source_modality"]: row for row in benchmark}
         raw_rows = [
@@ -926,8 +909,7 @@ class EvalUtilsTest(unittest.TestCase):
         ]
         diagnostics = eu.monotonicity_violation_diagnostics(rows)
 
-        self.assertEqual(eu.monotonicity_violation_rate(rows), 1 / 3)
-        self.assertEqual(eu.monotonicity_violation_rate(rows, tolerance=0.0), 2 / 3)
+        self.assertEqual(eu.monotonicity_violation_diagnostics(rows, tolerance=0.0)["monotonicity_violations"], 2 / 3)
         self.assertEqual(diagnostics["monotonicity_violations"], 1 / 3)
         self.assertEqual(diagnostics["monotonicity_strict_violations"], 2 / 3)
         self.assertEqual(diagnostics["monotonicity_tolerance"], eu.MONOTONICITY_TOLERANCE)
@@ -950,14 +932,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_task2_prompt_sensitivity_summary_counts_nice_to_have_upgrade(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
         raw_rows = [
@@ -993,14 +968,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(by_model["m1:labels_only"]["over_commitment"], 0.0)
 
     def test_weak_modality_probe_summary_counts_overcommitment(self):
-        seeds = [
-            {
-                "seed_id": "S0001",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall export reports.",
-                "capability_text_final": "export reports",
-            }
-        ]
+        seeds = export_report_seeds()
         items = eu.build_weak_modality_probe_items(seeds)
         item = [row for row in items if row["template_id"] == "useful_if"][0]
         raw_record = eu.build_raw_record(
@@ -1035,14 +1003,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(summary[0]["high_conf_overcommit_90"], 1.0)
 
     def test_weak_modality_probe_summary_uses_instructor_confidence_scale(self):
-        seeds = [
-            {
-                "seed_id": "S0001",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall export reports.",
-                "capability_text_final": "export reports",
-            }
-        ]
+        seeds = export_report_seeds()
         items = eu.build_weak_modality_probe_items(seeds)
         item = [row for row in items if row["template_id"] == "useful_if"][0]
         raw_record = {
@@ -1071,14 +1032,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_qualitative_examples_sorted_by_risk(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         optional_item = [row for row in benchmark if row["source_modality"] == "optional"][0]
         nice_item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
@@ -1112,38 +1066,17 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_build_uq_scores_and_summary(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         raw_rows = []
         for item in benchmark:
             decision = "yes" if item["source_modality"] == "mandatory" else "no"
             raw_rows.append(
-                {
-                    "run_id": "r1",
-                    "model": "m1",
-                    "host": "http://localhost:8000/v1",
-                    "task": "task1",
-                    "item_id": item["item_id"],
-                    "seed_id": item["seed_id"],
-                    "source_modality": item["source_modality"],
-                    "sample_index": 0,
-                    "sample_kind": "deterministic",
-                    "temperature": 0.0,
-                    "top_p": 1.0,
-                    "prompt_version": "v1",
-                    "raw_text": "",
-                    "parsed_json": {"decision": decision, "confidence": 90.0, "brief_reason": ""},
-                    "parse_status": "ok",
-                    "latency_s": 0.1,
-                    "error": "",
-                }
+                raw_record(
+                    item,
+                    task="task1",
+                    parsed_json={"decision": decision, "confidence": 90.0, "brief_reason": ""},
+                )
             )
         scores = eu.build_uq_scores(benchmark, raw_rows)
         summary = eu.metric_summary_by_model_task_method(scores)
@@ -1193,14 +1126,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_build_task3_items_scores_and_summary(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         source_item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
         task2_raw = [
@@ -1453,36 +1379,15 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_task2_deterministic_scores_include_text_modality_fields(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         optional_item = [row for row in benchmark if row["source_modality"] == "optional"][0]
         raw_rows = [
-            {
-                "run_id": "r1",
-                "model": "m1",
-                "host": "http://localhost:8000/v1",
-                "task": "task2",
-                "item_id": optional_item["item_id"],
-                "seed_id": optional_item["seed_id"],
-                "source_modality": optional_item["source_modality"],
-                "sample_index": 0,
-                "sample_kind": "deterministic",
-                "temperature": 0.0,
-                "top_p": 1.0,
-                "prompt_version": "v1",
-                "raw_text": "",
-                "parsed_json": {"requirement": "The system SHALL export reports.", "modality": "optional", "confidence": 98.0},
-                "parse_status": "ok",
-                "latency_s": 0.1,
-                "error": "",
-            }
+            raw_record(
+                optional_item,
+                task="task2",
+                parsed_json={"requirement": "The system SHALL export reports.", "modality": "optional", "confidence": 98.0},
+            )
         ]
 
         scores = eu.build_uq_scores(benchmark, raw_rows)
@@ -1716,14 +1621,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_stochastic_uq_scores(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         item = benchmark[0]
         raw_rows = [
@@ -1765,14 +1663,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_stochastic_parse_failures_are_retained_in_score_counts(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         item = benchmark[0]
         raw_rows = [
@@ -1807,38 +1698,18 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_ensemble_disagreement_scores_task1(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         item = benchmark[0]
         raw_rows = []
         for model, decision in [("m1", "yes"), ("m2", "no")]:
             raw_rows.append(
-                {
-                    "run_id": "r1",
-                    "model": model,
-                    "host": "http://localhost:8000/v1",
-                    "task": "task1",
-                    "item_id": item["item_id"],
-                    "seed_id": item["seed_id"],
-                    "source_modality": item["source_modality"],
-                    "sample_index": 0,
-                    "sample_kind": "deterministic",
-                    "temperature": 0.0,
-                    "top_p": 1.0,
-                    "prompt_version": "v1",
-                    "raw_text": "",
-                    "parsed_json": {"decision": decision, "confidence": 80.0, "brief_reason": ""},
-                    "parse_status": "ok",
-                    "latency_s": 0.1,
-                    "error": "",
-                }
+                raw_record(
+                    item,
+                    task="task1",
+                    parsed_json={"decision": decision, "confidence": 80.0, "brief_reason": ""},
+                    model=model,
+                )
             )
 
         scores = eu.build_uq_scores(benchmark, raw_rows)
@@ -1852,38 +1723,18 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_ensemble_disagreement_scores_task2(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         item = benchmark[2]
         raw_rows = []
         for model, modality in [("m1", "optional"), ("m2", "mandatory"), ("m3", "mandatory")]:
             raw_rows.append(
-                {
-                    "run_id": "r1",
-                    "model": model,
-                    "host": "http://localhost:8000/v1",
-                    "task": "task2",
-                    "item_id": item["item_id"],
-                    "seed_id": item["seed_id"],
-                    "source_modality": item["source_modality"],
-                    "sample_index": 0,
-                    "sample_kind": "deterministic",
-                    "temperature": 0.0,
-                    "top_p": 1.0,
-                    "prompt_version": "v1",
-                    "raw_text": "",
-                    "parsed_json": {"requirement": "The system MUST export reports.", "modality": modality, "confidence": 80.0},
-                    "parse_status": "ok",
-                    "latency_s": 0.1,
-                    "error": "",
-                }
+                raw_record(
+                    item,
+                    task="task2",
+                    parsed_json={"requirement": "The system MUST export reports.", "modality": modality, "confidence": 80.0},
+                    model=model,
+                )
             )
 
         scores = eu.build_uq_scores(benchmark, raw_rows)
@@ -1963,7 +1814,7 @@ class EvalUtilsTest(unittest.TestCase):
 
         tokens = eu.response_logprob_tokens(response_json)
 
-        self.assertTrue(eu.completion_has_logprobs(response_json))
+        self.assertTrue(tokens)
         self.assertEqual(tokens[0]["token"], " yes")
         self.assertEqual(tokens[0]["logprob"], -0.1)
 
@@ -1987,7 +1838,7 @@ class EvalUtilsTest(unittest.TestCase):
 
         tokens = eu.response_logprob_tokens(response_json)
 
-        self.assertTrue(eu.completion_has_logprobs(response_json))
+        self.assertTrue(tokens)
         self.assertEqual(eu.responses_output_text(response_json), "yes")
         self.assertEqual(tokens[0]["token"], "yes")
         self.assertEqual(tokens[0]["top_logprobs"][0]["token"], "no")
@@ -2093,14 +1944,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertFalse(logging_config["write_event_jsonl"])
 
     def test_provider_request_metadata_and_extra_body_are_preserved(self):
-        seeds = [
-            {
-                "seed_id": "S0001",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall export reports.",
-                "capability_text_final": "export reports",
-            }
-        ]
+        seeds = export_report_seeds()
         benchmark = eu.build_benchmark_items(seeds)
         captured = {}
         jobs = eu.planned_completion_jobs(
@@ -2220,14 +2064,7 @@ class EvalUtilsTest(unittest.TestCase):
                 "json_schema": True,
             }
         )
-        seeds = [
-            {
-                "seed_id": "S0001",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall export reports.",
-                "capability_text_final": "export reports",
-            }
-        ]
+        seeds = export_report_seeds()
         benchmark = eu.build_benchmark_items(seeds)
         jobs = eu.planned_completion_jobs(
             benchmark[:1],
@@ -2436,33 +2273,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertIn("confidence", result["raw_text"])
 
     def test_instructor_single_item_writes_validated_contract_markers(self):
-        benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
-        )
-        jobs = eu.planned_completion_jobs(
-            benchmark[:1],
-            tasks=["task1"],
-            model="m1",
-            host="http://localhost:1234/v1",
-            run_id="full-1",
-            prompt_version="v2-instructor-conf01",
-            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
-            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
-            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
-            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
-            max_tokens=64,
-            timeout_s=30,
-            api_key_env="LOCAL_OPENAI_API_KEY",
-            structured_output="instructor",
-            extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
-        )
+        jobs = self._instructor_task1_jobs(seed_count=1, validation_retries=2)
         captured = {}
 
         def fake_completion(**kwargs):
@@ -2486,37 +2297,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(record["confidence_scale"], so.INSTRUCTOR_CONFIDENCE_SCALE)
 
     def test_instructor_batch_partial_results_fall_back_unbatched(self):
-        seeds = [
-            {
-                "seed_id": "S0001",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall export reports.",
-                "capability_text_final": "export reports",
-            },
-            {
-                "seed_id": "S0002",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall print invoices.",
-                "capability_text_final": "print invoices",
-            },
-        ]
-        benchmark = eu.build_benchmark_items(seeds)
-        jobs = eu.planned_completion_jobs(
-            [row for row in benchmark if row["source_modality"] == "mandatory"],
-            tasks=["task1"],
-            model="m1",
-            host="http://localhost:1234/v1",
-            run_id="full-1",
-            prompt_version="v2-instructor-conf01",
-            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
-            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
-            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
-            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
-            max_tokens=64,
-            timeout_s=30,
-            api_key_env="LOCAL_OPENAI_API_KEY",
-            structured_output="instructor",
-        )
+        jobs = self._instructor_task1_jobs(seed_count=2, extra_body=None, validation_retries=2)
         calls = []
 
         def fake_completion(**kwargs):
@@ -2731,32 +2512,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs))
 
     def test_instructor_failed_fallback_stays_pending(self):
-        benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
-        )
-        jobs = eu.planned_completion_jobs(
-            benchmark[:1],
-            tasks=["task1"],
-            model="m1",
-            host="http://localhost:1234/v1",
-            run_id="full-1",
-            prompt_version="v2-instructor-conf01",
-            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
-            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
-            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
-            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
-            max_tokens=64,
-            timeout_s=30,
-            api_key_env="LOCAL_OPENAI_API_KEY",
-            structured_output="instructor",
-        )
+        jobs = self._instructor_task1_jobs(seed_count=1, extra_body=None, validation_retries=2)
 
         def fake_completion(**kwargs):
             return {
@@ -2908,14 +2664,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_run_registry_summary_and_upsert(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )[:1]
         raw_rows = []
         for task in ["task1", "task2"]:
@@ -3006,14 +2755,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_run_group_ensemble_disagreement_across_run_ids(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         item = benchmark[0]
         raw_rows = [
@@ -3088,11 +2830,7 @@ class EvalUtilsTest(unittest.TestCase):
     def test_fake_cli_smoke_writes_canonical_jsonl_and_registry(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            (root / "prompts").mkdir(parents=True)
-            (root / "data/processed").mkdir(parents=True)
-            (root / "AGENTS.md").write_text("", encoding="utf-8")
-            (root / "docs").mkdir()
-            (root / "docs/evaluation.md").write_text("", encoding="utf-8")
+            _scaffold_project_root(root)
             (root / "prompts/mandatory_entailment.txt").write_text(
                 Path("prompts/mandatory_entailment.txt").read_text(encoding="utf-8"),
                 encoding="utf-8",
@@ -3182,11 +2920,7 @@ class EvalUtilsTest(unittest.TestCase):
     def test_task3_cli_fake_run_writes_diagnostic_outputs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            (root / "prompts").mkdir(parents=True)
-            (root / "data/processed").mkdir(parents=True)
-            (root / "AGENTS.md").write_text("", encoding="utf-8")
-            (root / "docs").mkdir()
-            (root / "docs/evaluation.md").write_text("", encoding="utf-8")
+            _scaffold_project_root(root)
             (root / "prompts/modality_verification.txt").write_text(
                 Path("prompts/modality_verification.txt").read_text(encoding="utf-8"),
                 encoding="utf-8",
@@ -3329,14 +3063,7 @@ class EvalUtilsTest(unittest.TestCase):
                 fieldnames=eu.WEAK_MODALITY_CONSTRUCT_REVIEW_FIELDS,
             )
             benchmark = eu.build_benchmark_items(
-                [
-                    {
-                        "seed_id": "S0001",
-                        "source_dataset": "NICE",
-                        "original_requirement": "The system shall export reports.",
-                        "capability_text_final": "export reports",
-                    }
-                ]
+                export_report_seeds()
             )
             eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
             task1_template = eu.load_prompt(root / "prompts/mandatory_entailment.txt")
@@ -3443,19 +3170,9 @@ class EvalUtilsTest(unittest.TestCase):
     def test_show_run_progress_reads_outputs_without_mutation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            (root / "data/processed").mkdir(parents=True)
-            (root / "AGENTS.md").write_text("", encoding="utf-8")
-            (root / "docs").mkdir()
-            (root / "docs/evaluation.md").write_text("", encoding="utf-8")
+            _scaffold_project_root(root, with_prompts=False)
             benchmark = eu.build_benchmark_items(
-                [
-                    {
-                        "seed_id": "S0001",
-                        "source_dataset": "NICE",
-                        "original_requirement": "The system shall export reports.",
-                        "capability_text_final": "export reports",
-                    }
-                ]
+                export_report_seeds()
             )[:1]
             eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
             raw_rows = [
@@ -3504,19 +3221,9 @@ class EvalUtilsTest(unittest.TestCase):
     def test_show_run_progress_requires_disambiguation_for_reused_run_id(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            (root / "data/processed").mkdir(parents=True)
-            (root / "AGENTS.md").write_text("", encoding="utf-8")
-            (root / "docs").mkdir()
-            (root / "docs/evaluation.md").write_text("", encoding="utf-8")
+            _scaffold_project_root(root, with_prompts=False)
             benchmark = eu.build_benchmark_items(
-                [
-                    {
-                        "seed_id": "S0001",
-                        "source_dataset": "NICE",
-                        "original_requirement": "The system shall export reports.",
-                        "capability_text_final": "export reports",
-                    }
-                ]
+                export_report_seeds()
             )[:1]
             eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
             raw_rows = [
@@ -3660,14 +3367,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_run_progress_summary_for_partial_outputs(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         item = benchmark[0]
         raw_rows = [
@@ -3724,14 +3424,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_run_progress_summary_ignores_rows_for_removed_benchmark_items(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         raw_rows = [
             {
@@ -3751,36 +3444,15 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_write_preliminary_result_snapshot(self):
         benchmark = eu.build_benchmark_items(
-            [
-                {
-                    "seed_id": "S0001",
-                    "source_dataset": "NICE",
-                    "original_requirement": "The system shall export reports.",
-                    "capability_text_final": "export reports",
-                }
-            ]
+            export_report_seeds()
         )
         item = benchmark[0]
         raw_rows = [
-            {
-                "run_id": "r1",
-                "model": "m1",
-                "host": "http://localhost:8000/v1",
-                "task": "task1",
-                "item_id": item["item_id"],
-                "seed_id": item["seed_id"],
-                "source_modality": item["source_modality"],
-                "sample_index": 0,
-                "sample_kind": "deterministic",
-                "temperature": 0.0,
-                "top_p": 1.0,
-                "prompt_version": "v1",
-                "raw_text": "",
-                "parsed_json": {"decision": "yes", "confidence": 90.0, "brief_reason": ""},
-                "parse_status": "ok",
-                "latency_s": 0.1,
-                "error": "",
-            }
+            raw_record(
+                item,
+                task="task1",
+                parsed_json={"decision": "yes", "confidence": 90.0, "brief_reason": ""},
+            )
         ]
         with tempfile.TemporaryDirectory() as tmpdir:
             snapshot = eu.write_preliminary_result_snapshot(
