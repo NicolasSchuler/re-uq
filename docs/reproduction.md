@@ -205,7 +205,7 @@ RE_UQ_ACSE_MLX_MODEL=mlx-community/Qwen3-Embedding-0.6B-8bit \
   --task3-audit-mode blind
 ```
 
-Use diagnostic flags such as `--allow-partial`, `--skip-registry-check`, `--skip-construct-review-check`, `--max-parse-failure-rate`, `--bootstrap-iterations`, or `--expected-stochastic-samples` only for local investigation, not for paper-ready results.
+Use diagnostic flags such as `--allow-partial`, `--skip-registry-check`, `--skip-construct-review-check`, `--skip-manifest-check`, `--max-parse-failure-rate`, `--bootstrap-iterations`, or `--expected-stochastic-samples` only for local investigation, not for paper-ready results. (`--skip-manifest-check` bypasses the SHA-256 integrity check against `outputs/benchmark_manifest*.json`.)
 
 ## 7. Publication Verification Gate
 

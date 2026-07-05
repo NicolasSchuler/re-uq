@@ -12,7 +12,7 @@ Checked root-level metric snapshots and legacy external-probe reports are diagno
 | **Primary results table** (per-model × per-task × per-UQ-method metrics: accuracy, Brier, ECE, AUROC, weak-strengthening rate, generated-text over-commitment, and high-confidence over-commitment at p≥0.80 and p≥0.90) | `paper_results_table.md`, `metrics_summary.csv`, `metrics_summary.md` | `uq_scores.csv` |
 | **ACSE-inspired semantic triage calibration** (normalized semantic-dispersion scores plus empirical accepted-error/coverage thresholds) | `acse_semantic_normalized_scores.csv`, `acse_semantic_calibration.csv`, `acse_semantic_calibration.md` | `uq_scores.csv` rows where `uq_method=acse_semantic_entropy` |
 | **Modality-conditioned Task 1 figure** (Task 1 `p(yes)` by source modality) | `task1_p_yes_by_modality.svg` | `uq_scores.csv`, Task 1 subset |
-| **Bootstrap CIs around headline risks** (95% CI for weak-strengthening rate, over-commitment rate, accuracy) | `bootstrap_seed_ci.csv`, `bootstrap_seed_ci.md` | seed-level resamples over `uq_scores.csv` |
+| **Bootstrap CIs around headline risks** (seed-level 95% percentile CIs, per model × task × UQ method, for accuracy and Brier; plus, at p≥0.80 and p≥0.90: Task 1 unsupported-mandatory acceptance rate, and Task 2 high-confidence over-commitment, weak-strengthening, and label-correct text-overcommitment rates) | `bootstrap_seed_ci.csv`, `bootstrap_seed_ci.md` | seed-level resamples over `uq_scores.csv` |
 | **Qualitative over-commitment examples** (illustrative cases of high-confidence strengthening) | `qualitative_overcommitment_examples.csv`, `qualitative_overcommitment_examples.md` | Task 2 rows with label or generated-text strengthening and `confidence ≥ 0.80` |
 | **UQ method inventory** (compact table of UQ methods, their input signal, and where they apply) | `uq_method_inventory.csv`, `uq_method_inventory.md` | static — generated from the survey-aligned taxonomy in `eval_utils.py` |
 | **Reviewer trail** (which seeds, prompts, benchmark CSV, raw JSONL, registry rows produced these numbers) | `provenance_manifest.json` | SHA-256 of every input artifact |
@@ -35,6 +35,8 @@ Weak-intent paper claims (`nice_to_have` results) are gated on a completed two-r
 - Input: `docs/weak_modality_construct_review.csv`
 - Pass condition: every weak template is marked weaker than `SHOULD/recommended` by both reviewer slots.
 - The analysis script refuses to write paper-facing artifacts if this gate is incomplete unless `--skip-construct-review-check` is set (for diagnostic local runs only).
+
+**Status: COMPLETED (author-delegated LLM-assisted review).** Both reviewer slots (`R1`, `R2`) mark all four weak templates `weaker_than_should=yes` with per-template linguistic rationale, so the gate passes. The judgments were produced as an author-delegated LLM-assisted review (declared in the `reviewer_role` column); the authors should confirm them before submission. `ordinal_rank` and `review_note` are context only and are not checked by the gate; the gate passes only when both slots mark every template `yes` (any `no` fails it).
 
 ## Confidence-Scale Contract
 

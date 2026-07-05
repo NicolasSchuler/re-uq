@@ -178,7 +178,35 @@ def require_construct_review_complete(path: Path) -> None:
         raise ValueError(f"Weak-modality construct review is missing: {path}")
     status = eu.weak_modality_construct_review_status(eu.read_csv_rows(path))
     if not status["valid"]:
-        raise ValueError(f"Weak-modality construct review is incomplete or disagreed: {status}")
+        problems: list[str] = []
+        if status["missing_template_ids"]:
+            problems.append(f"no rows for templates {status['missing_template_ids']}")
+        if status["insufficient_template_ids"]:
+            problems.append(
+                "fewer than "
+                f"{status['expected_reviewers_per_template']} distinct reviewer_id slots for templates "
+                f"{status['insufficient_template_ids']}"
+            )
+        if status["incomplete_template_ids"]:
+            problems.append(
+                "empty or non-'yes' 'weaker_than_should' cells for templates "
+                f"{status['incomplete_template_ids']}"
+            )
+        if status["disagreeing_template_ids"]:
+            problems.append(
+                "a reviewer marked 'weaker_than_should=no' for templates "
+                f"{status['disagreeing_template_ids']}"
+            )
+        raise ValueError(
+            "Weak-modality construct-validity gate is not satisfied.\n"
+            f"  File: {path}\n"
+            f"  Problems: {'; '.join(problems)}.\n"
+            "  Two reviewer slots (reviewer_id R1 and R2) must each fill the 'weaker_than_should' column "
+            "with 'yes' for every weak template, confirming it reads weaker than SHOULD/recommended.\n"
+            "  Record how each judgment was produced in the 'reviewer_role' column; authors remain "
+            "responsible for the judgments before submission.\n"
+            "  Pass --skip-construct-review-check only for diagnostic (non-paper) local runs."
+        )
 
 
 def ci_rows_for_scores(scores: list[dict[str, Any]], iterations: int) -> list[dict[str, Any]]:
@@ -258,6 +286,7 @@ def main() -> None:
     parser.add_argument("--allow-partial", action="store_true")
     parser.add_argument("--skip-registry-check", action="store_true")
     parser.add_argument("--skip-construct-review-check", action="store_true")
+    parser.add_argument("--skip-manifest-check", action="store_true")
     args = parser.parse_args()
 
     root = eu.project_root()
@@ -265,6 +294,10 @@ def main() -> None:
     variant = eu.normalize_benchmark_variant(args.variant)
     output_dir = args.output_dir or root / "outputs" / f"evaluation_{dataset_id}_{variant}_{eu.safe_identifier(args.run_id)}"
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not args.skip_manifest_check:
+        manifest_path = eu.artifact_path(root / "outputs/benchmark_manifest.json", dataset_id)
+        eu.verify_benchmark_manifest(manifest_path, root)
 
     benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
     raw_path = eu.model_outputs_raw_path(root, dataset_id, variant)

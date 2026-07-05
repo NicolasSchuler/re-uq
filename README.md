@@ -182,20 +182,28 @@ are enforced as Pydantic models in
 
 ## Reported Paper Findings
 
-From the manuscript-level macro summary:
+Each headline is stated with its aggregation scope over the four
+dataset x variant cells (mlm_tapt/nice x must/shall):
 
 - Declared modality labels were preserved.
 - Generated text still strengthened source modal force in 8.6% of cases under
-  strict evidence and 13.9% under broad evidence.
-- For weak stakeholder-intent sources, strict strengthening reached 29.8%.
-- Strengthened outputs were usually high-confidence: 98.4%.
-- Strengthened outputs were sample-stable in the reported summary: 100.0%
-  repeated-sample agreement.
+  strict evidence (pooled over all 4 cells, n=16,448; macro-of-cells is also
+  8.6%). Under broad evidence it was 13.8% (pooled, the conservative headline
+  convention; the unweighted macro-of-cells is 13.9%).
+- For weak stakeholder-intent sources, strict strengthening reached 29.8% in
+  the mlm_tapt/MUST cell at confidence >= 0.90 (cross-cell range 27.4-31.7%).
+- Strengthened outputs were usually high-confidence: 98.4% as an unweighted
+  macro over cells (per-cell n 296-436) at confidence >= 0.90.
+- Strengthened outputs showed 100.0% repeated-sample agreement, i.e. 5
+  stochastic samples at temperature 0.7 agreed on modality under saturated
+  label accuracy; read this as sampling stability, not robustness.
 - Semantic dispersion, embedding probes, and blind audits helped only partly.
 
 Interpret these numbers through the artifact status below. Checked metric
 snapshots in this repository are diagnostic/stale unless regenerated from a
-complete current run.
+complete current run. These aggregates are re-derived from the per-cell
+snapshots by
+[`scripts/aggregate_paper_headline_metrics.py`](scripts/aggregate_paper_headline_metrics.py).
 
 ## Where To Go
 

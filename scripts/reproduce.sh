@@ -87,6 +87,16 @@ case "$cmd" in
   verify)
     git status --short
     git diff --check
+    "$PY" - <<'PY'
+from pathlib import Path
+import sys
+sys.path.insert(0, "scripts")
+import eval_utils as eu
+root = eu.project_root()
+for manifest in sorted(root.glob("outputs/benchmark_manifest*.json")):
+    summary = eu.verify_benchmark_manifest(manifest, root)
+    print(f"manifest OK: {manifest.name} checked={summary['checked']} missing={summary['missing_count']}")
+PY
     "$PY" -m unittest discover -s tests -v
     "$PY" -m coverage run --branch --source=scripts -m unittest discover -s tests -v
     "$PY" -m coverage report -m

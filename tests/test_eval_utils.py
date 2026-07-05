@@ -192,6 +192,59 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertFalse(status["valid"])
         self.assertEqual(status["disagreeing_template_ids"], [disagreed[0]["template_id"]])
 
+    def test_construct_review_gate_accepts_shipped_csv(self):
+        shipped = eu.project_root() / "docs/weak_modality_construct_review.csv"
+        status = eu.weak_modality_construct_review_status(eu.read_csv_rows(shipped))
+        self.assertTrue(status["valid"])
+        self.assertEqual(status["missing_template_ids"], [])
+        self.assertEqual(status["incomplete_template_ids"], [])
+        self.assertEqual(status["disagreeing_template_ids"], [])
+        # Should not raise now that both reviewer slots are filled.
+        analysis_cli.require_construct_review_complete(shipped)
+
+    def test_construct_review_gate_reports_incomplete_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            blank_path = Path(tmp) / "weak_modality_construct_review.csv"
+            blank_rows = [
+                {**row, "weaker_than_should": ""}
+                for row in eu.weak_modality_construct_review_rows()
+            ]
+            eu.write_csv_rows(
+                blank_path,
+                blank_rows,
+                fieldnames=eu.WEAK_MODALITY_CONSTRUCT_REVIEW_FIELDS,
+            )
+            status = eu.weak_modality_construct_review_status(eu.read_csv_rows(blank_path))
+            self.assertFalse(status["valid"])
+            # Both reviewer slots present but no judgments filled.
+            self.assertEqual(status["missing_template_ids"], [])
+            self.assertEqual(
+                set(status["incomplete_template_ids"]),
+                {row["template_id"] for row in eu.WEAK_MODALITY_PROBE_TEMPLATES},
+            )
+            with self.assertRaises(ValueError) as ctx:
+                analysis_cli.require_construct_review_complete(blank_path)
+            message = str(ctx.exception)
+            self.assertIn("--skip-construct-review-check", message)
+            self.assertIn("R1", message)
+            self.assertIn("R2", message)
+            self.assertIn(str(blank_path), message)
+
+    def test_construct_review_gate_accepts_filled_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            filled_path = Path(tmp) / "weak_modality_construct_review.csv"
+            filled_rows = [
+                {**row, "weaker_than_should": "yes"}
+                for row in eu.weak_modality_construct_review_rows()
+            ]
+            eu.write_csv_rows(
+                filled_path,
+                filled_rows,
+                fieldnames=eu.WEAK_MODALITY_CONSTRUCT_REVIEW_FIELDS,
+            )
+            # Should not raise once both author slots mark every template "yes".
+            analysis_cli.require_construct_review_complete(filled_path)
+
     def test_requirement_text_modality_parser(self):
         cases = [
             ("The system SHALL export reports.", "mandatory"),
@@ -255,6 +308,52 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertEqual(loaded["artifacts"][0]["rows"], 2)
             self.assertEqual(loaded["artifacts"][0]["sha256"], eu.sha256_file(csv_path))
             self.assertEqual(loaded["artifacts"][1]["rows"], "")
+
+    def test_verify_benchmark_manifest_passes_on_real_manifest(self):
+        root = eu.project_root()
+        summary = eu.verify_benchmark_manifest(root / "outputs/benchmark_manifest.json", root)
+        self.assertGreater(summary["checked"], 0)
+        self.assertEqual(summary["missing"], [])
+
+    def test_verify_benchmark_manifest_fails_on_hash_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            data_path = root / "data.csv"
+            data_path.write_text("real\n", encoding="utf-8")
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps({"artifacts": [{"path": "data.csv", "sha256": "0" * 64}]}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                eu.verify_benchmark_manifest(manifest_path, root)
+
+    def test_verify_benchmark_manifest_missing_required_is_fatal(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {"artifacts": [{"path": "prompts/mandatory_entailment.txt", "sha256": "0" * 64}]}
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                eu.verify_benchmark_manifest(manifest_path, root)
+
+    def test_verify_benchmark_manifest_missing_untracked_is_non_fatal(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {"artifacts": [{"path": "data/processed/seeds_review.csv", "sha256": "0" * 64}]}
+                ),
+                encoding="utf-8",
+            )
+            summary = eu.verify_benchmark_manifest(manifest_path, root)
+            self.assertEqual(summary["checked"], 0)
+            self.assertEqual(summary["missing"], ["data/processed/seeds_review.csv"])
 
     def test_rule_based_parser_maps_modalities(self):
         cases = {
@@ -752,10 +851,33 @@ class EvalUtilsTest(unittest.TestCase):
         distribution = eu.label_distribution(["yes", "yes", "no"], ["yes", "no"])
 
         self.assertEqual(distribution, {"yes": 2 / 3, "no": 1 / 3})
-        self.assertEqual(eu.majority_label({"yes": 0.5, "no": 0.5}, ["yes", "no"]), "yes")
+        # Ties break toward the weakest label so they do not inflate over-commitment.
+        self.assertEqual(eu.majority_label({"yes": 0.5, "no": 0.5}, ["yes", "no"]), "no")
         self.assertAlmostEqual(eu.variation_ratio(distribution), 1 / 3)
         self.assertGreater(eu.normalized_predictive_entropy(distribution), 0.0)
         self.assertLess(eu.normalized_predictive_entropy(distribution), 1.0)
+
+    def test_majority_label_tie_breaks_toward_weakest_label(self):
+        modalities = eu.MODALITIES
+        # (a) task2 2-2 tie between strongest and weakest -> weakest.
+        self.assertEqual(
+            eu.majority_label({"mandatory": 0.5, "nice_to_have": 0.5}, modalities),
+            "nice_to_have",
+        )
+        # (b) task1 even split -> weaker "no".
+        self.assertEqual(eu.majority_label({"yes": 0.5, "no": 0.5}, ["yes", "no"]), "no")
+        # (c) uniform 4-way tie -> weakest modality.
+        uniform = {label: 0.25 for label in modalities}
+        self.assertEqual(eu.majority_label(uniform, modalities), "nice_to_have")
+        # (d) no-tie cases resolve to the true maximum regardless of order.
+        self.assertEqual(
+            eu.majority_label({"mandatory": 0.6, "nice_to_have": 0.4}, modalities),
+            "mandatory",
+        )
+        self.assertEqual(
+            eu.majority_label({"mandatory": 0.1, "optional": 0.7, "nice_to_have": 0.2}, modalities),
+            "optional",
+        )
 
     def test_acse_semantic_proxy_distinguishes_identical_from_divergent_samples(self):
         identical = eu.acse_semantic_proxy_diagnostics(["decision: yes"] * 5)
@@ -1717,7 +1839,8 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual(len(ensemble), 1)
         self.assertEqual(ensemble[0]["model"], "ensemble:2_models")
-        self.assertEqual(ensemble[0]["y_pred"], 1)
+        # 50/50 yes/no tie breaks toward the weaker "no" so it does not inflate over-commitment.
+        self.assertEqual(ensemble[0]["y_pred"], 0)
         self.assertAlmostEqual(ensemble[0]["p_yes"], 0.5)
         self.assertAlmostEqual(ensemble[0]["uncertainty_score"], 0.5)
 
@@ -2599,6 +2722,8 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual({row["parse_status"] for row in records}, {"ok"})
         self.assertEqual(len({row["batch_id"] for row in records}), 1)
         self.assertTrue(all(row["batch_size"] == 2 for row in records))
+        self.assertTrue(all(row.get("job_config_sha") for row in records))
+        self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), 0)
 
     def test_batched_completion_missing_results_are_not_marked_ok(self):
         seeds = [
@@ -2647,6 +2772,108 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertTrue(all(row["parsed_json"] is None for row in records))
         self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs))
 
+    def test_batched_completion_count_matches_but_no_index_overlap_is_not_positional(self):
+        seeds = [
+            {
+                "seed_id": "S0001",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall export reports.",
+                "capability_text_final": "export reports",
+            },
+            {
+                "seed_id": "S0002",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall print invoices.",
+                "capability_text_final": "print invoices",
+            },
+        ]
+        benchmark = eu.build_benchmark_items(seeds)
+        jobs = eu.planned_completion_jobs(
+            [row for row in benchmark if row["source_modality"] == "mandatory"],
+            tasks=["task1"],
+            model="m1",
+            host="http://localhost:1234/v1",
+            run_id="full-1",
+            prompt_version="v1",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+        )
+
+        def fake_no_index_batch_completion(**kwargs):
+            items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+            # Right count, but each result omits request_index (parse assigns
+            # synthetic negative indices -> no overlap with expected indices).
+            return {
+                "ok": True,
+                "raw_text": json.dumps(
+                    {
+                        "results": [
+                            {"decision": "yes", "confidence": 0.8, "brief_reason": "batched"}
+                            for _ in items
+                        ]
+                    }
+                ),
+                "response_json": {"batched": True},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_no_index_batch_completion, batch_size=2))
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual({row["parse_status"] for row in records}, {"missing_batch_result"})
+        self.assertTrue(all(row["parsed_json"] is None for row in records))
+        self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs))
+
+    def test_resume_reruns_on_config_sha_mismatch_and_reuses_on_match(self):
+        job = {
+            "run_id": "full-1",
+            "model": "m1",
+            "task": "task1",
+            "item_id": "S0001_mandatory",
+            "sample_kind": "deterministic",
+            "sample_index": 0,
+            "job_config_sha": "sha-new",
+        }
+        matching = [{**job, "parse_status": "ok"}]
+        mismatching = [{**job, "parse_status": "ok", "job_config_sha": "sha-old"}]
+
+        self.assertEqual(eu.pending_completion_jobs([job], matching, "full-1"), [])
+        self.assertEqual(len(eu.pending_completion_jobs([job], mismatching, "full-1")), 1)
+
+    def test_resume_reuses_legacy_row_without_config_sha_with_warning(self):
+        job = {
+            "run_id": "full-1",
+            "model": "m1",
+            "task": "task1",
+            "item_id": "S0001_mandatory",
+            "sample_kind": "deterministic",
+            "sample_index": 0,
+            "job_config_sha": "sha-new",
+        }
+        legacy = [
+            {
+                "run_id": "full-1",
+                "model": "m1",
+                "task": "task1",
+                "item_id": "S0001_mandatory",
+                "sample_kind": "deterministic",
+                "sample_index": 0,
+                "parse_status": "ok",
+            }
+        ]
+
+        with redirect_stdout(io.StringIO()) as captured:
+            pending = eu.pending_completion_jobs([job], legacy, "full-1")
+
+        self.assertEqual(pending, [])
+        self.assertIn("job_config_sha", captured.getvalue())
+
     def test_resume_planning_skips_completed_records(self):
         job = {
             "run_id": "full-1",
@@ -2682,6 +2909,10 @@ class EvalUtilsTest(unittest.TestCase):
                     "parse_status": "ok",
                     "parsed_json": {"decision": "yes", "confidence": 90} if task == "task1" else {"requirement": "The system MUST export reports.", "modality": "mandatory", "confidence": 90},
                     "prompt": item["source_statement"],
+                    "prompt_version": "v1",
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                    "job_config_sha": f"sha-{task}",
                 }
             )
         row = eu.run_registry_summary(
@@ -2703,6 +2934,10 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(row["status"], "complete")
         self.assertEqual(row["expected_records"], 2)
         self.assertEqual(row["observed_records"], 2)
+        self.assertEqual(row["prompt_version"], "v1")
+        self.assertEqual(row["temperature"], 0.0)
+        self.assertEqual(row["top_p"], 1.0)
+        self.assertTrue(row["config_sha"])
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "run_registry.csv"
             eu.upsert_run_registry_row(path, row)
@@ -2710,6 +2945,8 @@ class EvalUtilsTest(unittest.TestCase):
             rows = eu.read_csv_rows(path)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["status"], "partial")
+            self.assertEqual(rows[0]["prompt_version"], "v1")
+            self.assertEqual(rows[0]["config_sha"], row["config_sha"])
 
     def test_live_run_counters_and_warning_events(self):
         raw_rows = [
@@ -3124,6 +3361,17 @@ class EvalUtilsTest(unittest.TestCase):
                 finished_at_utc="2026-05-22T00:01:00Z",
             )
             eu.upsert_run_registry_row(root / "data/processed/run_registry.csv", registry_row)
+            eu.write_benchmark_manifest(
+                [
+                    root / "data/processed/benchmark_items.csv",
+                    root / "prompts/mandatory_entailment.txt",
+                    root / "prompts/modality_extraction.txt",
+                    root / "prompts/modality_verification.txt",
+                    root / "prompts/modality_verification_declared.txt",
+                ],
+                root / "outputs/benchmark_manifest.json",
+                root=root,
+            )
             output_dir = root / "outputs/final"
             argv = [
                 "generate_evaluation_analysis.py",

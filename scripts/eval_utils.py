@@ -311,6 +311,10 @@ RUN_REGISTRY_FIELDS = [
     "benchmark_variant",
     "tasks",
     "status",
+    "prompt_version",
+    "temperature",
+    "top_p",
+    "config_sha",
     "expected_records",
     "observed_records",
     "parse_success_rate",
@@ -973,6 +977,10 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def artifact_metadata(path: str | Path, root: str | Path | None = None) -> dict[str, Any]:
     path = Path(path)
     root_path = Path(root).resolve() if root is not None else None
@@ -1006,6 +1014,57 @@ def write_benchmark_manifest(
     }
     output_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
+
+
+def _manifest_artifact_required(rel_path: str) -> bool:
+    """Tracked artifacts whose absence invalidates the analysis (prompts + benchmark CSVs)."""
+    normalized = rel_path.replace("\\", "/")
+    if normalized.startswith("prompts/"):
+        return True
+    name = Path(normalized).name
+    return normalized.startswith("data/processed/") and name.startswith("benchmark_items") and name.endswith(".csv")
+
+
+def verify_benchmark_manifest(manifest_path: str | Path, project_root: str | Path) -> dict[str, Any]:
+    """Recompute sha256 for each artifact listed in the frozen benchmark manifest.
+
+    Hard-fails (ValueError) on any hash mismatch, and on a missing required artifact
+    (tracked prompts/ files or data/processed/benchmark_items*.csv). Missing gitignored
+    data artifacts are reported but not fatal. Returns a summary dict.
+    """
+    manifest_path = Path(manifest_path)
+    if not manifest_path.exists():
+        raise ValueError(f"Benchmark manifest not found: {manifest_path}")
+    root = Path(project_root)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    checked = 0
+    missing: list[str] = []
+    for entry in manifest.get("artifacts", []):
+        rel_path = str(entry.get("path", "")).strip()
+        expected = str(entry.get("sha256", "")).strip()
+        if not rel_path:
+            continue
+        target = root / rel_path
+        if not target.exists():
+            if _manifest_artifact_required(rel_path):
+                raise ValueError(f"Required benchmark artifact missing: {rel_path} (listed in {manifest_path.name}).")
+            missing.append(rel_path)
+            continue
+        if not expected:
+            continue
+        actual = sha256_file(target)
+        if actual != expected:
+            raise ValueError(
+                f"Benchmark artifact hash mismatch for {rel_path}: "
+                f"expected {expected}, got {actual} (listed in {manifest_path.name})."
+            )
+        checked += 1
+    return {
+        "manifest": str(manifest_path),
+        "checked": checked,
+        "missing": missing,
+        "missing_count": len(missing),
+    }
 
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -2011,6 +2070,35 @@ def resolve_response_format_args(
     return resolved, extra
 
 
+def compute_job_config_sha(
+    *,
+    prompt: str,
+    prompt_version: str,
+    temperature: float,
+    top_p: float,
+    max_tokens: int,
+    structured_output: str,
+    json_mode: bool,
+) -> str:
+    """Config fingerprint for a single completion job.
+
+    Covers the request parameters that change model output but are not part of
+    completion_record_key, so config-aware resume can detect stale cached rows.
+    """
+    canonical = compact_json(
+        {
+            "prompt": prompt,
+            "prompt_version": prompt_version,
+            "temperature": float(temperature),
+            "top_p": float(top_p),
+            "max_tokens": int(max_tokens),
+            "structured_output": normalize_structured_output_mode(structured_output, json_mode=json_mode),
+            "json_mode": bool(json_mode),
+        }
+    )
+    return sha256_text(canonical)
+
+
 def completion_request_job(
     *,
     item: Mapping[str, Any],
@@ -2051,6 +2139,15 @@ def completion_request_job(
     return {
         "request_index": request_index,
         "run_id": run_id,
+        "job_config_sha": compute_job_config_sha(
+            prompt=prompt,
+            prompt_version=prompt_version,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            structured_output=structured_output,
+            json_mode=json_mode,
+        ),
         "model": model,
         "host": host,
         "base_url": host,
@@ -3152,6 +3249,7 @@ def build_raw_record(
     batch_prompt_hash: str = "",
     output_contract_version: str = "",
     confidence_scale: str = "",
+    job_config_sha: str = "",
 ) -> dict[str, Any]:
     record_contract_version = output_contract_version
     record_confidence_scale = confidence_scale
@@ -3230,6 +3328,8 @@ def build_raw_record(
         record["batch_item_count"] = int(batch_item_count)
     if batch_prompt_hash:
         record["batch_prompt_hash"] = batch_prompt_hash
+    if job_config_sha:
+        record["job_config_sha"] = job_config_sha
     if record_contract_version:
         record["output_contract_version"] = record_contract_version
     if record_confidence_scale != CONFIDENCE_SCALE_0_100:
@@ -3313,6 +3413,7 @@ def _job_record(
         batch_prompt_hash=batch_prompt_hash,
         output_contract_version=output_contract_version,
         confidence_scale=confidence_scale,
+        job_config_sha=str(job.get("job_config_sha", "")),
     )
 
 
@@ -3587,17 +3688,10 @@ def run_completion_batch(
     parsed_results, batch_parse_status = parse_batch_completion_results(completion.get("raw_text", ""))
     if batch_parse_status != "ok":
         parsed_results = {}
-    ordered_fallback_results = list(parsed_results.values())
-    use_order_fallback = (
-        len(ordered_fallback_results) == len(jobs)
-        and not any(int(job["request_index"]) in parsed_results for job in jobs)
-    )
     records: list[dict[str, Any]] = []
-    for position, job in enumerate(jobs):
+    for job in jobs:
         request_index = int(job["request_index"])
         result = parsed_results.get(request_index)
-        if result is None and use_order_fallback:
-            result = ordered_fallback_results[position]
         if completion.get("ok") and result is not None:
             item_completion = {
                 "ok": True,
@@ -4079,10 +4173,13 @@ def acse_semantic_proxy_diagnostics(
 def majority_label(distribution: dict[str, float], label_order: list[str]) -> str:
     if not distribution:
         raise ValueError("Cannot choose a majority label from an empty distribution")
+    # Primary sort is highest probability. Constraint: ties must not inflate
+    # over-commitment, so break them toward the WEAKEST label (last in
+    # label_order); unknown labels sort last and never win a tie.
     order_index = {label: index for index, label in enumerate(label_order)}
     return sorted(
         distribution.items(),
-        key=lambda pair: (-float(pair[1]), order_index.get(pair[0], len(order_index))),
+        key=lambda pair: (-float(pair[1]), -order_index.get(pair[0], -1)),
     )[0][0]
 
 
@@ -4677,12 +4774,34 @@ def completion_record_key(row: Mapping[str, Any]) -> tuple[str, str, str, str, i
 
 
 def pending_completion_jobs(jobs: Iterable[Mapping[str, Any]], raw_rows: Iterable[Mapping[str, Any]], run_id: str) -> list[dict[str, Any]]:
-    completed = {
-        completion_record_key(row)
-        for row in raw_rows
-        if str(row.get("run_id", "")) == str(run_id) and str(row.get("parse_status", "")) == "ok"
-    }
-    return [dict(job) for job in jobs if completion_record_key(job) not in completed]
+    # Map each completed record to the job_config_sha it was produced under so
+    # resume can re-run rows whose planned config has since changed. Legacy rows
+    # predate the field and fall back to the old key-only match.
+    completed: dict[tuple[str, str, str, str, int], str] = {}
+    for row in raw_rows:
+        if str(row.get("run_id", "")) == str(run_id) and str(row.get("parse_status", "")) == "ok":
+            completed[completion_record_key(row)] = str(row.get("job_config_sha", ""))
+
+    pending: list[dict[str, Any]] = []
+    legacy_reuse_count = 0
+    for job in jobs:
+        key = completion_record_key(job)
+        if key not in completed:
+            pending.append(dict(job))
+            continue
+        existing_sha = completed[key]
+        if not existing_sha:
+            legacy_reuse_count += 1
+            continue
+        if existing_sha != str(job.get("job_config_sha", "")):
+            pending.append(dict(job))
+    if legacy_reuse_count:
+        print(
+            f"WARNING {run_id}: reused {legacy_reuse_count} cached record(s) without "
+            "job_config_sha; resuming without config comparison (legacy cache)",
+            flush=True,
+        )
+    return pending
 
 
 def run_registry_summary(
@@ -4749,6 +4868,12 @@ def run_registry_summary(
         and all(value >= 1.0 for value in stochastic_coverages)
     )
     resolved_status = status or ("complete" if complete else "partial")
+    config_row = next(
+        (row for row in run_rows if str(row.get("sample_kind", "")) == "deterministic"),
+        run_rows[0] if run_rows else {},
+    )
+    run_config_shas = sorted({str(row.get("job_config_sha", "")) for row in run_rows if row.get("job_config_sha")})
+    config_sha = sha256_text("\n".join(run_config_shas)) if run_config_shas else ""
     return {
         "run_id": run_id,
         "run_group_id": run_group_id,
@@ -4759,6 +4884,10 @@ def run_registry_summary(
         "benchmark_variant": normalize_benchmark_variant(variant),
         "tasks": ",".join(task_list),
         "status": resolved_status,
+        "prompt_version": str(config_row.get("prompt_version", "")),
+        "temperature": config_row.get("temperature", ""),
+        "top_p": config_row.get("top_p", ""),
+        "config_sha": config_sha,
         "expected_records": expected_records,
         "observed_records": observed_records,
         "parse_success_rate": ok_records / observed_records if observed_records else "",
