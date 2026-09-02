@@ -35,6 +35,8 @@ data/processed/task3_verification_items*.csv
 data/processed/task3_verification_items/
 data/processed/uq_scores*.csv
 
+manuscript/**
+
 outputs/*
 !outputs/README.md
 !outputs/benchmark_manifest*.json
