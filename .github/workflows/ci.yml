@@ -33,6 +33,12 @@ jobs:
       - name: Check whitespace in the current commit
         run: git diff-tree --check --no-commit-id --root -r HEAD
 
+      - name: Lint
+        run: uv run ruff check scripts tests
+
+      - name: Check formatting
+        run: uv run ruff format --check scripts tests
+
       - name: Run unit and notebook boundary tests with coverage
         run: uv run python -m coverage run --branch --source=scripts -m unittest discover -s tests -v
 
