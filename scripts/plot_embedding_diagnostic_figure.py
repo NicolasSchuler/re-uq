@@ -215,7 +215,7 @@ def style_detection_axis(ax) -> None:
 
 def hbar_detection(ax, labels, values, colors) -> np.ndarray:
     y = np.arange(len(labels))[::-1]
-    for yi, val, color in zip(y, values, colors):
+    for yi, val, color in zip(y, values, colors, strict=True):
         if np.isnan(val):
             continue
         ax.barh(yi, val - 0.5, left=0.5, color=color, height=0.52, zorder=2)

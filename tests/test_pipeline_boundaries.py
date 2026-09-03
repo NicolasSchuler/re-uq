@@ -10,6 +10,7 @@ from collections import Counter
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, ClassVar
 from unittest import mock
 
 import nbformat
@@ -42,7 +43,7 @@ def seed_rows(count=1):
 
 
 class NotebookBoundaryTest(unittest.TestCase):
-    NOTEBOOK_BUILDERS = {
+    NOTEBOOK_BUILDERS: ClassVar[dict[str, Any]] = {
         "00_prepare_data.ipynb": populate_notebooks.notebook_00,
         "01_build_modality_benchmark.ipynb": populate_notebooks.notebook_01,
         "02_pilot_local_llms.ipynb": populate_notebooks.notebook_02,
@@ -122,20 +123,20 @@ class NotebookBoundaryTest(unittest.TestCase):
 
 
 class PublicationArtifactIntegrityTest(unittest.TestCase):
-    BENCHMARK_FILES = [
+    BENCHMARK_FILES: ClassVar[list[tuple[str, str]]] = [
         ("data/processed/benchmark_items.csv", "MUST"),
         ("data/processed/benchmark_items_mlm_tapt.csv", "MUST"),
         ("data/processed/benchmark_items_shall.csv", "SHALL"),
         ("data/processed/benchmark_items_mlm_tapt_shall.csv", "SHALL"),
     ]
-    WEAK_TEMPLATES = {
+    WEAK_TEMPLATES: ClassVar[set[str]] = {
         "future_enhancement",
         "low_priority_enhancement",
         "nice_if",
         "useful_if",
     }
-    EXTERNAL_MAIN_CONDITIONS = {"mandatory", "recommended", "optional", "nice_to_have"}
-    EXTERNAL_WEAK_CONDITIONS = {
+    EXTERNAL_MAIN_CONDITIONS: ClassVar[set[str]] = {"mandatory", "recommended", "optional", "nice_to_have"}
+    EXTERNAL_WEAK_CONDITIONS: ClassVar[set[str]] = {
         "weak_future_enhancement",
         "weak_low_priority_enhancement",
         "weak_nice_if",

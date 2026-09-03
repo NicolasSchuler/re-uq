@@ -392,7 +392,9 @@ def compute_run_backend(
 
     deterministic_requirements = deterministic_requirement(raw_rows)
     sample_rows: list[dict[str, Any]] = []
-    for index, (row, text) in enumerate(zip(ordered_samples, sample_texts)):
+    for index, (row, text) in enumerate(
+        zip(ordered_samples, sample_texts, strict=True)
+    ):
         parsed = row["parsed_json"]
         sample_rows.append(
             {
@@ -435,7 +437,7 @@ def compute_run_backend(
             distance_threshold=distance_threshold,
         )
         cluster_labels = eu.acse_cluster_labels_for_embeddings(scoring_embeddings, distance_threshold)
-        for index, cluster_label in zip(indices, cluster_labels):
+        for index, cluster_label in zip(indices, cluster_labels, strict=True):
             sample_rows[index]["cluster_label"] = cluster_label
 
         distribution = eu.label_distribution_from_rows("task2", valid_rows)

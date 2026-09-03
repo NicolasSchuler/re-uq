@@ -276,7 +276,7 @@ def filtered_scope(
         return X, rows
     key, value = scope.split("=", 1)
     mask = np.asarray([str(row.get(key, "")) == value for row in rows], dtype=bool)
-    return X[mask], [row for row, keep in zip(rows, mask) if keep]
+    return X[mask], [row for row, keep in zip(rows, mask, strict=True) if keep]
 
 
 def main() -> None:

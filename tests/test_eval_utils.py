@@ -11,9 +11,9 @@ from unittest import mock
 from pydantic import ValidationError
 
 try:
-    from helpers import raw_record
+    from helpers import FakeResponse, raw_record
 except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
-    from tests.helpers import raw_record
+    from tests.helpers import FakeResponse, raw_record
 
 from scripts import (
     compare_run_matrix as compare_matrix,
@@ -2637,12 +2637,12 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(from_openai.call_args.kwargs["mode"], instructor.Mode.JSON)
 
     def test_instructor_completion_validation_retry_failure_is_marked_for_parser(self):
-        class InstructorValidationFailure(Exception):
+        class InstructorValidationError(Exception):
             pass
 
         class DummyCompletions:
             def create(self, **kwargs):
-                exc = InstructorValidationFailure("bad model output")
+                exc = InstructorValidationError("bad model output")
                 exc.last_completion = '{"decision":"yes","confidence":95,"brief_reason":"bad scale"}'
                 raise exc
 
@@ -4298,19 +4298,13 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
     def test_chat_completion_sends_seed_and_records_it(self):
         captured = {}
 
-        class FakeResponse:
-            choices = [type("C", (), {"message": type("M", (), {"content": "{}"})()})()]
-
-            def model_dump(self, mode="json"):
-                return {"model": "m1", "choices": [{"finish_reason": "stop"}]}
-
         class FakeClient:
             def __init__(self, **_kwargs):
                 self.chat = type("Chat", (), {"completions": self})()
 
             def create(self, **kwargs):
                 captured.update(kwargs)
-                return FakeResponse()
+                return FakeResponse(dump={"model": "m1", "choices": [{"finish_reason": "stop"}]})
 
         with mock.patch.object(eu, "OpenAI", FakeClient):
             result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, seed=1234)
@@ -4367,12 +4361,6 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         self.assertNotEqual(first, eu.request_payload_sha({**payload, "max_tokens": 65}))
 
     def test_chat_completion_reports_request_payload_sha(self):
-        class FakeResponse:
-            choices = [type("C", (), {"message": type("M", (), {"content": "{}"})()})()]
-
-            def model_dump(self, mode="json"):
-                return {}
-
         class FakeClient:
             def __init__(self, **_kwargs):
                 self.chat = type("Chat", (), {"completions": self})()
@@ -4519,12 +4507,6 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
     def _fake_client_raising(self, errors):
         calls = {"count": 0}
 
-        class FakeResponse:
-            choices = [type("C", (), {"message": type("M", (), {"content": "{}"})()})()]
-
-            def model_dump(self, mode="json"):
-                return {"model": "m1"}
-
         class FakeClient:
             def __init__(self, **_kwargs):
                 self.chat = type("Chat", (), {"completions": self})()
@@ -4534,7 +4516,7 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                 calls["count"] += 1
                 if index < len(errors):
                     raise errors[index]
-                return FakeResponse()
+                return FakeResponse(dump={"model": "m1"})
 
         return FakeClient, calls
 
@@ -4599,14 +4581,14 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         self.assertIn("ExceededBudget", result["error"])
 
     def test_is_transient_provider_error_status_classification(self):
-        class Err(Exception):
+        class StatusError(Exception):
             def __init__(self, status_code):
                 self.status_code = status_code
 
         for status in (408, 429, 500, 502, 503):
-            self.assertTrue(eu.is_transient_provider_error(Err(status)), status)
+            self.assertTrue(eu.is_transient_provider_error(StatusError(status)), status)
         for status in (400, 401, 403, 404, 422):
-            self.assertFalse(eu.is_transient_provider_error(Err(status)), status)
+            self.assertFalse(eu.is_transient_provider_error(StatusError(status)), status)
         self.assertTrue(eu.is_transient_provider_error(TimeoutError()))
         self.assertFalse(eu.is_transient_provider_error(ValueError("nope")))
 
@@ -4956,19 +4938,13 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
     def _recording_openai_class(self):
         seen = {}
 
-        class FakeResponse:
-            choices = [type("C", (), {"message": type("M", (), {"content": "{}"})()})()]
-
-            def model_dump(self, mode="json"):
-                return {"model": "m1"}
-
         class FakeClient:
             def __init__(self, **kwargs):
                 seen.update(kwargs)
                 self.chat = type("Chat", (), {"completions": self})()
 
             def create(self, **kwargs):
-                return FakeResponse()
+                return FakeResponse(dump={"model": "m1"})
 
         return FakeClient, seen
 

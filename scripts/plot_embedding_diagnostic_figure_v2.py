@@ -152,9 +152,10 @@ def draw(context, target, output_path: Path) -> None:
     gap = 0.9
     y_ctx = [len(context) + len(target) + gap - i for i in range(len(context))]
     y_tgt = [len(target) - i for i in range(len(target))]
-    all_bars = list(zip(context, y_ctx, [CONTEXT_COLOR] * len(context))) + list(
-        zip(target, y_tgt, [TARGET_COLOR] * len(target))
-    )
+    all_bars = [
+        *zip(context, y_ctx, [CONTEXT_COLOR] * len(context), strict=True),
+        *zip(target, y_tgt, [TARGET_COLOR] * len(target), strict=True),
+    ]
 
     for bar, y, color in all_bars:
         val = bar["value"]

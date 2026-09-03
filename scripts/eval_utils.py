@@ -25,6 +25,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cache
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -5455,7 +5456,7 @@ def ece_score(y_true: list[int], probabilities: list[float], bins: int = 10) -> 
     total = len(y)
     ece = 0.0
     bin_edges = np.linspace(0.0, 1.0, bins + 1)
-    for bin_index, (low, high) in enumerate(zip(bin_edges[:-1], bin_edges[1:])):
+    for bin_index, (low, high) in enumerate(pairwise(bin_edges)):
         if bin_index == bins - 1:
             mask = (p >= low) & (p <= high)
         else:
@@ -8805,7 +8806,7 @@ def prediction_error_labels(rows: list[dict[str, Any]], task: str) -> list[int]:
 def error_detection_auroc(rows: list[dict[str, Any]], task: str) -> float:
     errors: list[int] = []
     uncertainty_scores: list[float] = []
-    for row, error in zip(rows, prediction_error_labels(rows, task)):
+    for row, error in zip(rows, prediction_error_labels(rows, task), strict=True):
         value = row.get("uncertainty_score", "")
         if value in {"", None}:
             continue
@@ -9102,7 +9103,7 @@ def selective_deferral_metrics(
     defer_fractions: Iterable[float] = (0.10, 0.20),
 ) -> dict[str, float]:
     pairs: list[tuple[float, int]] = []
-    for row, error in zip(rows, prediction_error_labels(rows, task)):
+    for row, error in zip(rows, prediction_error_labels(rows, task), strict=True):
         value = row.get("uncertainty_score", "")
         if value in {"", None}:
             continue

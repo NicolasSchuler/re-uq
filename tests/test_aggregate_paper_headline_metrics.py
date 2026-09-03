@@ -128,7 +128,7 @@ TASK2_ROWS_WITH_WEAK = [
         "weak_strict_text_strengthening_90": str(numerator / readable),
         "weak_strict_text_strengthening_90_all_weak": str(numerator / (readable + 5)),
     }
-    for row, (_, _, numerator, readable) in zip(TASK2_ROWS, WEAK_COUNTS)
+    for row, (_, _, numerator, readable) in zip(TASK2_ROWS, WEAK_COUNTS, strict=True)
 ]
 
 

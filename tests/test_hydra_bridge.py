@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 import numpy as np
@@ -448,8 +449,8 @@ class RunConfigExportTest(unittest.TestCase):
 class HydraMultirunSmokeTest(unittest.TestCase):
     """`--multirun` over a 2x2 grid must run every cell into the smoke tree."""
 
-    MODELS = ["fake-a", "fake-b"]
-    DATASETS = ["nice", "mlm_tapt"]
+    MODELS: ClassVar[list[str]] = ["fake-a", "fake-b"]
+    DATASETS: ClassVar[list[str]] = ["nice", "mlm_tapt"]
 
     def _scaffold(self, root):
         (root / "docs").mkdir(parents=True)

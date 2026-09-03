@@ -1,9 +1,14 @@
 """Shared unittest fixture helpers (imported explicitly; not a pytest conftest).
 
-These helpers build canonical fixture payloads used across multiple test
-modules so the per-test setup stays focused on the values each test actually
-exercises.
+These helpers build canonical fixture payloads and test doubles used across
+multiple test modules so the per-test setup stays focused on the values each
+test actually exercises.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
 
 
 def raw_record(
@@ -43,3 +48,37 @@ def raw_record(
     if "template_id" in item:
         record["template_id"] = item["template_id"]
     return record
+
+
+@dataclass(frozen=True, slots=True)
+class FakeMessage:
+    """The `message` of one chat-completion choice."""
+
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class FakeChoice:
+    """One entry of a chat-completion `choices` list."""
+
+    message: FakeMessage
+
+
+@dataclass(slots=True)
+class FakeResponse:
+    """Minimal stand-in for an OpenAI chat-completion response object.
+
+    `eval_utils.chat_completion` reads exactly two things off the SDK response:
+    ``response.choices[0].message.content`` and ``response.model_dump(mode=...)``.
+    Tests vary only the dumped payload, so that is the single parameter here.
+    """
+
+    content: str = "{}"
+    dump: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def choices(self) -> list[FakeChoice]:
+        return [FakeChoice(FakeMessage(self.content))]
+
+    def model_dump(self, mode: str = "json") -> dict[str, Any]:
+        return dict(self.dump)

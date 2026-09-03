@@ -332,7 +332,8 @@ def plot_selected_samples(
     else:
         fig, axes = plt.subplots(rows, cols, figsize=(12, max(4.2, rows * 4.1)), constrained_layout=True)
         axes_array = np.asarray(axes).reshape(-1)
-    for ax, item_id in zip(axes_array, selected_ids):
+    # The grid is rounded up to full rows, so trailing axes stay unused.
+    for ax, item_id in zip(axes_array, selected_ids, strict=False):
         item = item_rows_by_id[item_id]
         subset = [row for row in sample_rows if row["item_id"] == item_id]
         for sample in subset:
@@ -473,7 +474,7 @@ def main() -> None:
         projected, pca = projection_model(embeddings, args.components)
         item_indices: dict[str, list[int]] = defaultdict(list)
         sample_output_rows = []
-        for index, (row, text) in enumerate(zip(ordered_samples, texts)):
+        for index, (row, text) in enumerate(zip(ordered_samples, texts, strict=True)):
             item_indices[str(row["item_id"])].append(index)
             parsed = row["parsed_json"]
             sample_output_rows.append(
@@ -502,7 +503,7 @@ def main() -> None:
                 mlx_model_name=args.mlx_model,
             )
             cluster_labels = cluster_labels_for_embeddings(item_cluster_embeddings, args.distance_threshold)
-            for sample_index, label in zip(indices, cluster_labels):
+            for sample_index, label in zip(indices, cluster_labels, strict=True):
                 source = ordered_samples[sample_index]
                 sample_by_key[(str(source["item_id"]), str(source.get("sample_index", "")))]["cluster_label"] = label
 

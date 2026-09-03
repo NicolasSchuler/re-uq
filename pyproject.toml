@@ -90,3 +90,9 @@ combine-as-imports = true
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
+
+[tool.ruff.lint.pep8-naming]
+# `X` is the scikit-learn convention for a feature matrix; renaming it to `x`
+# would read worse to this codebase's audience. `FakeClient` names a class that
+# is bound to a local variable, so PascalCase is correct there too.
+extend-ignore-names = ["X", "X_*", "FakeClient"]

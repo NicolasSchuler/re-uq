@@ -251,7 +251,7 @@ def build_headline_rows(
         _parse_ratio(confidence[cell]["strict_text_oc_conf_ge_90"]) for cell in cells
     ]
     high_conf_pooled_num = [
-        share * n for share, n in zip(high_conf_per_cell, strict_oc_n)
+        share * n for share, n in zip(high_conf_per_cell, strict_oc_n, strict=True)
     ]
     rows.append(
         {
@@ -285,7 +285,7 @@ def build_headline_rows(
             "Repeated-sample agreement has zero complete groups in the requested cells."
         )
     unanimous_pooled_num = [
-        share * n for share, n in zip(unanimous_per_cell, agreement_n)
+        share * n for share, n in zip(unanimous_per_cell, agreement_n, strict=True)
     ]
     rows.append(
         {

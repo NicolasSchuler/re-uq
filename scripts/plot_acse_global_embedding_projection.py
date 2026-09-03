@@ -266,7 +266,7 @@ def main() -> None:
             "tsne_n_jobs": int(args.tsne_n_jobs),
             "tsne_kl_divergence": float(tsne.kl_divergence_),
         }
-    for row, coords in zip(sample_rows, projected):
+    for row, coords in zip(sample_rows, projected, strict=True):
         row["projection_1"] = float(coords[0])
         row["projection_2"] = float(coords[1])
         row["projection_3"] = float(coords[2])

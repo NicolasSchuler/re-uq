@@ -190,7 +190,7 @@ def run_grid(
             for scope_name, mask in scopes:
                 targets = GLOBAL_TARGETS if scope_name == "global" else WITHIN_TARGETS
                 X_scope = X_full[mask]
-                rows_scope = [row for row, keep in zip(sample_rows, mask) if keep]
+                rows_scope = [row for row, keep in zip(sample_rows, mask, strict=True) if keep]
                 groups_scope = groups_full[mask]
                 for target in targets:
                     y = target_values(rows_scope, target)
