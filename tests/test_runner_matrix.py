@@ -42,20 +42,28 @@ SEEDS = [
 ]
 
 
-def _run_config(root: Path) -> Path:
-    """Write the matrix run config and return its path."""
+def _run_config(
+    root: Path,
+    *,
+    datasets: list[str] = DATASETS,
+    variants: list[str] = VARIANTS,
+    models: list[str] = MODELS,
+    logging_overrides: dict[str, object] | None = None,
+) -> Path:
+    """Write a matrix run config and return its path."""
     path = root / "run_config.json"
     path.write_text(
         json.dumps(
             {
                 "run_group_id": "matrix-group",
-                "datasets": DATASETS,
-                "benchmark_variants": VARIANTS,
+                "datasets": datasets,
+                "benchmark_variants": variants,
                 "stochastic": {"temperature": 0.7, "top_p": 1.0, "samples": 1},
                 "logging": {
                     "progress_every_records": 2,
                     "progress_every_seconds": 999,
                     "warn_after_records": 2,
+                    **(logging_overrides or {}),
                 },
                 "profiles": [
                     {
@@ -63,7 +71,7 @@ def _run_config(root: Path) -> Path:
                         "provider_id": "fake",
                         "base_url": "http://127.0.0.1:1234/v1",
                         "api_key_env": "LOCAL_OPENAI_API_KEY",
-                        "models": MODELS,
+                        "models": models,
                         "concurrency": 1,
                         "batch_size": 2,
                     }
@@ -73,6 +81,32 @@ def _run_config(root: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _runner_args(**overrides: object) -> mock.Mock:
+    """Build the argparse-shaped options object both runner front doors pass."""
+    defaults: dict[str, object] = {
+        "profile": "fake",
+        "model": None,
+        "all_models": True,
+        "dataset": None,
+        "variant": None,
+        "task": None,
+        "mode": "smoke",
+        "run_id": None,
+        "smoke_items": 2,
+        "fake_completion": True,
+        "dry_run": False,
+        "log_level": "WARNING",
+        "progress_every_records": None,
+        "progress_every_seconds": None,
+        "warn_after_records": None,
+        "warn_parse_failure_rate": None,
+        "warn_request_error_rate": None,
+        "no_progress_artifacts": False,
+        "resolved_config_yaml": "",
+    }
+    return mock.Mock(**(defaults | overrides))
 
 
 def _scaffold(root: Path) -> None:
@@ -102,27 +136,7 @@ class RunnerMatrixTest(unittest.TestCase):
         self.addCleanup(self._tmpdir.cleanup)
         self.root = Path(self._tmpdir.name)
         _scaffold(self.root)
-        args = mock.Mock(
-            profile="fake",
-            model=None,
-            all_models=True,
-            dataset=None,
-            variant=None,
-            task=None,
-            mode="smoke",
-            run_id=None,
-            smoke_items=2,
-            fake_completion=True,
-            dry_run=False,
-            log_level="WARNING",
-            progress_every_records=None,
-            progress_every_seconds=None,
-            warn_after_records=None,
-            warn_parse_failure_rate=None,
-            warn_request_error_rate=None,
-            no_progress_artifacts=False,
-            resolved_config_yaml="",
-        )
+        args = _runner_args()
         run_config = eu.load_run_config(_run_config(self.root))
         with (
             mock.patch.object(eu, "project_root", return_value=self.root),
@@ -189,6 +203,32 @@ class RunnerMatrixTest(unittest.TestCase):
                         "fake completions must all parse",
                     )
 
+    def test_every_event_carries_the_full_cell_identity(self) -> None:
+        identity = {
+            "run_id",
+            "run_group_id",
+            "dataset_id",
+            "benchmark_variant",
+            "provider_id",
+            "profile_id",
+            "model",
+        }
+        seen = 0
+        for dataset_id in DATASETS:
+            for variant in VARIANTS:
+                events = eu.read_jsonl(
+                    eu.run_events_path(self.root, dataset_id, variant, smoke=True)
+                )
+                self.assertTrue(events)
+                for event in events:
+                    seen += 1
+                    with self.subTest(event_type=event.get("event_type")):
+                        # Warning events inherit the same identity block, so a
+                        # log line can always be traced back to its run group.
+                        self.assertLessEqual(identity, set(event))
+                        self.assertEqual(event["run_group_id"], "matrix-group")
+        self.assertGreater(seen, 0)
+
     def test_fake_run_never_writes_into_the_paper_facing_tree(self) -> None:
         stray = [
             path
@@ -221,6 +261,67 @@ class RunnerMatrixTest(unittest.TestCase):
                         with self.subTest(run_id=run_id):
                             self.assertIn("start", kinds)
                             self.assertIn("finish", kinds)
+
+
+class RunnerWarningEventTest(unittest.TestCase):
+    """Warning events must be traceable to their run group, like progress events."""
+
+    def test_warning_events_carry_the_same_cell_identity_as_progress_events(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _scaffold(root)
+            config_path = _run_config(
+                root,
+                datasets=["nice"],
+                variants=["must"],
+                models=["fake-model-a"],
+                logging_overrides={
+                    "warn_after_records": 1,
+                    "warn_parse_failure_rate": 0.0,
+                },
+            )
+            unparseable = {
+                "ok": True,
+                "raw_text": "not json at all",
+                "response_json": {},
+                "latency_s": 0.0,
+                "error": "",
+            }
+            probe_ok = runner.fake_completion
+
+            def only_the_probe_parses(**kwargs: object) -> dict[str, object]:
+                # The provider preflight uses the same completion function and
+                # refuses to start on an unparseable reply, so keep it healthy
+                # and fail only the benchmark jobs.
+                if "probe" in str(kwargs.get("prompt", "")):
+                    return probe_ok(**kwargs)
+                return unparseable
+
+            with (
+                mock.patch.object(eu, "project_root", return_value=root),
+                mock.patch.object(
+                    runner, "fake_completion", side_effect=only_the_probe_parses
+                ),
+                redirect_stdout(io.StringIO()),
+            ):
+                runner.run_from_config(
+                    eu.load_run_config(config_path), _runner_args()
+                )
+
+            events = eu.read_jsonl(eu.run_events_path(root, "nice", "must", smoke=True))
+            warnings = [e for e in events if e.get("event_type") == "warning"]
+            self.assertTrue(warnings, "a fully unparseable run must warn")
+            for warning in warnings:
+                with self.subTest(warning_type=warning.get("warning_type")):
+                    self.assertEqual(warning["run_group_id"], "matrix-group")
+                    self.assertEqual(warning["dataset_id"], "nice")
+                    self.assertEqual(warning["benchmark_variant"], "must")
+                    self.assertEqual(warning["model"], "fake-model-a")
+                    self.assertEqual(warning["profile_id"], "fake")
+                    self.assertEqual(warning["provider_id"], "fake")
+                    self.assertTrue(warning["run_id"])
 
 
 if __name__ == "__main__":
