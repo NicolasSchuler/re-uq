@@ -13,15 +13,18 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 try:
     import eval_utils as eu
     import run_provenance as rp
+    from runner_args import Task3RunnerArgs
 except ModuleNotFoundError:  # pragma: no cover
     from scripts import eval_utils as eu, run_provenance as rp
+    from scripts.runner_args import Task3RunnerArgs
 
 
 def source_run_prefix(variant: str) -> str:
@@ -199,7 +202,489 @@ def main(argv: list[str] | None = None) -> None:
     run_from_config(eu.load_run_config(args.config), args)
 
 
-def run_from_config(run_config: dict[str, Any], args: Any) -> None:
+@dataclass(frozen=True, slots=True)
+class Task3Run:
+    """State shared by every cell of one Task 3 audit run."""
+
+    run_config: dict[str, Any]
+    args: Task3RunnerArgs
+    root: Path
+    audit_mode: str
+    logging_config: dict[str, Any]
+    completion_fn: Callable[..., dict[str, Any]]
+    task3_template: str
+    smoke_tree: bool
+    dry_run: bool
+
+    @property
+    def run_group_id(self) -> str:
+        return str(self.run_config["run_group_id"])
+
+    @property
+    def expected_stochastic_samples(self) -> int:
+        return int(self.run_config["stochastic"]["samples"])
+
+
+@dataclass(frozen=True, slots=True)
+class Task3Cell:
+    """One (profile, model, dataset, variant) Task 3 cell, fully planned."""
+
+    profile: dict[str, Any]
+    model: str
+    dataset_id: str
+    variant: str
+    run_id: str
+    source_run_id: str
+    started_at: str
+    seed: int
+    send_seed: bool
+    max_retries: int
+    batch_order: str
+    preflight: dict[str, Any]
+    items: list[dict[str, Any]]
+    jobs: list[dict[str, Any]]
+    existing_rows: list[dict[str, Any]]
+    pending_jobs: list[dict[str, Any]]
+    planned_api_calls: int
+    pending_api_calls: int
+    output_path: Path
+    registry_path: Path
+    progress_path: Path
+    events_path: Path
+    items_path: Path
+
+    @property
+    def profile_id(self) -> str:
+        return str(self.profile["profile_id"])
+
+    @property
+    def provider_id(self) -> str:
+        return str(self.profile["provider_id"])
+
+    @property
+    def batch_size(self) -> int:
+        return int(self.profile["batch_size"])
+
+    def identity(self) -> dict[str, Any]:
+        """The fields that identify this cell in logs and warning events."""
+        return {
+            "run_id": self.run_id,
+            "dataset_id": self.dataset_id,
+            "benchmark_variant": self.variant,
+            "provider_id": self.provider_id,
+            "profile_id": self.profile_id,
+            "model": self.model,
+        }
+
+
+def cell_context(matrix: Task3Run, cell: Task3Cell) -> dict[str, Any]:
+    """Identity fields stamped onto every run event and warning event."""
+    return {**cell.identity(), "run_group_id": matrix.run_group_id}
+
+
+def resolve_source_rows(
+    matrix: Task3Run,
+    profile: Mapping[str, Any],
+    model: str,
+    dataset_id: str,
+    variant: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Locate the complete Task 2 run this cell audits.
+
+    Raises if no source run matches, if it holds no rows for `model`, or if it
+    is incomplete and `--allow-partial-source` was not passed.
+    """
+    args = matrix.args
+    # A smoke-* source run lives in the parallel smoke tree.
+    source_raw_path = eu.model_outputs_raw_path(
+        matrix.root, dataset_id, variant, run_id=args.source_run_id
+    )
+    accepted_prefixes = source_run_prefixes(variant, args.mode)
+    source_run_id, source_rows = eu.select_run_rows(
+        eu.read_jsonl(source_raw_path),
+        run_id=args.source_run_id,
+        prefix=accepted_prefixes,
+    )
+    if not source_run_id or not source_rows:
+        raise ValueError(
+            f"No source rows found for Task 2 run {args.source_run_id!r}. "
+            f"Accepted run-id prefixes for --mode {args.mode} and variant {variant!r}: "
+            f"{', '.join(f'{prefix}-*' for prefix in accepted_prefixes)}. "
+            f"Searched {source_raw_path}."
+        )
+    model_source_rows = source_rows_for_model(
+        source_rows, model, str(profile["profile_id"])
+    )
+    if not model_source_rows:
+        raise ValueError(
+            f"Source run {source_run_id!r} has no rows for model {model!r}; "
+            "Task 3 should audit the same model's Task 2 outputs."
+        )
+    if not args.allow_partial_source:
+        require_complete_task2_source(
+            eu.read_csv_rows(
+                eu.artifact_path(
+                    matrix.root / "data/processed/benchmark_items.csv",
+                    dataset_id,
+                    variant,
+                )
+            ),
+            model_source_rows,
+            str(source_run_id),
+            accepted_prefixes,
+            expected_stochastic_samples=matrix.expected_stochastic_samples,
+        )
+    return str(source_run_id), model_source_rows
+
+
+def plan_cell(
+    matrix: Task3Run,
+    profile: dict[str, Any],
+    model: str,
+    dataset_id: str,
+    variant: str,
+    *,
+    run_id: str,
+    preflight: dict[str, Any],
+    seed: int,
+    send_seed: bool,
+    max_retries: int,
+    batch_order: str,
+) -> Task3Cell:
+    """Resolve one Task 3 cell: its source run, audit items, and job plan."""
+    args = matrix.args
+    audit_mode = matrix.audit_mode
+    source_run_id, model_source_rows = resolve_source_rows(
+        matrix, profile, model, dataset_id, variant
+    )
+    benchmark = eu.read_csv_rows(
+        eu.artifact_path(
+            matrix.root / "data/processed/benchmark_items.csv", dataset_id, variant
+        )
+    )
+    all_items = eu.build_task3_verification_items(
+        benchmark, model_source_rows, audit_mode=audit_mode
+    )
+    if not all_items:
+        raise ValueError(
+            "No Task 3 text-audit items were built from valid deterministic Task 2 rows."
+        )
+    items_path = eu.task3_verification_items_path(
+        matrix.root,
+        dataset_id,
+        variant,
+        source_run_id,
+        model,
+        audit_mode,
+        smoke=matrix.smoke_tree,
+    )
+    if not matrix.dry_run:
+        eu.write_csv_rows(
+            items_path, all_items, fieldnames=eu.TASK3_VERIFICATION_FIELDS
+        )
+    items = (
+        all_items[: max(1, args.smoke_items)] if args.mode == "smoke" else all_items
+    )
+    jobs = eu.planned_completion_jobs_for_items(
+        items,
+        prompt_fn=lambda item: task3_prompt_for(
+            matrix.task3_template, item, audit_mode=audit_mode
+        ),
+        prompt_version=f"{matrix.run_config['prompt_version']}:task3:{audit_mode}",
+        model=model,
+        host=profile["base_url"],
+        run_id=run_id,
+        deterministic=matrix.run_config["deterministic"],
+        stochastic=matrix.run_config["stochastic"],
+        max_tokens=int(profile["max_tokens"]),
+        timeout_s=int(profile["timeout_s"]),
+        api_key_env=profile["api_key_env"],
+        provider_id=profile["provider_id"],
+        profile_id=profile["profile_id"],
+        run_group_id=matrix.run_group_id,
+        json_mode=bool(profile["json_mode"]),
+        structured_output=str(profile.get("structured_output", "none")),
+        response_format=profile.get("response_format"),
+        extra_body=profile.get("extra_body"),
+        instructor_mode=str(profile.get("instructor_mode", "json")),
+        validation_retries=int(profile.get("validation_retries", 2)),
+        fallback_batch_size=int(profile.get("fallback_batch_size", 1)),
+        seed=seed,
+        send_seed=send_seed,
+        max_retries=max_retries,
+        batch_order=batch_order,
+        batch_size=int(profile["batch_size"]),
+        server_model_probe=preflight,
+    )
+    output_path = eu.task3_raw_path(
+        matrix.root, dataset_id, variant, smoke=matrix.smoke_tree
+    )
+    existing_rows = eu.read_jsonl(output_path)
+    pending_jobs = eu.pending_completion_jobs(jobs, existing_rows, run_id)
+    batch_size = int(profile["batch_size"])
+    return Task3Cell(
+        profile=profile,
+        model=model,
+        dataset_id=dataset_id,
+        variant=variant,
+        run_id=run_id,
+        source_run_id=source_run_id,
+        started_at=eu.utc_now_iso(),
+        seed=seed,
+        send_seed=send_seed,
+        max_retries=max_retries,
+        batch_order=batch_order,
+        preflight=preflight,
+        items=items,
+        jobs=jobs,
+        existing_rows=existing_rows,
+        pending_jobs=pending_jobs,
+        planned_api_calls=len(eu.completion_job_batches(jobs, batch_size)),
+        # `planned_jobs` batches over the full plan and then keeps the pending
+        # slice, so a resumed run never re-shuffles the batches.
+        pending_api_calls=len(
+            eu.completion_job_batches(pending_jobs, batch_size, planned_jobs=jobs)
+        ),
+        output_path=output_path,
+        registry_path=eu.task3_registry_path(
+            matrix.root, dataset_id, variant, smoke=matrix.smoke_tree
+        ),
+        progress_path=eu.task3_progress_path(
+            matrix.root, dataset_id, variant, smoke=matrix.smoke_tree
+        ),
+        events_path=eu.task3_events_path(
+            matrix.root, dataset_id, variant, smoke=matrix.smoke_tree
+        ),
+        items_path=items_path,
+    )
+
+
+def registry_row(
+    matrix: Task3Run,
+    cell: Task3Cell,
+    raw_rows: list[dict[str, Any]],
+    *,
+    status: str | None = None,
+    finished_at_utc: str = "",
+) -> dict[str, Any]:
+    """Summarize `raw_rows` as this cell's Task 3 registry row."""
+    profile = cell.profile
+    return eu.run_registry_summary(
+        cell.items,
+        raw_rows,
+        run_id=cell.run_id,
+        run_group_id=matrix.run_group_id,
+        provider_id=cell.provider_id,
+        profile_id=cell.profile_id,
+        model=cell.model,
+        dataset_id=cell.dataset_id,
+        variant=cell.variant,
+        tasks=["task3"],
+        expected_stochastic_samples=matrix.expected_stochastic_samples,
+        started_at_utc=cell.started_at,
+        finished_at_utc=finished_at_utc,
+        status=status,
+        base_url=profile["base_url"],
+        api_key_env=profile["api_key_env"],
+        concurrency=profile["concurrency"],
+        batch_size=profile["batch_size"],
+        timeout_s=profile["timeout_s"],
+        json_mode=bool(profile["json_mode"]),
+        structured_output=str(profile.get("structured_output", "none")),
+        request_extra_body=profile.get("extra_body"),
+        server_model_probe=cell.preflight,
+        batch_order=cell.batch_order,
+        notes=rp.run_notes(
+            matrix.args,
+            f"audit_mode={matrix.audit_mode}; source_run_id={cell.source_run_id}",
+        ),
+    )
+
+
+def log_planned_cell(matrix: Task3Run, cell: Task3Cell) -> None:
+    """Report a dry-run cell plan without contacting a provider."""
+    eu.logger.info(
+        "%s",
+        {
+            "dry_run": True,
+            "run_id": cell.run_id,
+            "source_run_id": cell.source_run_id,
+            "dataset_id": cell.dataset_id,
+            "variant": cell.variant,
+            "profile": cell.profile_id,
+            "model": cell.model,
+            "audit_mode": matrix.audit_mode,
+            "task3_items": len(cell.items),
+            "planned_jobs": len(cell.jobs),
+            "pending_jobs": len(cell.pending_jobs),
+            "planned_batches": cell.planned_api_calls,
+            "pending_api_calls": cell.pending_api_calls,
+            "batch_size": cell.profile["batch_size"],
+            "batch_order": cell.batch_order,
+            "output_path": str(cell.output_path),
+            "task3_items_path": str(cell.items_path),
+        },
+    )
+
+
+def execute_cell(matrix: Task3Run, cell: Task3Cell) -> None:
+    """Run one Task 3 cell to completion, streaming progress artifacts."""
+    logging_config = matrix.logging_config
+    current_rows = list(cell.existing_rows)
+    started_monotonic = time.monotonic()
+    emitted_warning_types: set[str] = set()
+
+    def refresh_live_progress(
+        event_type: str, finished_at_utc: str = "", print_line: bool = True
+    ) -> dict[str, Any]:
+        run_rows = eu.select_model_run_rows(
+            current_rows, cell.run_id, cell.model, ("task3",)
+        )
+        pending_jobs_now = eu.pending_completion_jobs(
+            cell.jobs, current_rows, cell.run_id
+        )
+        pending_api_calls_now = len(
+            eu.completion_job_batches(
+                pending_jobs_now, cell.batch_size, planned_jobs=cell.jobs
+            )
+        )
+        status = (
+            "running"
+            if event_type in {"start", "progress"} and pending_jobs_now
+            else None
+        )
+        eu.upsert_run_registry_row(
+            cell.registry_path,
+            registry_row(
+                matrix,
+                cell,
+                current_rows,
+                status=status,
+                finished_at_utc=finished_at_utc,
+            ),
+        )
+        if logging_config["write_progress_csv"]:
+            eu.write_live_progress_csv(
+                cell.progress_path,
+                cell.items,
+                run_rows,
+                expected_stochastic_samples=matrix.expected_stochastic_samples,
+            )
+        counters = eu.live_run_counters(
+            run_rows,
+            expected_records=len(cell.jobs),
+            expected_api_calls=cell.planned_api_calls,
+            started_monotonic=started_monotonic,
+        )
+        event = {
+            "event_type": event_type,
+            **cell_context(matrix, cell),
+            "source_run_id": cell.source_run_id,
+            "tasks": ["task3"],
+            "mode": matrix.args.mode,
+            "audit_mode": matrix.audit_mode,
+            "output_path": str(cell.output_path),
+            "task3_items_path": str(cell.items_path),
+            "registry_path": str(cell.registry_path),
+            "progress_path": str(cell.progress_path),
+            "planned_jobs": len(cell.jobs),
+            "pending_jobs": len(pending_jobs_now),
+            "planned_api_calls": cell.planned_api_calls,
+            "pending_api_calls": pending_api_calls_now,
+            **counters,
+        }
+        if logging_config["write_event_jsonl"]:
+            eu.append_run_event(cell.events_path, event)
+        if print_line and event_type in {"progress", "finish"}:
+            eu.logger.info("%s", eu.format_live_progress_line(cell.run_id, counters))
+        if event_type == "finish":
+            eu.logger.info(
+                "%s",
+                eu.format_run_quality_line(
+                    cell.run_id, eu.run_quality_counters(run_rows)
+                ),
+            )
+        return counters
+
+    eu.upsert_run_registry_row(
+        cell.registry_path,
+        registry_row(
+            matrix,
+            cell,
+            current_rows,
+            status="running" if cell.pending_jobs else None,
+        ),
+    )
+    refresh_live_progress("start", print_line=False)
+    eu.logger.info(
+        "%s",
+        {
+            "run_id": cell.run_id,
+            "source_run_id": cell.source_run_id,
+            "dataset_id": cell.dataset_id,
+            "variant": cell.variant,
+            "profile": cell.profile_id,
+            "model": cell.model,
+            "audit_mode": matrix.audit_mode,
+            "task3_items": len(cell.items),
+            "planned_jobs": len(cell.jobs),
+            "pending_jobs": len(cell.pending_jobs),
+            "batch_size": cell.profile["batch_size"],
+            "batch_order": cell.batch_order,
+            "seed": cell.seed,
+            "send_seed": cell.send_seed,
+            "max_retries": cell.max_retries,
+            "output_path": str(cell.output_path),
+            "task3_items_path": str(cell.items_path),
+            "registry_path": str(cell.registry_path),
+        },
+    )
+
+    progress_every_records = int(logging_config["progress_every_records"])
+    progress_every_seconds = int(logging_config["progress_every_seconds"])
+    last_progress_record_index = 0
+    last_progress_monotonic = time.monotonic()
+    for index, record in enumerate(
+        eu.run_completion_jobs(
+            cell.pending_jobs,
+            max_workers=int(cell.profile["concurrency"]),
+            completion_fn=matrix.completion_fn,
+            batch_size=cell.batch_size,
+            planned_jobs=cell.jobs,
+        ),
+        start=1,
+    ):
+        eu.append_jsonl(cell.output_path, record)
+        current_rows.append(record)
+        now_monotonic = time.monotonic()
+        records_due = index - last_progress_record_index >= progress_every_records
+        seconds_due = (
+            progress_every_seconds > 0
+            and now_monotonic - last_progress_monotonic >= progress_every_seconds
+        )
+        if records_due or seconds_due or index == len(cell.pending_jobs):
+            counters = refresh_live_progress("progress")
+            last_progress_record_index = index
+            last_progress_monotonic = now_monotonic
+            eu.emit_warning_events(
+                counters,
+                logging_config=logging_config,
+                emitted_warning_types=emitted_warning_types,
+                context=cell_context(matrix, cell),
+                events_path=cell.events_path,
+            )
+
+    finish_row = registry_row(
+        matrix, cell, current_rows, finished_at_utc=eu.utc_now_iso()
+    )
+    eu.upsert_run_registry_row(cell.registry_path, finish_row)
+    refresh_live_progress("finish", finished_at_utc=str(finish_row["finished_at_utc"]))
+    eu.logger.info(
+        "Task 3 registry status: %s at %s", finish_row["status"], cell.registry_path
+    )
+
+
+def run_from_config(run_config: dict[str, Any], args: Task3RunnerArgs) -> None:
     """Execute a normalized run config.
 
     Shared by the argparse CLI above and by the Hydra entry point in
@@ -207,13 +692,11 @@ def run_from_config(run_config: dict[str, Any], args: Any) -> None:
     """
     eu.configure_run_logging(args.log_level)
     eu.apply_acse_embedding_env(run_config)
-    audit_mode = eu.normalize_task3_audit_mode(args.audit_mode)
-    dry_run = bool(getattr(args, "dry_run", False))
-
     if args.mode == "resume" and not args.run_id:
         raise ValueError("--mode resume requires --run-id.")
 
     root = eu.project_root()
+    audit_mode = eu.normalize_task3_audit_mode(args.audit_mode)
     profiles = eu.filter_run_profiles(
         run_config, profile_id=args.profile, model=args.model
     )
@@ -221,14 +704,19 @@ def run_from_config(run_config: dict[str, Any], args: Any) -> None:
     variants = eu.selected_values(
         list(run_config["benchmark_variants"]), args.variant, "variant"
     )
-    logging_config = eu.logging_config_from_args(run_config, args)
-    task3_template = eu.load_prompt(task3_prompt_path(root, audit_mode))
-    completion_fn = fake_completion if args.fake_completion else eu.chat_completion
-    # Smoke/fake Task 3 runs are isolated from the paper-facing artifact tree.
-    smoke_tree = (
-        bool(args.fake_completion)
+    matrix = Task3Run(
+        run_config=run_config,
+        args=args,
+        root=root,
+        audit_mode=audit_mode,
+        logging_config=eu.logging_config_from_args(run_config, args),
+        completion_fn=fake_completion if args.fake_completion else eu.chat_completion,
+        task3_template=eu.load_prompt(task3_prompt_path(root, audit_mode)),
+        # Smoke/fake Task 3 runs are isolated from the paper-facing artifact tree.
+        smoke_tree=bool(args.fake_completion)
         or args.mode == "smoke"
-        or eu.is_smoke_run_id(args.run_id)
+        or eu.is_smoke_run_id(args.run_id),
+        dry_run=bool(getattr(args, "dry_run", False)),
     )
 
     for profile in profiles:
@@ -244,40 +732,22 @@ def run_from_config(run_config: dict[str, Any], args: Any) -> None:
         for model in profile["models"]:
             preflight = (
                 {"dry_run": True}
-                if dry_run
+                if matrix.dry_run
                 else eu.preflight_profile(
                     profile,
                     model=model,
                     prompt_version=run_config["prompt_version"],
-                    completion_fn=completion_fn,
+                    completion_fn=matrix.completion_fn,
                 )
             )
-
             for dataset_id in datasets:
                 for variant in variants:
-                    prefix = task3_run_prefix(args.mode, variant, audit_mode)
-                    run_id = args.run_id or eu.new_run_id(prefix)
-                    started_at = eu.utc_now_iso()
-                    benchmark_path = eu.artifact_path(
-                        root / "data/processed/benchmark_items.csv", dataset_id, variant
+                    run_id = args.run_id or eu.new_run_id(
+                        task3_run_prefix(args.mode, variant, audit_mode)
                     )
-                    # A smoke-* source run lives in the parallel smoke tree.
-                    source_raw_path = eu.model_outputs_raw_path(
-                        root, dataset_id, variant, run_id=args.source_run_id
-                    )
-                    output_path = eu.task3_raw_path(
-                        root, dataset_id, variant, smoke=smoke_tree
-                    )
-                    registry_path = eu.task3_registry_path(
-                        root, dataset_id, variant, smoke=smoke_tree
-                    )
-                    progress_path = eu.task3_progress_path(
-                        root, dataset_id, variant, smoke=smoke_tree
-                    )
-                    events_path = eu.task3_events_path(
-                        root, dataset_id, variant, smoke=smoke_tree
-                    )
-                    if not dry_run:
+                    if not matrix.dry_run:
+                        # Configured before planning so planning-time warnings
+                        # land in this run's log file.
                         eu.configure_run_logging(
                             args.log_level, log_path=eu.run_log_path(root, run_id)
                         )
@@ -285,393 +755,23 @@ def run_from_config(run_config: dict[str, Any], args: Any) -> None:
                         rp.write_resolved_config(
                             root, run_id, getattr(args, "resolved_config_yaml", "")
                         )
-
-                    benchmark = eu.read_csv_rows(benchmark_path)
-                    accepted_prefixes = source_run_prefixes(variant, args.mode)
-                    source_run_id, source_rows = eu.select_run_rows(
-                        eu.read_jsonl(source_raw_path),
-                        run_id=args.source_run_id,
-                        prefix=accepted_prefixes,
-                    )
-                    if not source_run_id or not source_rows:
-                        raise ValueError(
-                            f"No source rows found for Task 2 run {args.source_run_id!r}. "
-                            f"Accepted run-id prefixes for --mode {args.mode} and variant {variant!r}: "
-                            f"{', '.join(f'{prefix}-*' for prefix in accepted_prefixes)}. "
-                            f"Searched {source_raw_path}."
-                        )
-                    model_source_rows = source_rows_for_model(
-                        source_rows, model, str(profile["profile_id"])
-                    )
-                    if not model_source_rows:
-                        raise ValueError(
-                            f"Source run {source_run_id!r} has no rows for model {model!r}; "
-                            "Task 3 should audit the same model's Task 2 outputs."
-                        )
-                    if not args.allow_partial_source:
-                        require_complete_task2_source(
-                            benchmark,
-                            model_source_rows,
-                            str(source_run_id),
-                            accepted_prefixes,
-                            expected_stochastic_samples=int(
-                                run_config["stochastic"]["samples"]
-                            ),
-                        )
-
-                    all_task3_items = eu.build_task3_verification_items(
-                        benchmark, model_source_rows, audit_mode=audit_mode
-                    )
-                    if not all_task3_items:
-                        raise ValueError(
-                            "No Task 3 text-audit items were built from valid deterministic Task 2 rows."
-                        )
-                    task3_items_path = eu.task3_verification_items_path(
-                        root,
+                    cell = plan_cell(
+                        matrix,
+                        profile,
+                        model,
                         dataset_id,
                         variant,
-                        str(source_run_id),
-                        model,
-                        audit_mode,
-                        smoke=smoke_tree,
-                    )
-                    if not dry_run:
-                        eu.write_csv_rows(
-                            task3_items_path,
-                            all_task3_items,
-                            fieldnames=eu.TASK3_VERIFICATION_FIELDS,
-                        )
-                    task3_items_for_run = (
-                        all_task3_items[: max(1, args.smoke_items)]
-                        if args.mode == "smoke"
-                        else all_task3_items
-                    )
-
-                    stochastic_samples = int(run_config["stochastic"]["samples"])
-                    jobs = eu.planned_completion_jobs_for_items(
-                        task3_items_for_run,
-                        prompt_fn=lambda item: task3_prompt_for(
-                            task3_template, item, audit_mode=audit_mode
-                        ),
-                        prompt_version=f"{run_config['prompt_version']}:task3:{audit_mode}",
-                        model=model,
-                        host=profile["base_url"],
                         run_id=run_id,
-                        deterministic=run_config["deterministic"],
-                        stochastic=run_config["stochastic"],
-                        max_tokens=int(profile["max_tokens"]),
-                        timeout_s=int(profile["timeout_s"]),
-                        api_key_env=profile["api_key_env"],
-                        provider_id=profile["provider_id"],
-                        profile_id=profile["profile_id"],
-                        run_group_id=run_config["run_group_id"],
-                        json_mode=bool(profile["json_mode"]),
-                        structured_output=str(profile.get("structured_output", "none")),
-                        response_format=profile.get("response_format"),
-                        extra_body=profile.get("extra_body"),
-                        instructor_mode=str(profile.get("instructor_mode", "json")),
-                        validation_retries=int(profile.get("validation_retries", 2)),
-                        fallback_batch_size=int(profile.get("fallback_batch_size", 1)),
+                        preflight=preflight,
                         seed=seed,
                         send_seed=send_seed,
                         max_retries=max_retries,
                         batch_order=batch_order,
-                        batch_size=int(profile["batch_size"]),
-                        server_model_probe=preflight,
                     )
-
-                    existing_rows = eu.read_jsonl(output_path)
-                    pending_jobs = eu.pending_completion_jobs(
-                        jobs, existing_rows, run_id
-                    )
-                    total_api_calls = len(
-                        eu.completion_job_batches(jobs, int(profile["batch_size"]))
-                    )
-                    pending_api_calls = len(
-                        eu.completion_job_batches(
-                            pending_jobs,
-                            int(profile["batch_size"]),
-                            planned_jobs=jobs,
-                        )
-                    )
-                    if dry_run:
-                        eu.logger.info(
-                            "%s",
-                            {
-                                "dry_run": True,
-                                "run_id": run_id,
-                                "source_run_id": source_run_id,
-                                "dataset_id": dataset_id,
-                                "variant": variant,
-                                "profile": profile["profile_id"],
-                                "model": model,
-                                "audit_mode": audit_mode,
-                                "task3_items": len(task3_items_for_run),
-                                "planned_jobs": len(jobs),
-                                "pending_jobs": len(pending_jobs),
-                                "planned_batches": total_api_calls,
-                                "pending_api_calls": pending_api_calls,
-                                "batch_size": profile["batch_size"],
-                                "batch_order": batch_order,
-                                "output_path": str(output_path),
-                                "task3_items_path": str(task3_items_path),
-                            },
-                        )
-                        continue
-                    current_rows = list(existing_rows)
-                    started_monotonic = time.monotonic()
-                    emitted_warning_types: set[str] = set()
-
-                    def refresh_live_progress(
-                        event_type: str,
-                        finished_at_utc: str = "",
-                        print_line: bool = True,
-                    ) -> dict[str, Any]:
-                        run_rows = eu.select_model_run_rows(
-                            current_rows, run_id, model, ("task3",)
-                        )
-                        pending_jobs_now = eu.pending_completion_jobs(
-                            jobs, current_rows, run_id
-                        )
-                        # `planned_jobs` batches over the full plan and then keeps the
-                        # pending slice, so a resumed run never re-shuffles the batches.
-                        pending_api_calls_now = len(
-                            eu.completion_job_batches(
-                                pending_jobs_now,
-                                int(profile["batch_size"]),
-                                planned_jobs=jobs,
-                            )
-                        )
-                        status = (
-                            "running"
-                            if event_type in {"start", "progress"} and pending_jobs_now
-                            else None
-                        )
-                        registry_row = eu.run_registry_summary(
-                            task3_items_for_run,
-                            current_rows,
-                            run_id=run_id,
-                            run_group_id=run_config["run_group_id"],
-                            provider_id=profile["provider_id"],
-                            profile_id=profile["profile_id"],
-                            model=model,
-                            dataset_id=dataset_id,
-                            variant=variant,
-                            tasks=["task3"],
-                            expected_stochastic_samples=stochastic_samples,
-                            started_at_utc=started_at,
-                            finished_at_utc=finished_at_utc,
-                            status=status,
-                            base_url=profile["base_url"],
-                            api_key_env=profile["api_key_env"],
-                            concurrency=profile["concurrency"],
-                            batch_size=profile["batch_size"],
-                            timeout_s=profile["timeout_s"],
-                            json_mode=bool(profile["json_mode"]),
-                            structured_output=str(
-                                profile.get("structured_output", "none")
-                            ),
-                            request_extra_body=profile.get("extra_body"),
-                            server_model_probe=preflight,
-                            batch_order=batch_order,
-                            notes=rp.run_notes(
-                                args,
-                                f"audit_mode={audit_mode}; source_run_id={source_run_id}",
-                            ),
-                        )
-                        eu.upsert_run_registry_row(registry_path, registry_row)
-                        if logging_config["write_progress_csv"]:
-                            eu.write_live_progress_csv(
-                                progress_path,
-                                task3_items_for_run,
-                                run_rows,
-                                expected_stochastic_samples=stochastic_samples,
-                            )
-                        counters = eu.live_run_counters(
-                            run_rows,
-                            expected_records=len(jobs),
-                            expected_api_calls=total_api_calls,
-                            started_monotonic=started_monotonic,
-                        )
-                        event = {
-                            "event_type": event_type,
-                            "run_id": run_id,
-                            "run_group_id": run_config["run_group_id"],
-                            "source_run_id": source_run_id,
-                            "dataset_id": dataset_id,
-                            "benchmark_variant": variant,
-                            "provider_id": profile["provider_id"],
-                            "profile_id": profile["profile_id"],
-                            "model": model,
-                            "tasks": ["task3"],
-                            "mode": args.mode,
-                            "audit_mode": audit_mode,
-                            "output_path": str(output_path),
-                            "task3_items_path": str(task3_items_path),
-                            "registry_path": str(registry_path),
-                            "progress_path": str(progress_path),
-                            "planned_jobs": len(jobs),
-                            "pending_jobs": len(pending_jobs_now),
-                            "planned_api_calls": total_api_calls,
-                            "pending_api_calls": pending_api_calls_now,
-                            **counters,
-                        }
-                        if logging_config["write_event_jsonl"]:
-                            eu.append_run_event(events_path, event)
-                        if print_line and event_type in {"progress", "finish"}:
-                            eu.logger.info(
-                                "%s", eu.format_live_progress_line(run_id, counters)
-                            )
-                        if event_type == "finish":
-                            eu.logger.info(
-                                "%s",
-                                eu.format_run_quality_line(
-                                    run_id, eu.run_quality_counters(run_rows)
-                                ),
-                            )
-                        return counters
-
-                    eu.upsert_run_registry_row(
-                        registry_path,
-                        eu.run_registry_summary(
-                            task3_items_for_run,
-                            current_rows,
-                            run_id=run_id,
-                            run_group_id=run_config["run_group_id"],
-                            provider_id=profile["provider_id"],
-                            profile_id=profile["profile_id"],
-                            model=model,
-                            dataset_id=dataset_id,
-                            variant=variant,
-                            tasks=["task3"],
-                            expected_stochastic_samples=stochastic_samples,
-                            started_at_utc=started_at,
-                            status="running" if pending_jobs else None,
-                            base_url=profile["base_url"],
-                            api_key_env=profile["api_key_env"],
-                            concurrency=profile["concurrency"],
-                            batch_size=profile["batch_size"],
-                            timeout_s=profile["timeout_s"],
-                            json_mode=bool(profile["json_mode"]),
-                            structured_output=str(
-                                profile.get("structured_output", "none")
-                            ),
-                            request_extra_body=profile.get("extra_body"),
-                            server_model_probe=preflight,
-                            batch_order=batch_order,
-                            notes=rp.run_notes(
-                                args,
-                                f"audit_mode={audit_mode}; source_run_id={source_run_id}",
-                            ),
-                        ),
-                    )
-                    refresh_live_progress("start", print_line=False)
-                    eu.logger.info(
-                        "%s",
-                        {
-                            "run_id": run_id,
-                            "source_run_id": source_run_id,
-                            "dataset_id": dataset_id,
-                            "variant": variant,
-                            "profile": profile["profile_id"],
-                            "model": model,
-                            "audit_mode": audit_mode,
-                            "task3_items": len(task3_items_for_run),
-                            "planned_jobs": len(jobs),
-                            "pending_jobs": len(pending_jobs),
-                            "batch_size": profile["batch_size"],
-                            "batch_order": batch_order,
-                            "seed": seed,
-                            "send_seed": send_seed,
-                            "max_retries": max_retries,
-                            "output_path": str(output_path),
-                            "task3_items_path": str(task3_items_path),
-                            "registry_path": str(registry_path),
-                        },
-                    )
-
-                    last_progress_record_index = 0
-                    last_progress_monotonic = time.monotonic()
-                    for index, record in enumerate(
-                        eu.run_completion_jobs(
-                            pending_jobs,
-                            max_workers=int(profile["concurrency"]),
-                            completion_fn=completion_fn,
-                            batch_size=int(profile["batch_size"]),
-                            planned_jobs=jobs,
-                        ),
-                        start=1,
-                    ):
-                        eu.append_jsonl(output_path, record)
-                        current_rows.append(record)
-                        now_monotonic = time.monotonic()
-                        records_due = index - last_progress_record_index >= int(
-                            logging_config["progress_every_records"]
-                        )
-                        seconds_due = int(
-                            logging_config["progress_every_seconds"]
-                        ) > 0 and now_monotonic - last_progress_monotonic >= int(
-                            logging_config["progress_every_seconds"]
-                        )
-                        finished_pending = index == len(pending_jobs)
-                        if records_due or seconds_due or finished_pending:
-                            counters = refresh_live_progress("progress")
-                            last_progress_record_index = index
-                            last_progress_monotonic = now_monotonic
-                            eu.emit_warning_events(
-                                counters,
-                                logging_config=logging_config,
-                                emitted_warning_types=emitted_warning_types,
-                                context={
-                                    "run_id": run_id,
-                                    "run_group_id": run_config["run_group_id"],
-                                    "dataset_id": dataset_id,
-                                    "benchmark_variant": variant,
-                                    "provider_id": profile["provider_id"],
-                                    "profile_id": profile["profile_id"],
-                                    "model": model,
-                                },
-                                events_path=events_path,
-                            )
-
-                    finish_row = eu.run_registry_summary(
-                        task3_items_for_run,
-                        current_rows,
-                        run_id=run_id,
-                        run_group_id=run_config["run_group_id"],
-                        provider_id=profile["provider_id"],
-                        profile_id=profile["profile_id"],
-                        model=model,
-                        dataset_id=dataset_id,
-                        variant=variant,
-                        tasks=["task3"],
-                        expected_stochastic_samples=stochastic_samples,
-                        started_at_utc=started_at,
-                        finished_at_utc=eu.utc_now_iso(),
-                        base_url=profile["base_url"],
-                        api_key_env=profile["api_key_env"],
-                        concurrency=profile["concurrency"],
-                        batch_size=profile["batch_size"],
-                        timeout_s=profile["timeout_s"],
-                        json_mode=bool(profile["json_mode"]),
-                        structured_output=str(profile.get("structured_output", "none")),
-                        request_extra_body=profile.get("extra_body"),
-                        server_model_probe=preflight,
-                        batch_order=batch_order,
-                        notes=rp.run_notes(
-                            args,
-                            f"audit_mode={audit_mode}; source_run_id={source_run_id}",
-                        ),
-                    )
-                    eu.upsert_run_registry_row(registry_path, finish_row)
-                    refresh_live_progress(
-                        "finish", finished_at_utc=str(finish_row["finished_at_utc"])
-                    )
-                    eu.logger.info(
-                        "Task 3 registry status: %s at %s",
-                        finish_row["status"],
-                        registry_path,
-                    )
+                    if matrix.dry_run:
+                        log_planned_cell(matrix, cell)
+                    else:
+                        execute_cell(matrix, cell)
 
 
 if __name__ == "__main__":
