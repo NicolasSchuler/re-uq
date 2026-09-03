@@ -33,5 +33,9 @@ jobs:
       - name: Check whitespace in the current commit
         run: git diff-tree --check --no-commit-id --root -r HEAD
 
-      - name: Run unit and notebook boundary tests
-        run: uv run python -m unittest discover -s tests -v
+      - name: Run unit and notebook boundary tests with coverage
+        run: uv run python -m coverage run --branch --source=scripts -m unittest discover -s tests -v
+
+      - name: Report coverage
+        # Informational only: CI does not fail on a coverage threshold.
+        run: uv run python -m coverage report -m

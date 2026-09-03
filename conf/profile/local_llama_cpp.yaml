@@ -1,0 +1,22 @@
+# Provider profile: local_llama_cpp
+# Mirrors the `local_llama_cpp` entry of run_configs/full_matrix.example.json.
+# Secrets are never stored here: `api_key_env` holds the *name* of the
+# environment variable that carries the key.
+profile_id: "local_llama_cpp"
+provider_id: "llama_cpp"
+base_url: "http://127.0.0.1:1234/v1"
+api_key_env: ${oc.env:RE_UQ_LOCAL_LLAMA_CPP_API_KEY_ENV,LOCAL_OPENAI_API_KEY}
+models:
+  - "qwen/qwen3.5-9b"
+concurrency: 4
+batch_size: 4
+timeout_s: 120
+max_tokens: 256
+seed: 20260518
+send_seed: true
+max_retries: 3
+batch_order: "grouped"
+json_mode: false
+structured_output: "none"
+requires_manual_server: true
+notes: "Start llama.cpp with exactly this model before running this profile."

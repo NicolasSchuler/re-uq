@@ -7,7 +7,8 @@ This document is the single source of truth for the repository map. The `README.
 | Path | Purpose |
 | --- | --- |
 | `README.md` | Reader entry point: study abstract and pointers into the docs. |
-| `docs/` | Reader-facing documentation (evaluation spec, reproduction guide, results mapping, FAQ) plus archived internal planning notes. |
+| `TODO.md` | Open work: batching ablations, contextual extension, model-family coverage, construct-review sign-off, snapshot regeneration, provenance rerun. |
+| `docs/` | Reader-facing documentation (experimental setup, evaluation spec, aggregation, reproduction guide, results mapping, FAQ) plus archived internal planning notes. |
 | `docs/archive/` | Compressed planning/framing notes preserved for traceability. Not required for reproduction. |
 | `scripts/` | Canonical CLI entry points and shared evaluation utilities. The `scripts/*.py` files are the publication reproduction interface. |
 | `prompts/` | Frozen task prompt contracts (Task 1, Task 2, Task 3, plus prompt-sensitivity variants). |
@@ -16,8 +17,8 @@ This document is the single source of truth for the repository map. The `README.
 | `data/processed/` | Curated benchmark inputs and compact metric snapshots. Raw run outputs are gitignored. |
 | `outputs/` | Curated paper-facing summaries and review artifacts. Run-specific output directories are gitignored. |
 | `notebooks/` | Stripped, generated companion notebooks for narrative inspection. Scripts are the canonical interface. |
-| `tests/` | Unit, CLI, parsing, and notebook-boundary regression checks. |
-| `.github/workflows/` | CI: install via `uv`, run the unittest suite, run a whitespace check. |
+| `tests/` | Unit, CLI, parsing, paper-export, and notebook-boundary regression checks. Shared fixtures live in `tests/helpers.py`. |
+| `.github/workflows/` | CI: install via `uv`, run the unittest suite, print a coverage report (no enforced threshold), run a whitespace check. |
 | `AGENTS.md` | AI-assistant tooling configuration. Not a research artifact. |
 | `LICENSE` | License under which the artifact is distributed. |
 | `pyproject.toml`, `uv.lock` | Python project definition and lockfile. |
@@ -43,9 +44,12 @@ Many curated artifacts under `outputs/` and `docs/final_seed_documents/` exist a
 
 | You want to … | Go to … |
 | --- | --- |
+| See the full experimental setup (benchmark, prompts, batching, cohort, limitations) | `docs/experimental_setup.md` |
 | Understand the study claim and evaluation design | `docs/evaluation.md` |
+| Understand how headline numbers are aggregated | `docs/aggregation.md` |
 | Reproduce the pipeline end-to-end | `docs/reproduction.md`, `scripts/reproduce.sh` |
 | See how artifacts map to paper figures/tables | `docs/results_mapping.md` |
 | Understand pipeline code architecture | `docs/architecture.md` |
 | Understand Git/artifact policy | `docs/repository_hygiene.md` |
 | Common reviewer questions | `docs/faq.md` |
+| See open gaps and planned work | `TODO.md` |

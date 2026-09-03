@@ -1,0 +1,165 @@
+pi-sandbox: building re-uq-sandbox (SYNC_DEPS=0)
+STEP 1/22: FROM mcr.microsoft.com/devcontainers/base:ubuntu
+STEP 2/22: RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends         rsync openssh-client util-linux tmux build-essential ca-certificates curl gnupg     && rm -rf /var/lib/apt/lists/*
+--> Using cache 402041b10523353d08f9a2f11777d5bbebd838815896f50587e09cc0818544dd
+--> 402041b10523
+STEP 3/22: RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash -     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs     && npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest     && pi --version     && npm cache clean --force     && rm -rf /var/lib/apt/lists/*
+--> Using cache b84e8dc0e69215341696168c5cea2f988a6c1e78da50a1e8abf4df81516e21a2
+--> b84e8dc0e692
+STEP 4/22: RUN npm install -g @tobilu/qmd@2.8.3     && qmd --version     && npm cache clean --force
+--> Using cache b6a9ee5566fb94809ca47765ccc9d3eb059910cdc9c5a42d0c7f1167f7b7df1d
+--> b6a9ee5566fb
+STEP 5/22: ARG HERDR_VERSION=0.8.2
+--> Using cache eec30ac761921d546a064ef2483abdebe24d6c6113433aeab032258cf091829e
+--> eec30ac76192
+STEP 6/22: RUN set -eu;     case "$(uname -m)" in       aarch64) herdr_target="linux-aarch64"; herdr_sha256="f55610658e1c2e0d2aaef730b4b2ab885f7f8ba00285ab372bfb14f2e3d5b40d" ;;       x86_64) herdr_target="linux-x86_64"; herdr_sha256="976150a14d490c94b243ea2e1a7eb2dfb67f12e36b182db90936f6728e6aecf4" ;;       *) echo "unsupported Herdr architecture: $(uname -m)" >&2; exit 1 ;;     esac;     curl -fsSL "https://github.com/herdrdev/herdr/releases/download/v${HERDR_VERSION}/herdr-${herdr_target}" -o /tmp/herdr;     echo "${herdr_sha256}  /tmp/herdr" | sha256sum -c -;     install -m 0755 /tmp/herdr /usr/local/bin/herdr;     rm /tmp/herdr;     herdr --version;     integration_home=/tmp/pi-sandbox-herdr-integrations;     install -d "${integration_home}/.pi/agent/extensions" "${integration_home}/.omp/agent/extensions" /usr/local/share/pi-sandbox/herdr;     HOME="${integration_home}" herdr integration install pi;     HOME="${integration_home}" herdr integration install omp;     install -m 0444 "${integration_home}/.pi/agent/extensions/herdr-agent-state.ts" /usr/local/share/pi-sandbox/herdr/herdr-agent-state.ts;     install -m 0444 "${integration_home}/.omp/agent/extensions/herdr-omp-agent-state.ts" /usr/local/share/pi-sandbox/herdr/herdr-omp-agent-state.ts;     rm -rf "${integration_home}"
+--> Using cache 90ba1b252941dd5e5355f3cff5d5332428d166ff86fb8ebcaf20f75c939bce96
+--> 90ba1b252941
+STEP 7/22: RUN npm install -g bun@latest     && bun --version     && npm cache clean --force
+--> Using cache 00a0a2d6b01d451210f5ea8a9133062dcad2f0312e71defa758d6a40b278a0a0
+--> 00a0a2d6b01d
+STEP 8/22: RUN export PI_INSTALL_DIR=/usr/local/bin;     curl -fsSL https://omp.sh/install | sh -s -- --binary     && omp --version
+--> Using cache a2a1d7c92e9e48d3f1a2ea1e3e6bb5eb3ec16f19fd5d323d92351d18c598a2b7
+--> a2a1d7c92e9e
+STEP 9/22: COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+--> Using cache e307fa87cbe006c1233c85303f0fe0bb635d701068731e4d28609992f25859bc
+--> e307fa87cbe0
+STEP 10/22: ENV UV_PROJECT_ENVIRONMENT=/opt/venv     UV_PYTHON=3.13     UV_LINK_MODE=copy
+--> Using cache c9ff8474ecc3a7f0bc973ed273a1b19015921e065922a92d2f33f658baa3e577
+--> c9ff8474ecc3
+STEP 11/22: RUN mkdir -p /opt/venv && chown vscode:vscode /opt/venv
+--> Using cache ba08bf61514e5a376a713c1363e6b434ec819f98ddfcdf82e1dd4f6762f1ca9b
+--> ba08bf61514e
+STEP 12/22: RUN printf '%s\n' '#!/usr/bin/env bash'       'exec bash /opt/pi-sandbox/lib/pi-commit "$@"' > /usr/local/bin/pi-commit     && chmod 0755 /usr/local/bin/pi-commit
+--> Using cache f33e5f69e7b638f9b2b6b47e0b083597d5311a8191ec2f203b6b5b22a2546659
+--> f33e5f69e7b6
+STEP 13/22: RUN install -d -o vscode -g vscode -m 0755       /opt/pi-runtime /opt/pi-runtime/bin     && ln -s /usr/bin/pi /opt/pi-runtime/bin/pi
+--> Using cache d3aa6958212e97c3ec13cf587d1a3e06317fdeffdef1a7f31fecf2bf3c12ac01
+--> d3aa6958212e
+STEP 14/22: USER vscode
+--> Using cache e122c3eeac379c8808bdeac70cdc279871e44ecc2159b222c7aad334997b1f08
+--> e122c3eeac37
+STEP 15/22: ENV HOME=/home/vscode
+--> Using cache 9776cfc28ca5033ac5d4a8623e986f8d6f6f71082ab40e35ed2dddb4e634f19a
+--> 9776cfc28ca5
+STEP 16/22: ENV PATH=/opt/pi-sandbox/bin:/home/vscode/.pi/agent/bin:/opt/pi-runtime/bin:/opt/venv/bin:/home/vscode/.local/bin:$PATH
+--> Using cache 48a904ceffd394fdd23bdc25a8985c45e979b51a1f6bae4ea782fed242d27c91
+--> 48a904ceffd3
+STEP 17/22: ARG SYNC_DEPS=0
+--> Using cache 5a396d51a88d78301c34eed0b57d1c71aad19f1d40b459a915aac902e739f70a
+--> 5a396d51a88d
+STEP 18/22: WORKDIR /home/vscode/_bootstrap
+--> Using cache aa0634189963ed654e7630be4fc71e5c95cc92d7e19c1e04bc8ea63fa702d10b
+--> aa0634189963
+STEP 19/22: COPY --chown=vscode:vscode pyproject.toml uv.lock ./
+--> Using cache ecba271412027eddca609071cc6662e0048c1a3a6d44c22de53e54cb2abfd5c9
+--> ecba27141202
+STEP 20/22: RUN if [ "$SYNC_DEPS" = "1" ]; then uv sync --frozen --no-install-project; fi     && cd /home/vscode && rm -rf /home/vscode/_bootstrap
+--> Using cache bf25e1bd25e1507a73172409d697f68b6302751f6d2d99e61d3799f96013915d
+--> bf25e1bd25e1
+STEP 21/22: WORKDIR /workspace
+--> Using cache a9de0b279a605c893c2a8eb820dfaa21cbc32f5872e3525c7ff4fad505657553
+--> a9de0b279a60
+STEP 22/22: CMD ["bash", "-l"]
+--> Using cache 7fcf719d949cb67424dc88a315e0754e3504c3517b0762e9f9360229a96d64c5
+COMMIT re-uq-sandbox
+--> 7fcf719d949c
+Successfully tagged localhost/re-uq-sandbox:latest
+7fcf719d949cb67424dc88a315e0754e3504c3517b0762e9f9360229a96d64c5
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+
+added 128 packages in 2m
+
+15 packages are looking for funding
+  run `npm fund` for details
+  [sandbox] pi refreshed: 0.84.4
+  [sandbox] codex auth
+  [sandbox] codex config
+  [sandbox] shared read-write memory: agent/pi-hermes-memory
+  [sandbox] shared read-write memory: agent/projects-memory
+  [sandbox] pi resource directory: agent/agents
+  [sandbox] pi resource directory: agent/bin
+  [sandbox] pi resource directory: agent/extensions
+  [sandbox] pi resource directory: agent/integrations
+  [sandbox] pi resource directory: agent/lib
+  [sandbox] pi resource directory: agent/prompts
+  [sandbox] pi resource directory: agent/skills
+  [sandbox] pi resource directory: agent/templates
+  [sandbox] pi resource directory: workflows
+  [sandbox] pi root config: web-search.json
+  [sandbox] pi agent config: AGENTS.md
+  [sandbox] pi agent config: APPEND_SYSTEM.md
+  [sandbox] pi agent config: auth.json
+  [sandbox] pi agent config: hermes-memory-config.json
+  [sandbox] pi agent config: mcp.json
+  [sandbox] pi agent config: models-store.json
+  [sandbox] pi agent config: settings.json
+  [sandbox] pi agent config: subagents.json
+  [sandbox] omp resource directory: agent/prompts
+  [sandbox] omp config: agent/config.yml
+Current version: 18.1.5
+✔ Already up to date
+  [sandbox] omp refreshed: omp/18.1.5
+  [sandbox] pi defaultProjectTrust=always (container-only)
+Updated packages
+  [sandbox] pi extensions updated
+== tooling present ==
+  [32mPASS[0m pi
+  [32mPASS[0m node
+  [32mPASS[0m git
+  [32mPASS[0m tmux
+  [32mPASS[0m herdr
+  [32mPASS[0m qmd-cache
+  [32mPASS[0m qmd
+  [32mPASS[0m uv
+  [32mPASS[0m uvx
+  [33mSKIP[0m rtk not installed (rtk.enabled=false)
+== workspace mount ==
+  [32mPASS[0m workspace is mounted
+  [32mPASS[0m workspace is writable
+== the agent's checkout ==
+  [33mSKIP[0m workspace.mode=direct; the project checkout itself is mounted
+== isolation: the host filesystem is otherwise unreachable ==
+  [32mPASS[0m no host home at /Users
+  [32mPASS[0m no seeded host path is writable through the workspace
+  [32mPASS[0m host canary invisible
+== shared read-write Pi memory (the one deliberate hole) ==
+  [32mPASS[0m shared memory writable: agent/pi-hermes-memory
+  [32mPASS[0m shared memory is a host bind mount: agent/pi-hermes-memory
+  [32mPASS[0m shared memory writable: agent/projects-memory
+  [32mPASS[0m shared memory is a host bind mount: agent/projects-memory
+== curated host Pi configuration is read-only ==
+  [32mPASS[0m host Pi runtime state absent from the seed
+  [32mPASS[0m all 730 curated Pi seed files are read-only
+  [32mPASS[0m all 730 curated Pi seed files imported intact
+  [32mPASS[0m selected seed read-only: /seed/codex/auth.json
+  [32mPASS[0m selected seed read-only: /seed/codex/config.toml
+== host credential boundary ==
+  [33mSKIP[0m no SSH access configured
+== toolchain isolation ==
+  [32mPASS[0m venv lives outside the workspace bind mount
+  [32mPASS[0m venv directory is writable
+  [32mPASS[0m host .venv is not on PATH
+== pi loads (unattended posture: container-only auto-trust) ==
+  [32mPASS[0m pi --version runs
+  [32mPASS[0m Pi extensions reach a ready RPC state
+  [33mSKIP[0m better-sqlite3 is not installed
+  [32mPASS[0m defaultProjectTrust set
+== Oh My Pi harness ==
+  [32mPASS[0m omp
+  [32mPASS[0m omp --version runs
+  [32mPASS[0m bun for OMP plugin installs
+  [32mPASS[0m OMP state is on a persistent volume
+  [32mPASS[0m no host credential store is mounted into the sandbox
+  [32mPASS[0m the OMP credential broker is reachable from inside
+  [32mPASS[0m the broker bearer is present but not on disk in the sandbox
+  [32mPASS[0m omp resolves an account through the broker
+  [32mPASS[0m host OMP runtime state absent from the seed
+  [32mPASS[0m all 8 curated OMP seed files are read-only
+  [32mPASS[0m all 8 curated OMP seed files imported intact
+== Paseo remote access ==
+  [33mSKIP[0m Paseo disabled
+== Herdr lifecycle feedback ==
+  [33mSKIP[0m Herdr lifecycle integration disabled
+
+  summary: 40 passed, 0 failed

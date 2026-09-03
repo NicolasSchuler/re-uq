@@ -1,0 +1,9 @@
+# Deterministic pass plus the 5-sample stochastic pass used for UQ scoring.
+deterministic:
+  temperature: 0.0
+  top_p: 1.0
+  samples: 1
+stochastic:
+  temperature: 0.7
+  top_p: 1.0
+  samples: 5

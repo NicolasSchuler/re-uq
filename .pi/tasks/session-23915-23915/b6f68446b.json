@@ -1,0 +1,21 @@
+{
+  "id": "b6f68446b",
+  "name": "Verify sandbox smoke",
+  "command": "cd /Users/nicolas/re-uq && \"$HOME/.pi/devcontainer/bin/pi-sandbox\" smoke",
+  "description": "Build and launch the rendered re-uq sandbox, sync locked Python dependencies, verify Pi/OMP broker access, and run the in-container smoke gate.",
+  "status": "failed",
+  "outputPath": ".pi/tasks/session-23915-23915/b6f68446b.output",
+  "cwd": "/Users/nicolas/re-uq",
+  "startTime": 1788434409422,
+  "endTime": 1788435100025,
+  "exitCode": 1,
+  "signal": null,
+  "pid": 38165,
+  "bytesWritten": 6481,
+  "isAgent": false,
+  "error": "Exited with code 1",
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 1800
+}

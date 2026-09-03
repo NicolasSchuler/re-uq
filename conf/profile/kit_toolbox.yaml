@@ -1,0 +1,25 @@
+# Provider profile: kit_toolbox
+# Mirrors the `kit_toolbox` entry of run_configs/full_matrix.example.json.
+# Secrets are never stored here: `api_key_env` holds the *name* of the
+# environment variable that carries the key.
+profile_id: "kit_toolbox"
+provider_id: "kit_toolbox"
+base_url: "https://ki-toolbox.scc.kit.edu/api/v1"
+api_key_env: ${oc.env:RE_UQ_KIT_TOOLBOX_API_KEY_ENV,KIT_TOOLBOX_API_KEY}
+models:
+  - "kit.gemma4-31b-it"
+concurrency: 2
+batch_size: 16
+timeout_s: 180
+max_tokens: 256
+seed: 20260518
+send_seed: true
+max_retries: 3
+batch_order: "grouped"
+json_mode: true
+structured_output: "json_object"
+extra_body:
+  response_format:
+    type: "json_object"
+requires_manual_server: false
+notes: "KIT institutional endpoint used for the official kit.gemma4-31b-it runs (registry provider_id kit_toolbox)."

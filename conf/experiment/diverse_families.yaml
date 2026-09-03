@@ -1,0 +1,24 @@
+# @package _global_
+# TODO.md section C: widen the cohort beyond GLM using the new example provider
+# profiles. `model: null` means "every model listed by the selected profile",
+# run sequentially (the --all-models behaviour of the JSON runner).
+#
+# Run:
+#   .venv/bin/python scripts/run.py --multirun +experiment=diverse_families
+#
+# `ollama_local` needs `ollama serve` plus the listed models pulled; the hosted
+# profiles need their API-key environment variables exported.
+defaults:
+  - override /variant: must
+  - override /sampling: default
+
+task: both
+mode: full
+model: null
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      profile: openai,anthropic,mistral,google_gemini,ollama_local
+      dataset: nice,mlm_tapt

@@ -1,0 +1,10 @@
+template_id,condition,variant,source_statement_template,example_source_statement,intended_gold_modality,note
+main_mandatory_must,mandatory,must,The system MUST {capability}.,The system MUST export reports.,mandatory,Main benchmark mandatory condition.
+main_recommended_should,recommended,must,The system SHOULD {capability}.,The system SHOULD export reports.,recommended,Main benchmark recommended condition.
+main_optional_may,optional,must,The system MAY {capability}.,The system MAY export reports.,optional,Main benchmark optional condition.
+main_nice_to_have_useful_if,nice_to_have,must,It would be useful if the system could {capability}.,It would be useful if the system could export reports.,nice_to_have,Main benchmark weak stakeholder-intent condition.
+shall_mandatory_shall,mandatory,shall,The system SHALL {capability}.,The system SHALL export reports.,mandatory,SHALL robustness variant; swaps MUST in the mandatory condition only.
+probe_useful_if,nice_to_have,weak_probe,It would be useful if the system could {capability}.,It would be useful if the system could export reports.,nice_to_have,Weak-intent phrasing probe; identical to the main nice_to_have template.
+probe_nice_if,nice_to_have,weak_probe,It would be nice if the system could {capability}.,It would be nice if the system could export reports.,nice_to_have,Weak-intent phrasing probe.
+probe_low_priority_enhancement,nice_to_have,weak_probe,"As a low-priority enhancement, the system could {capability}.","As a low-priority enhancement, the system could export reports.",nice_to_have,Weak-intent phrasing probe.
+probe_future_enhancement,nice_to_have,weak_probe,Stakeholders mentioned that the system could {capability} as a possible future enhancement.,Stakeholders mentioned that the system could export reports as a possible future enhancement.,nice_to_have,Weak-intent phrasing probe.

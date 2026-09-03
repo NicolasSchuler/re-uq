@@ -34,6 +34,11 @@ data/processed/run_registry*.csv
 data/processed/task3_verification_items*.csv
 data/processed/task3_verification_items/
 data/processed/uq_scores*.csv
+# Smoke/fake runs (parallel artifact tree), run logs, and pre-strip backups.
+data/processed/smoke/
+data/processed/logs/
+data/processed/*.bak-*
+data/processed/*.lock
 
 manuscript/**
 
@@ -48,6 +53,7 @@ outputs/*
 !outputs/task2_prompt_sensitivity_summary.csv
 !outputs/weak_modality_probe_summary.*
 !outputs/weak_modality_template_sanity_check.*
+!outputs/modality_template_inventory.*
 !outputs/external_ai_service_probe/
 !outputs/external_ai_service_probe/README.md
 !outputs/external_ai_service_probe/*_evaluation.md

@@ -1,0 +1,24 @@
+# Provider profile: ollama_local
+# Mirrors the `ollama_local` entry of run_configs/full_matrix.example.json.
+# Secrets are never stored here: `api_key_env` holds the *name* of the
+# environment variable that carries the key.
+profile_id: "ollama_local"
+provider_id: "ollama"
+base_url: "http://127.0.0.1:11434/v1"
+api_key_env: ${oc.env:RE_UQ_OLLAMA_LOCAL_API_KEY_ENV,OLLAMA_API_KEY}
+models:
+  - "llama3.3"
+  - "gemma3"
+  - "qwen3"
+concurrency: 1
+batch_size: 4
+timeout_s: 300
+max_tokens: 512
+seed: 20260518
+send_seed: true
+max_retries: 3
+batch_order: "grouped"
+json_mode: false
+structured_output: "none"
+requires_manual_server: false
+notes: "Local Ollama daemon (`ollama serve`) with the listed models pulled beforehand. Ollama swaps models on demand, so no manual restart per model is required, but keep concurrency at 1 on a single GPU. Small local models are unreliable under forced JSON mode, so structured output stays off."

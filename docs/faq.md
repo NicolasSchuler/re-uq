@@ -1,6 +1,6 @@
 # FAQ
 
-Short answers to questions reviewers and new collaborators commonly raise. For depth, follow the linked documents.
+Short answers to questions reviewers and new collaborators commonly raise. For depth, follow the linked documents. The complete setup is in [`docs/experimental_setup.md`](experimental_setup.md); open gaps are in [`TODO.md`](../TODO.md).
 
 ## I do not have a provider API key. Can I still verify anything?
 
@@ -35,3 +35,29 @@ Task 3 is a **diagnostic** blind text audit, not the headline. It asks whether t
 ## What if the construct-validity gate is incomplete?
 
 Then `scripts/generate_evaluation_analysis.py` will refuse to write paper-facing artifacts and weak-intent results stay diagnostic. Complete [`docs/weak_modality_construct_review.csv`](weak_modality_construct_review.csv) with two reviewer judgments per template before claiming weak-intent results in the paper. See `docs/evaluation.md` for the gate definition.
+
+The tracked file is currently complete, so the gate passes — but both reviewer slots hold an author-delegated **LLM-assisted** review, declared in the `reviewer_role` column. It is pending human sign-off ([`TODO.md`](../TODO.md), section D), and weak-intent claims must carry that caveat until then.
+
+## Are the prompts in `README.md` what the models actually received?
+
+Not literally. The frozen files in `prompts/` define the task contract, the label set, and the confidence contract, and the README reproduces them. But every real run sent a **batched** prompt built by `batch_prompt_for_completion_jobs` in `scripts/eval_utils.py`: 16 benchmark items per request, asking for an array of results keyed by `request_index`. The batched wrapper restates the same task and the same contract in a different surface form. All three batched prompt bodies are reproduced verbatim in [`docs/experimental_setup.md`](experimental_setup.md).
+
+## Does batching bias the results?
+
+Possibly, and we say so. Batches are consecutive request indices without shuffling, and benchmark rows are ordered seed x variant, so each Task 2 batch of 16 contained all four modality variants of the same four seeds side by side. The prompt asks for independent evaluation, but the minimal-pair contrast was in the context window. Contrastive context plausibly makes modality preservation *easier*, which would make the reported strengthening rates conservative — but that direction is an assumption. The shuffled-batch and `batch_size=1` ablations that would settle it are [`TODO.md`](../TODO.md) section A.
+
+## Why is `heuristic_system_verb` counted in broad strengthening but not strict?
+
+Because it is a convention, not evidence. 11.5% of successful Task 2 outputs contain no modal at all (17.6% in the MUST cells, 5.5% in the SHALL cells). A bare `The system exports reports.` reads as an obligation to most RE practitioners, so the broad measure defaults it to mandatory; the strict measure refuses to guess and requires an explicit modal or a weak phrase. Both are reported, and any single number must say which one it uses. See [`docs/evaluation.md`](evaluation.md).
+
+## Why is the model cohort mostly one family?
+
+Five of the six official models are GLM variants on the z.ai endpoint; `kit.gemma4-31b-it` on the KIT institutional endpoint is the only outside model. That is a real limitation and is stated as one. New example profiles for OpenAI, Anthropic, Mistral, Gemini, and Ollama exist so the cohort can be widened; running them is [`TODO.md`](../TODO.md) section C.
+
+## Can I reproduce the exact requests of the reported runs?
+
+No. The reported runs sent no request `seed` and recorded only the requested model string, not the served model version. Both are recorded going forward, but the archived raw outputs cannot be bit-reproduced. A rerun is a new run that tests stability; it does not verify the old numbers. See [`TODO.md`](../TODO.md) section F.
+
+## Will you fine-tune a model to fix this?
+
+No. Fine-tuning is out of scope for this artifact and is not a to-do item. The study measures off-the-shelf behaviour of hosted instruction-tuned models under a frozen prompt contract. Whether fine-tuning removes modal-force strengthening is an open question and a different paper; it is recorded as a limitation.

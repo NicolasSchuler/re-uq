@@ -44,7 +44,24 @@ PAPER_RESULT_FIELDS = [
     "heuristic_text_modality_rate",
     "label_text_consistency",
     "text_over_commitment",
+    "text_over_commitment_n_numerator",
+    "text_over_commitment_n_denominator",
+    "text_over_commitment_n_unknown_excluded",
+    "text_over_commitment_lower_bound",
+    "text_over_commitment_upper_bound",
     "strict_text_over_commitment",
+    "strict_text_over_commitment_n_numerator",
+    "strict_text_over_commitment_lower_bound",
+    "strict_text_over_commitment_upper_bound",
+    "text_modality_negated_rate",
+    "text_modality_multi_modal_rate",
+    "mean_requirement_word_count",
+    "mean_length_ratio",
+    "strengthening_rate_by_length_tercile",
+    "mean_requirement_word_count_by_source_modality",
+    "repeated_sample_unanimity",
+    "agreement_n_complete",
+    "agreement_n_incomplete_excluded",
     "label_correct_text_overcommit_90",
     "strengthening_recall",
     "false_preserve_rate",
@@ -300,11 +317,13 @@ def main() -> None:
         eu.verify_benchmark_manifest(manifest_path, root)
 
     benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
-    raw_path = eu.model_outputs_raw_path(root, dataset_id, variant)
-    registry_path = eu.run_registry_path(root, dataset_id, variant)
+    # Smoke/fake runs live in the parallel data/processed/smoke/ tree; passing the
+    # run id lets the helpers resolve it without RE_UQ_SMOKE_TREE=1.
+    raw_path = eu.model_outputs_raw_path(root, dataset_id, variant, run_id=args.run_id)
+    registry_path = eu.run_registry_path(root, dataset_id, variant, run_id=args.run_id)
     construct_review_path = root / "docs/weak_modality_construct_review.csv"
     task3_legacy_items_path = eu.artifact_path(root / "data/processed/task3_verification_items.csv", dataset_id, variant)
-    task3_path = eu.task3_raw_path(root, dataset_id, variant)
+    task3_path = eu.task3_raw_path(root, dataset_id, variant, run_id=args.task3_run_id or args.run_id)
     task3_audit_mode = eu.normalize_task3_audit_mode(args.task3_audit_mode)
 
     benchmark = eu.read_csv_rows(benchmark_path)
@@ -363,7 +382,12 @@ def main() -> None:
                 "new Task 3 rows should contain item provenance, or the run-specific item CSV must exist."
             )
         if not args.skip_registry_check:
-            require_registry_complete(eu.task3_registry_path(root, dataset_id, variant), args.task3_run_id, model=args.model, profile_id=args.profile)
+            require_registry_complete(
+                eu.task3_registry_path(root, dataset_id, variant, run_id=args.task3_run_id),
+                args.task3_run_id,
+                model=args.model,
+                profile_id=args.profile,
+            )
         require_parse_quality("Task 3 run", task3_rows, args.max_parse_failure_rate)
         require_probability_confidence("Task 3 run", task3_rows)
 

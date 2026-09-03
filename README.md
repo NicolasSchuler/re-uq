@@ -4,6 +4,13 @@ This repository is the evaluation artifact for the IST short communication
 **"When Weak Intent Becomes a Requirement: Limits of Uncertainty Signals for
 Modal-Force Strengthening in LLM-Assisted Requirements Engineering."**
 
+> **Read the setup first.** The complete experimental setup — benchmark
+> construction, prompts as actually sent, batching policy and its confound,
+> model cohort, request parameters, and limitations — is in
+> [`docs/experimental_setup.md`](docs/experimental_setup.md). Aggregation scope
+> for every headline number is in [`docs/aggregation.md`](docs/aggregation.md).
+> Known gaps and planned work are in [`TODO.md`](TODO.md).
+
 ## Graphical Abstract
 
 [![Graphical abstract showing a controlled modality benchmark feeding an LLM-assisted requirements engineering evaluation and uncertainty-quantification metrics.](docs/figures/graphical_abstract.png)](docs/figures/graphical_abstract.pdf)
@@ -75,9 +82,19 @@ is frozen as a plain text file, content-addressed by SHA-256 in
 [`outputs/benchmark_manifest*.json`](outputs/), and verified by the analysis gate.
 Each task also ships **sensitivity/ablation variants** that exist specifically to
 show the effect is not an artifact of a single phrasing (see
-[`prompts/README.md`](prompts/README.md) for the full index). The verbatim main
-prompts are reproduced below. The `{{...}}` braces are literal in the frozen file;
-`{source_statement}` and similar are the only substituted fields.
+[`prompts/README.md`](prompts/README.md) for the full index). The frozen
+single-item prompts are reproduced below. The `{{...}}` braces are literal in the
+frozen file; `{source_statement}` and similar are the only substituted fields.
+
+**These files define the task contract, but they are not the literal request
+body of the production runs.** Every real run in this repository sent a
+*batched* prompt: 16 benchmark items per request, built by
+`batch_prompt_for_completion_jobs` in `scripts/eval_utils.py`, asking for an
+array of results keyed by `request_index`. The batched wrapper restates the same
+task, the same label set, and the same `0.0-1.0` confidence contract; it differs
+in surface form. The batched prompt bodies are reproduced verbatim, and the
+batching confound is analysed, in
+[`docs/experimental_setup.md`](docs/experimental_setup.md).
 
 ### Task 1 — Mandatory Entailment (control)
 
@@ -180,10 +197,25 @@ are enforced as Pydantic models in
 [`scripts/structured_outputs.py`](scripts/structured_outputs.py) and covered by
 [`tests/test_structured_outputs.py`](tests/test_structured_outputs.py).
 
+## Model Cohort
+
+The official cohort is six models over two endpoints:
+
+| Model | Endpoint |
+| --- | --- |
+| `glm-4.5-air`, `glm-4.7`, `glm-5`, `glm-5-turbo`, `glm-5.1` | z.ai |
+| `kit.gemma4-31b-it` | KIT institutional endpoint (`kit_toolbox` profile) |
+
+Five of the six are from one model family. `azure.*` rows in local registries
+are private-endpoint diagnostics and are excluded from every paper-facing
+aggregate. Full request parameters are in
+[`docs/experimental_setup.md`](docs/experimental_setup.md).
+
 ## Reported Paper Findings
 
 Each headline is stated with its aggregation scope over the four
-dataset x variant cells (mlm_tapt/nice x must/shall):
+dataset x variant cells (mlm_tapt/nice x must/shall). All of them were measured
+under 16-item grouped batching, described below:
 
 - Declared modality labels were preserved.
 - Generated text still strengthened source modal force in 8.6% of cases under
@@ -191,7 +223,9 @@ dataset x variant cells (mlm_tapt/nice x must/shall):
   8.6%). Under broad evidence it was 13.8% (pooled, the conservative headline
   convention; the unweighted macro-of-cells is 13.9%).
 - For weak stakeholder-intent sources, strict strengthening reached 29.8% in
-  the mlm_tapt/MUST cell at confidence >= 0.90 (cross-cell range 27.4-31.7%).
+  the mlm_tapt/MUST cell at confidence >= 0.90 — 304 of the 1,020 weak-intent
+  rows whose generated text had a readable modality, or 28.1% of all 1,080 weak
+  rows in the cell (cross-cell range 27.4-31.7%).
 - Strengthened outputs were usually high-confidence: 98.4% as an unweighted
   macro over cells (per-cell n 296-436) at confidence >= 0.90.
 - Strengthened outputs showed 100.0% repeated-sample agreement, i.e. 5
@@ -199,17 +233,47 @@ dataset x variant cells (mlm_tapt/nice x must/shall):
   label accuracy; read this as sampling stability, not robustness.
 - Semantic dispersion, embedding probes, and blind audits helped only partly.
 
+**Batching confound.** Every one of these numbers comes from batched requests
+of 16 benchmark items. Batches are consecutive request indices with no
+shuffling, and benchmark rows are ordered seed x variant, so each Task 2 batch
+contained all four modality variants (`MUST`, `SHOULD`, `MAY`, `It would be
+useful if ...`) of the same four seeds side by side. The prompt asks the model
+to treat items independently, but the minimal-pair contrast was inside its
+context window. Contrastive context plausibly makes modality preservation
+easier, which would make the reported strengthening rates conservative — but
+that direction is an assumption until the shuffled-batch and single-item
+ablations are run. `batch_order: shuffled` is now a *constrained* shuffle that
+never places two variants of one seed in the same batch; the earlier
+implementation only permuted job order and, at batch size 16, still co-located
+two variants of one seed in roughly half of the 45 Task 2 batches (22 to 24 depending on the derived RNG seed), so it would not have
+removed the contrast it was meant to ablate. See
+[`docs/experimental_setup.md`](docs/experimental_setup.md) and
+[`TODO.md`](TODO.md) section A.
+
 Interpret these numbers through the artifact status below. Checked metric
 snapshots in this repository are diagnostic/stale unless regenerated from a
 complete current run. These aggregates are re-derived from the per-cell
 snapshots by
-[`scripts/aggregate_paper_headline_metrics.py`](scripts/aggregate_paper_headline_metrics.py).
+[`scripts/aggregate_paper_headline_metrics.py`](scripts/aggregate_paper_headline_metrics.py)
+and by `scripts/export_paper_tables.py`; the pooling rules are specified in
+[`docs/aggregation.md`](docs/aggregation.md). Every headline above reproduces
+exactly from the raw run files (strict `1412/16448`, broad `2268/16448`). The
+regenerated per-cell snapshots carry the same headline values as the shipped
+ones but are no longer byte-identical to them: they add the weak-intent
+strengthening columns and a `parse_failure_rate` computed from the raw Task 2
+deterministic rows (see [`docs/aggregation.md`](docs/aggregation.md) §3 and §5).
+Per-model strict strengthening ranges from 0.3% (`glm-4.7`) to 16.9%
+(`kit.gemma4-31b-it`), with seed-clustered 95% CIs in
+[`outputs/paper_per_model_headline.csv`](outputs/paper_per_model_headline.csv),
+and the pooled strict CI is [8.2%, 9.0%] against [13.2%, 14.4%] broad.
 
 ## Where To Go
 
 | You want to ... | Read |
 | --- | --- |
+| See the full experimental setup | [`docs/experimental_setup.md`](docs/experimental_setup.md) |
 | Understand the study design | [`docs/evaluation.md`](docs/evaluation.md) |
+| Know how headline numbers are aggregated | [`docs/aggregation.md`](docs/aggregation.md) |
 | Reproduce the pipeline | [`docs/reproduction.md`](docs/reproduction.md) |
 | Run without API credentials | [`docs/reproduction_smoke.md`](docs/reproduction_smoke.md) |
 | Trace a result to inputs | [`docs/results_mapping.md`](docs/results_mapping.md) |
@@ -217,6 +281,7 @@ snapshots by
 | Understand the pipeline architecture | [`docs/architecture.md`](docs/architecture.md) |
 | Understand artifact policy | [`docs/repository_hygiene.md`](docs/repository_hygiene.md) |
 | See common reviewer questions | [`docs/faq.md`](docs/faq.md) |
+| See open gaps and planned work | [`TODO.md`](TODO.md) |
 
 ## Quick Check
 
@@ -233,6 +298,38 @@ bash scripts/reproduce.sh smoke-fake
 
 The `smoke-fake` path uses local fake completions. It does not call a provider
 and does not reproduce paper results.
+
+`scripts/reproduce.sh` has built-in defaults, and **the default cell points at a
+paid provider** (`RE_UQ_PROFILE=zai`, `RE_UQ_MODEL=glm-5.1`). That is harmless
+for `smoke-fake`, which never opens a connection, but any other subcommand will
+try to bill an account. Override the cell explicitly:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RE_UQ_CONFIG` | `run_configs/current_run.json` | Run config path. |
+| `RE_UQ_PROFILE` | `zai` | Provider profile id (paid endpoint). |
+| `RE_UQ_MODEL` | `glm-5.1` | Model id (paid endpoint). |
+| `RE_UQ_DATASET` | `mlm_tapt` | `nice` or `mlm_tapt`. |
+| `RE_UQ_VARIANT` | `must` | `must` or `shall`. |
+| `RE_UQ_MODE` | `full` | Run mode for the `task3` subcommand. |
+| `RE_UQ_RUN_ID` | _(unset)_ | Explicit run id for `task3` / `analysis` source lookups. |
+
+```bash
+RE_UQ_PROFILE=local_llama_cpp RE_UQ_MODEL=qwen/qwen3.5-9b \
+  bash scripts/reproduce.sh smoke
+```
+
+`scripts/reproduce.sh` also offers fake-completion smoke paths for the
+downstream stages — `smoke-fake-task3`, `smoke-fake-analysis`, and
+`smoke-fake-all` which chains all three. They need no API key and write into a
+separate `data/processed/smoke/` tree (analysis under `outputs/smoke/`), so a
+smoke run never touches real run artifacts. Every subcommand prints a
+`resolved: ...` line naming the cell it is about to use. See
+[`docs/reproduction_smoke.md`](docs/reproduction_smoke.md).
+
+```bash
+bash scripts/reproduce.sh smoke-fake-all
+```
 
 ## Full Provider Run
 
@@ -271,6 +368,10 @@ SOURCE_RUN_ID="full-..."
   --audit-mode blind \
   --mode full
 ```
+
+Add `--allow-partial-source` when the source Task 2 run was a `--mode smoke`
+run: the completeness check is against the full 720-item benchmark, so a smoke
+source is rejected without it. Paper-facing Task 3 runs never need the flag.
 
 Then take `TASK3_RUN_ID` from
 `data/processed/run_registry_task3_verification*.csv` and generate analysis:
@@ -339,9 +440,15 @@ Local-only by default:
 - run progress files
 - run-specific analysis directories
 
-Checked metric snapshots and legacy external-probe reports are diagnostic or
-stale unless regenerated from a complete current run and marked paper-ready in
-[`outputs/README.md`](outputs/README.md). See
+The paper-facing snapshots this README links to (`outputs/paper_*` and
+`outputs/blind_task3_analysis_summary.*`) are local-only under the `outputs/*`
+ignore rule. Regenerate them from the local raw outputs with
+`scripts/export_paper_tables.py` and `scripts/aggregate_paper_headline_metrics.py`
+(see [`docs/aggregation.md`](docs/aggregation.md), section 8).
+
+Other checked metric snapshots and legacy external-probe reports are diagnostic
+or stale unless regenerated from a complete current run and marked paper-ready
+in [`outputs/README.md`](outputs/README.md). See
 [`docs/repository_hygiene.md`](docs/repository_hygiene.md) for artifact policy.
 
 ## Environment

@@ -1,0 +1,60 @@
+# Hydra entry configuration for scripts/run.py.
+#
+# This is the composition-friendly twin of the legacy JSON run configs in
+# run_configs/*.json. Both paths end up in the same `normalize_run_config`
+# dictionary, so nothing about the pipeline semantics changes here.
+#
+# Compose a run with group overrides, e.g.
+#   .venv/bin/python scripts/run.py profile=zai model=glm-5.1 dataset=nice
+# and sweep with `--multirun`. See docs/configuration.md.
+
+defaults:
+  - _self_
+  - profile: zai
+  - dataset: mlm_tapt
+  - variant: must
+  - sampling: default
+  - logging: default
+  # Experiment presets are opt-in and applied last:
+  #   .venv/bin/python scripts/run.py --multirun +experiment=paper_cohort
+
+# ---------------------------------------------------------------------------
+# Run-level fields (mirror the top-level keys of run_configs/*.json)
+# ---------------------------------------------------------------------------
+run_group_id: provider-matrix-v2-2026-05
+prompt_version: v2-conf01
+seed: 20260518
+batch_order: grouped
+
+# ---------------------------------------------------------------------------
+# Execution knobs (mirror the runner CLI flags)
+# ---------------------------------------------------------------------------
+# null => run every model of the selected profile sequentially (--all-models).
+model: null
+# task1 | task2 | both | task3 ; task3 dispatches to the Task 3 runner.
+task: both
+# smoke | full | resume
+mode: smoke
+run_id: null
+smoke_items: 2
+fake_completion: false
+dry_run: false
+log_level: INFO
+
+# ---------------------------------------------------------------------------
+# Task 3 only
+# ---------------------------------------------------------------------------
+source_run_id: null
+audit_mode: blind
+allow_partial_source: false
+
+hydra:
+  run:
+    dir: outputs/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: outputs/hydra/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job:
+    # Never change the process cwd: every path helper resolves through
+    # eval_utils.project_root(), which walks up from the working directory.
+    chdir: false

@@ -32,8 +32,52 @@ SUMMARY_FIELDS = [
     "weak_strengthening_90",
     "text_modality_accuracy",
     "label_text_consistency",
+    "text_over_commitment",
+    "text_over_commitment_n_numerator",
+    "text_over_commitment_n_denominator",
+    "text_over_commitment_ci_low",
+    "text_over_commitment_ci_high",
+    "strict_text_over_commitment",
+    "strict_text_over_commitment_n_numerator",
+    "strict_text_over_commitment_n_denominator",
+    "strict_text_over_commitment_ci_low",
+    "strict_text_over_commitment_ci_high",
     "parse_failure_rate",
 ]
+
+DEFAULT_BOOTSTRAP_SAMPLES = 1000
+BOOTSTRAP_SEED = 20260518
+
+
+def annotate_text_drift_cis(
+    summary_rows: list[dict[str, Any]],
+    scores: list[dict[str, Any]],
+    bootstrap_samples: int = DEFAULT_BOOTSTRAP_SAMPLES,
+) -> list[dict[str, Any]]:
+    """Attach text-strengthening counts and seed-clustered CIs to Task 2 rows.
+
+    The CI is a seed-clustered bootstrap (``eu.bootstrap_seed_metric``) with a
+    fixed seed so the matrix table is reproducible run to run.
+    """
+    by_group: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for score in scores:
+        key = (str(score.get("model", "")), str(score.get("task", "")), str(score.get("uq_method", "")))
+        by_group.setdefault(key, []).append(score)
+    for row in summary_rows:
+        if str(row.get("task", "")) != "task2":
+            continue
+        key = (str(row.get("model", "")), str(row.get("task", "")), str(row.get("uq_method", "")))
+        group = by_group.get(key, [])
+        if not group:
+            continue
+        row.update(
+            eu.text_over_commitment_ci_fields(
+                group,
+                iterations=bootstrap_samples,
+                seed=BOOTSTRAP_SEED,
+            )
+        )
+    return summary_rows
 
 
 def completed_registry_rows(
@@ -56,6 +100,31 @@ def completed_registry_rows(
             continue
         rows.append(row)
     return rows
+
+
+def load_registry_and_raw_rows(
+    root: Path,
+    dataset_id: str,
+    variant: str,
+    include_smoke: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read the full-run registry and raw outputs, plus the smoke tree on request.
+
+    Smoke and fake runs write into ``data/processed/smoke/`` so they can never
+    contaminate the paper-facing files, so ``--include-smoke`` has to read both
+    trees and concatenate them.
+    """
+    registry_rows: list[dict[str, Any]] = []
+    raw_rows: list[dict[str, Any]] = []
+    smoke_flags: list[bool] = [False, True] if include_smoke else [False]
+    for smoke in smoke_flags:
+        registry_path = eu.run_registry_path(root, dataset_id, variant, smoke=smoke)
+        if registry_path.exists():
+            registry_rows.extend(eu.read_csv_rows(registry_path))
+        raw_path = eu.model_outputs_raw_path(root, dataset_id, variant, smoke=smoke)
+        if raw_path.exists():
+            raw_rows.extend(eu.read_jsonl(raw_path))
+    return registry_rows, raw_rows
 
 
 def annotate_summary(row: dict[str, Any], registry_row: dict[str, Any]) -> dict[str, Any]:
@@ -124,6 +193,12 @@ def main() -> None:
         default=[],
         help="Exclude completed runs whose model id starts with this prefix. Can be repeated.",
     )
+    parser.add_argument(
+        "--bootstrap-samples",
+        type=int,
+        default=DEFAULT_BOOTSTRAP_SAMPLES,
+        help="Seed-clustered bootstrap resamples for the text-drift CIs (0 disables).",
+    )
     args = parser.parse_args()
 
     root = eu.project_root()
@@ -134,8 +209,12 @@ def main() -> None:
 
     for dataset_id in datasets:
         for variant in variants:
-            registry_path = eu.run_registry_path(root, dataset_id, variant)
-            registry_rows = eu.read_csv_rows(registry_path) if registry_path.exists() else []
+            registry_rows, all_raw_rows = load_registry_and_raw_rows(
+                root,
+                dataset_id,
+                variant,
+                include_smoke=args.include_smoke,
+            )
             complete_rows = completed_registry_rows(
                 registry_rows,
                 run_group_id,
@@ -143,9 +222,7 @@ def main() -> None:
                 exclude_model_prefixes=args.exclude_model_prefix,
             )
             benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
-            raw_path = eu.model_outputs_raw_path(root, dataset_id, variant)
             benchmark = eu.read_csv_rows(benchmark_path)
-            all_raw_rows = eu.read_jsonl(raw_path)
             summary_rows: list[dict[str, Any]] = []
             ensemble_raw_rows: list[dict[str, Any]] = []
 
@@ -159,7 +236,9 @@ def main() -> None:
                 ]
                 result_benchmark = eu.benchmark_rows_with_current_raw_outputs(benchmark, raw_rows)
                 scores = eu.build_uq_scores(result_benchmark, raw_rows)
-                for row in eu.metric_summary_by_model_task_method(scores):
+                run_summary = eu.metric_summary_by_model_task_method(scores)
+                annotate_text_drift_cis(run_summary, scores, bootstrap_samples=args.bootstrap_samples)
+                for row in run_summary:
                     summary_rows.append(annotate_summary(row, registry_row))
                 ensemble_raw_rows.extend(raw_rows)
 
@@ -177,7 +256,9 @@ def main() -> None:
                     "dataset_id": dataset_id,
                     "benchmark_variant": variant,
                 }
-                for row in eu.metric_summary_by_model_task_method(ensemble_scores):
+                ensemble_summary = eu.metric_summary_by_model_task_method(ensemble_scores)
+                annotate_text_drift_cis(ensemble_summary, ensemble_scores, bootstrap_samples=args.bootstrap_samples)
+                for row in ensemble_summary:
                     summary_rows.append(annotate_summary(row, registry_stub))
 
             output_prefix = eu.artifact_path(root / "outputs/run_matrix_summary.csv", dataset_id, variant).with_suffix("")

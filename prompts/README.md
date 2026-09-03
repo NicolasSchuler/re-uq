@@ -12,3 +12,11 @@ Frozen task prompt contracts used by the CLI runner and recorded in benchmark ma
 | `modality_verification_declared.txt` | Task 3 ablation | Declared-modality anchoring prompt for Task 3 ablations only. |
 
 Prompts are content-addressed by SHA-256 in `outputs/benchmark_manifest*.json`. Changing a prompt without updating the manifest will be caught by the analysis gate.
+
+## These files are the contract, not the request body
+
+All reported runs sent **batched** prompts, not these single-item files. `batch_prompt_for_completion_jobs` in `scripts/eval_utils.py` builds one request carrying 16 benchmark items and asks for an array of results keyed by `request_index`. The batched wrapper restates the same task, the same label set, and the same `0.0-1.0` confidence contract in a different surface form; it does not read these `.txt` files.
+
+The files here remain authoritative for the task definition, they are what the manifest hashes, and they are what a `batch_size=1` run would send. The batched prompt bodies for Task 1, Task 2, and Task 3 are reproduced verbatim in [`docs/experimental_setup.md`](../docs/experimental_setup.md), together with the batching policy and its known confound.
+
+No system message is sent with any prompt. The prompt is the entire user message.

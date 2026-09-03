@@ -1,0 +1,97 @@
+pi-sandbox: building re-uq-sandbox (SYNC_DEPS=1)
+STEP 1/22: FROM mcr.microsoft.com/devcontainers/base:ubuntu
+STEP 2/22: RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends         rsync openssh-client util-linux tmux build-essential ca-certificates curl gnupg     && rm -rf /var/lib/apt/lists/*
+--> Using cache 402041b10523353d08f9a2f11777d5bbebd838815896f50587e09cc0818544dd
+--> 402041b10523
+STEP 3/22: RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash -     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs     && npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest     && pi --version     && npm cache clean --force     && rm -rf /var/lib/apt/lists/*
+--> Using cache b84e8dc0e69215341696168c5cea2f988a6c1e78da50a1e8abf4df81516e21a2
+--> b84e8dc0e692
+STEP 4/22: RUN npm install -g @tobilu/qmd@2.8.3     && qmd --version     && npm cache clean --force
+--> Using cache b6a9ee5566fb94809ca47765ccc9d3eb059910cdc9c5a42d0c7f1167f7b7df1d
+--> b6a9ee5566fb
+STEP 5/22: ARG HERDR_VERSION=0.8.2
+--> Using cache eec30ac761921d546a064ef2483abdebe24d6c6113433aeab032258cf091829e
+--> eec30ac76192
+STEP 6/22: RUN set -eu;     case "$(uname -m)" in       aarch64) herdr_target="linux-aarch64"; herdr_sha256="f55610658e1c2e0d2aaef730b4b2ab885f7f8ba00285ab372bfb14f2e3d5b40d" ;;       x86_64) herdr_target="linux-x86_64"; herdr_sha256="976150a14d490c94b243ea2e1a7eb2dfb67f12e36b182db90936f6728e6aecf4" ;;       *) echo "unsupported Herdr architecture: $(uname -m)" >&2; exit 1 ;;     esac;     curl -fsSL "https://github.com/herdrdev/herdr/releases/download/v${HERDR_VERSION}/herdr-${herdr_target}" -o /tmp/herdr;     echo "${herdr_sha256}  /tmp/herdr" | sha256sum -c -;     install -m 0755 /tmp/herdr /usr/local/bin/herdr;     rm /tmp/herdr;     herdr --version;     integration_home=/tmp/pi-sandbox-herdr-integrations;     install -d "${integration_home}/.pi/agent/extensions" "${integration_home}/.omp/agent/extensions" /usr/local/share/pi-sandbox/herdr;     HOME="${integration_home}" herdr integration install pi;     HOME="${integration_home}" herdr integration install omp;     install -m 0444 "${integration_home}/.pi/agent/extensions/herdr-agent-state.ts" /usr/local/share/pi-sandbox/herdr/herdr-agent-state.ts;     install -m 0444 "${integration_home}/.omp/agent/extensions/herdr-omp-agent-state.ts" /usr/local/share/pi-sandbox/herdr/herdr-omp-agent-state.ts;     rm -rf "${integration_home}"
+--> Using cache 90ba1b252941dd5e5355f3cff5d5332428d166ff86fb8ebcaf20f75c939bce96
+--> 90ba1b252941
+STEP 7/22: RUN npm install -g bun@latest     && bun --version     && npm cache clean --force
+
+added 2 packages in 1m
+1.4.0
+npm warn using --force Recommended protections disabled.
+--> 00a0a2d6b01d
+STEP 8/22: RUN export PI_INSTALL_DIR=/usr/local/bin;     curl -fsSL https://omp.sh/install | sh -s -- --binary     && omp --version
+Fetching latest release...
+Using version: v18.1.5
+Downloading omp-linux-arm64...
+
+✓ Installed omp to /usr/local/bin/omp
+Run 'omp' to get started!
+omp/18.1.5
+--> a2a1d7c92e9e
+STEP 9/22: COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+Trying to pull ghcr.io/astral-sh/uv:latest...
+Getting image source signatures
+Copying blob sha256:64e9a5c314f732607a84f85a7d426db9102dfe15d99c60f49be63ec04f5d85cb
+Copying blob sha256:535a17b24ba8b37cd51328a9ce4b2062391503d63f01437d6c3c16833866d079
+Copying config sha256:7868c738541e84b0110d2e18b6332840fa2fc83771373db0db5f27dc68e1dea1
+Writing manifest to image destination
+--> e307fa87cbe0
+STEP 10/22: ENV UV_PROJECT_ENVIRONMENT=/opt/venv     UV_PYTHON=3.13     UV_LINK_MODE=copy
+--> c9ff8474ecc3
+STEP 11/22: RUN mkdir -p /opt/venv && chown vscode:vscode /opt/venv
+--> ba08bf61514e
+STEP 12/22: RUN printf '%s\n' '#!/usr/bin/env bash'       'exec bash /opt/pi-sandbox/lib/pi-commit "$@"' > /usr/local/bin/pi-commit     && chmod 0755 /usr/local/bin/pi-commit
+--> f33e5f69e7b6
+STEP 13/22: RUN install -d -o vscode -g vscode -m 0755       /opt/pi-runtime /opt/pi-runtime/bin     && ln -s /usr/bin/pi /opt/pi-runtime/bin/pi
+--> d3aa6958212e
+STEP 14/22: USER vscode
+--> e122c3eeac37
+STEP 15/22: ENV HOME=/home/vscode
+--> 9776cfc28ca5
+STEP 16/22: ENV PATH=/opt/pi-sandbox/bin:/home/vscode/.pi/agent/bin:/opt/pi-runtime/bin:/opt/venv/bin:/home/vscode/.local/bin:$PATH
+--> 48a904ceffd3
+STEP 17/22: ARG SYNC_DEPS=0
+--> 5a396d51a88d
+STEP 18/22: WORKDIR /home/vscode/_bootstrap
+--> aa0634189963
+STEP 19/22: COPY --chown=vscode:vscode pyproject.toml uv.lock ./
+--> ecba27141202
+STEP 20/22: RUN if [ "$SYNC_DEPS" = "1" ]; then uv sync --frozen --no-install-project; fi     && cd /home/vscode && rm -rf /home/vscode/_bootstrap
+Downloading cpython-3.13.15-linux-aarch64-gnu (download) (27.9MiB)
+ Downloaded cpython-3.13.15-linux-aarch64-gnu (download)
+Using CPython 3.13.15
+Creating virtual environment at: /opt/venv
+Downloading pygments (1.2MiB)
+Downloading jedi (4.7MiB)
+Downloading babel (9.7MiB)
+Downloading pyarrow (43.6MiB)
+Downloading hf-xet (4.1MiB)
+Downloading pandas (9.9MiB)
+Downloading pydantic-core (1.9MiB)
+Downloading numpy (14.9MiB)
+Downloading scipy (31.4MiB)
+Downloading kiwisolver (1.2MiB)
+Downloading scikit-learn (8.2MiB)
+Downloading pillow (6.1MiB)
+Downloading fonttools (4.8MiB)
+Downloading matplotlib (9.2MiB)
+Downloading jupyterlab (11.9MiB)
+Downloading aiohttp (1.7MiB)
+Downloading openai (1.2MiB)
+Downloading debugpy (5.1MiB)
+   Building antlr4-python3-runtime==4.9.3
+  × Failed to download and build `antlr4-python3-runtime==4.9.3`
+  ├─▶ Failed to resolve requirements from `setup.py` build
+  ├─▶ No solution found when resolving: `setuptools>=40.8.0`
+  ├─▶ Request failed after 3 retries in 131.7s
+  ├─▶ Failed to fetch:
+  │   `https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/setuptools-84.0.0-py3-none-any.whl.metadata`
+  ├─▶ error sending request for url
+  │   (https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/setuptools-84.0.0-py3-none-any.whl.metadata)
+  ╰─▶ operation timed out
+
+hint: `antlr4-python3-runtime` (v4.9.3) was included because `re-uq` (v1.0.0) depends on `hydra-core` (v1.3.6) which depends on `antlr4-python3-runtime`
+Error: building at STEP "RUN if [ "$SYNC_DEPS" = "1" ]; then uv sync --frozen --no-install-project; fi     && cd /home/vscode && rm -rf /home/vscode/_bootstrap": while running runtime: exit status 1
+

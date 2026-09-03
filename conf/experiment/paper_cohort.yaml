@@ -1,0 +1,29 @@
+# @package _global_
+# Official paper cohort: the five z.ai GLM models over both datasets, both
+# benchmark variants, Task 1 + Task 2, full mode, deterministic + 5-sample
+# stochastic passes.
+#
+# Run:
+#   .venv/bin/python scripts/run.py --multirun +experiment=paper_cohort
+#
+# The sixth official model is not a GLM: it lives on the KIT endpoint and is
+# run separately (see conf/experiment/batching_ablation.yaml for the same
+# pattern):
+#   .venv/bin/python scripts/run.py --multirun +experiment=paper_cohort \
+#     profile=kit_toolbox model=kit.gemma4-31b-it
+defaults:
+  - override /profile: zai
+  - override /variant: must
+  - override /sampling: default
+
+task: both
+mode: full
+run_group_id: provider-matrix-v2-2026-05
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      model: glm-4.5-air,glm-4.7,glm-5,glm-5-turbo,glm-5.1
+      dataset: nice,mlm_tapt
+      variant: must,shall

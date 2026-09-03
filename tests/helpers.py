@@ -1,4 +1,4 @@
-"""Shared test fixtures.
+"""Shared unittest fixture helpers (imported explicitly; not a pytest conftest).
 
 These helpers build canonical fixture payloads used across multiple test
 modules so the per-test setup stays focused on the values each test actually

@@ -11,9 +11,9 @@ from unittest import mock
 from pydantic import ValidationError
 
 try:
-    from conftest import raw_record
+    from helpers import raw_record
 except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
-    from tests.conftest import raw_record
+    from tests.helpers import raw_record
 
 from scripts import eval_utils as eu
 from scripts import compare_run_matrix as compare_matrix
@@ -90,6 +90,43 @@ class EvalUtilsTest(unittest.TestCase):
             validation_retries=validation_retries,
         )
 
+    def _task1_two_seed_jobs(self, **overrides):
+        """Two mandatory Task 1 jobs (one per seed) on the plain (non-Instructor) path."""
+        seeds = [
+            {
+                "seed_id": "S0001",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall export reports.",
+                "capability_text_final": "export reports",
+            },
+            {
+                "seed_id": "S0002",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall print invoices.",
+                "capability_text_final": "print invoices",
+            },
+        ]
+        benchmark = eu.build_benchmark_items(seeds)
+        kwargs = dict(
+            tasks=["task1"],
+            model="m1",
+            host="http://localhost:1234/v1",
+            run_id="full-1",
+            prompt_version="v1",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+        )
+        kwargs.update(overrides)
+        return eu.planned_completion_jobs(
+            [row for row in benchmark if row["source_modality"] == "mandatory"],
+            **kwargs,
+        )
+
     def test_benchmark_labels(self):
         seeds = export_report_seeds()
         items = eu.build_benchmark_items(seeds)
@@ -147,6 +184,64 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertNotIn("nice_to_have", text)
             self.assertNotIn("nice-to-have", text)
             self.assertTrue(text.endswith("."))
+
+    def test_main_modality_template_inventory_covers_every_condition(self):
+        rows = eu.main_modality_template_rows()
+        self.assertEqual(set(rows[0]), set(eu.MAIN_MODALITY_TEMPLATE_INVENTORY_FIELDS))
+        self.assertEqual(len(rows), 5 + len(eu.WEAK_MODALITY_PROBE_TEMPLATES))
+        self.assertEqual(len({row["template_id"] for row in rows}), len(rows))
+
+        by_variant = {}
+        for row in rows:
+            by_variant.setdefault(row["variant"], []).append(row)
+        self.assertEqual(set(by_variant), {"must", "shall", "weak_probe"})
+        self.assertEqual(
+            [row["condition"] for row in by_variant["must"]],
+            eu.MODALITIES,
+        )
+        self.assertEqual(len(by_variant["shall"]), 1)
+        self.assertEqual(len(by_variant["weak_probe"]), len(eu.WEAK_MODALITY_PROBE_TEMPLATES))
+
+        for row in rows:
+            self.assertIn("{capability}", row["source_statement_template"])
+            self.assertNotIn("{capability}", row["example_source_statement"])
+            self.assertEqual(
+                row["example_source_statement"],
+                row["source_statement_template"].format(capability="export reports"),
+            )
+            self.assertIn(row["intended_gold_modality"], eu.MODALITIES)
+
+        must_templates = {row["condition"]: row["source_statement_template"] for row in by_variant["must"]}
+        self.assertEqual(must_templates["mandatory"], "The system MUST {capability}.")
+        self.assertEqual(must_templates["recommended"], "The system SHOULD {capability}.")
+        self.assertEqual(must_templates["optional"], "The system MAY {capability}.")
+        self.assertEqual(
+            must_templates["nice_to_have"],
+            "It would be useful if the system could {capability}.",
+        )
+        self.assertEqual(
+            by_variant["shall"][0]["source_statement_template"],
+            "The system SHALL {capability}.",
+        )
+        self.assertEqual(
+            {row["source_statement_template"] for row in by_variant["weak_probe"]},
+            {template["source_template"] for template in eu.WEAK_MODALITY_PROBE_TEMPLATES},
+        )
+
+    def test_write_main_modality_template_inventory_writes_csv_and_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "modality_template_inventory.csv"
+            paths = eu.write_main_modality_template_inventory(csv_path)
+            self.assertEqual(paths["csv"], csv_path)
+            self.assertEqual(paths["markdown"], csv_path.with_suffix(".md"))
+
+            written = eu.read_csv_rows(paths["csv"])
+            self.assertEqual(len(written), len(eu.main_modality_template_rows()))
+            self.assertEqual(list(written[0]), eu.MAIN_MODALITY_TEMPLATE_INVENTORY_FIELDS)
+
+            markdown = paths["markdown"].read_text(encoding="utf-8")
+            self.assertIn("The system SHALL {capability}.", markdown)
+            self.assertIn("probe_future_enhancement", markdown)
 
     def test_weak_modality_sanity_validation(self):
         rows = eu.weak_modality_template_sanity_rows()
@@ -274,6 +369,43 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(
             eu.requirement_text_modality_diagnostic("The system exports reports.")["text_modality_basis"],
             "heuristic_system_verb",
+        )
+
+    def test_positive_modal_cue_wins_over_a_negated_one(self):
+        """A prohibition inside a mandatory obligation is still mandatory."""
+        cases = [
+            # Positive cue present -> it wins, priority mandatory > recommended > optional.
+            ("The system must ensure that users cannot delete records.", "mandatory", "explicit_modal"),
+            ("Not only must the system export reports, it must archive them.", "mandatory", "explicit_modal"),
+            ("Users may not delete records; the system must log attempts.", "mandatory", "explicit_modal"),
+            # No positive cue -> the negated modal stands.
+            ("The system must not export reports.", "negated", "negated_modal"),
+            ("The system cannot export reports.", "negated", "negated_modal"),
+        ]
+
+        for text, expected_modality, expected_basis in cases:
+            with self.subTest(text=text):
+                diagnostic = eu.requirement_text_modality_diagnostic(text)
+                self.assertEqual(diagnostic["text_modality"], expected_modality)
+                self.assertEqual(diagnostic["text_modality_basis"], expected_basis)
+
+        # Mixed categories are flagged; a same-category negation is not.
+        self.assertTrue(
+            eu.requirement_text_modality_diagnostic("Users may not delete records; the system must log attempts.")[
+                "text_modality_multi_modal"
+            ]
+        )
+        self.assertFalse(
+            eu.requirement_text_modality_diagnostic("Not only must the system export reports, it must archive them.")[
+                "text_modality_multi_modal"
+            ]
+        )
+        # A weak phrase still outranks every modal cue.
+        self.assertEqual(
+            eu.requirement_text_modality_diagnostic("It would be nice if the system must export reports.")[
+                "text_modality"
+            ],
+            "nice_to_have",
         )
 
     def test_text_modality_overcommitment_fields(self):
@@ -765,6 +897,31 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertIn("full_a", path_a.name)
         self.assertIn("m1", path_a.name)
 
+    def test_task3_verification_items_path_routes_smoke_runs_into_the_smoke_tree(self):
+        default_path = eu.task3_verification_items_path(Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind")
+        smoke_path = eu.task3_verification_items_path(
+            Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind", smoke=True
+        )
+        by_run_id = eu.task3_verification_items_path(
+            Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind", run_id="smoke-1"
+        )
+
+        self.assertEqual(smoke_path.parent.name, "smoke")
+        self.assertEqual(smoke_path.parent.parent.name, "task3_verification_items")
+        self.assertEqual(smoke_path.name, default_path.name)
+        self.assertEqual(by_run_id, smoke_path)
+        # A full run keeps the unchanged paper-facing path.
+        self.assertEqual(
+            default_path,
+            Path("/tmp/re-uq") / "data/processed/task3_verification_items" / default_path.name,
+        )
+        self.assertEqual(
+            eu.task3_verification_items_path(
+                Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind", run_id="full-a"
+            ),
+            default_path,
+        )
+
     def test_parse_task2_response(self):
         raw = '{"requirement": "The system SHOULD export reports.", "modality": "should", "confidence": 80}'
         parsed, status = eu.parse_task_response("task2", raw)
@@ -1205,6 +1362,121 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(len(scores), 4)
         self.assertEqual(summary[0]["accuracy"], 1.0)
         self.assertTrue(all("uncertainty_score" in row for row in scores))
+
+    def _task2_raw_row(self, item, requirement, **overrides):
+        row = raw_record(
+            item,
+            task="task2",
+            parsed_json={"requirement": requirement, "modality": "mandatory", "confidence": 0.9},
+        )
+        row["raw_text"] = json.dumps(row["parsed_json"])
+        row.update(overrides)
+        return row
+
+    def test_duplicate_completed_rows_score_once_from_the_latest_ok_row(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        rows = [
+            self._task2_raw_row(item, "The system may export reports."),
+            self._task2_raw_row(item, "The system must export reports."),
+        ]
+
+        scores = [row for row in eu.build_uq_scores(benchmark, rows) if row["uq_method"] == "verbalized_confidence"]
+
+        self.assertEqual(len(scores), 1)
+        # The later row wins, so the score reflects the latest answer's text.
+        self.assertEqual(scores[0]["text_modality"], "mandatory")
+        self.assertEqual(len(eu.dedupe_raw_rows(rows)), 1)
+
+    def test_a_failed_row_followed_by_an_ok_retry_scores_once(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        failed = self._task2_raw_row(item, "", parse_status="invalid_json", parsed_json=None)
+        rows = [failed, self._task2_raw_row(item, "The system must export reports.")]
+
+        scores = [row for row in eu.build_uq_scores(benchmark, rows) if row["uq_method"] == "verbalized_confidence"]
+
+        self.assertEqual(len(scores), 1)
+        self.assertEqual(scores[0]["text_modality"], "mandatory")
+        # The ok row wins whichever order it was appended in.
+        self.assertEqual([row["parse_status"] for row in eu.dedupe_raw_rows(rows)], ["ok"])
+        self.assertEqual([row["parse_status"] for row in eu.dedupe_raw_rows(list(reversed(rows)))], ["ok"])
+        # With no ok row at all the last attempt survives, so the failure is visible.
+        self.assertEqual([row["parse_status"] for row in eu.dedupe_raw_rows([failed, failed])], ["invalid_json"])
+
+    def test_dedupe_keeps_distinct_requests_and_runs_apart(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        other_item = [row for row in benchmark if row["source_modality"] == "optional"][0]
+        rows = [
+            self._task2_raw_row(item, "a"),
+            self._task2_raw_row(item, "b", run_id="r2"),
+            self._task2_raw_row(other_item, "c"),
+            self._task2_raw_row(item, "d", sample_kind="stochastic", sample_index=0),
+            self._task2_raw_row(item, "e", sample_kind="stochastic", sample_index=1),
+            self._task2_raw_row(item, "f", model="m2"),
+        ]
+
+        self.assertEqual(len(eu.dedupe_raw_rows(rows)), len(rows))
+        # Order of the survivors follows first appearance.
+        self.assertEqual(
+            [row["parsed_json"]["requirement"] for row in eu.dedupe_raw_rows(rows + [self._task2_raw_row(item, "z")])],
+            ["z", "b", "c", "d", "e", "f"],
+        )
+
+    def test_duplicate_rows_do_not_inflate_run_progress(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        rows = [self._task2_raw_row(item, "a"), self._task2_raw_row(item, "b")]
+
+        progress = eu.run_progress_summary(benchmark, rows, expected_stochastic_samples=0)
+
+        self.assertEqual(len(progress), 1)
+        self.assertEqual(progress[0]["observed_records"], 1)
+        self.assertEqual(progress[0]["deterministic_records"], 1)
+
+    def test_duplicate_task2_rows_build_one_task3_item(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
+        rows = [
+            self._task2_raw_row(item, "The system may export reports."),
+            self._task2_raw_row(item, "The system must export reports."),
+        ]
+
+        items = eu.build_task3_verification_items(benchmark, rows)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["task2_requirement"], "The system must export reports.")
+        self.assertEqual(items[0]["task2_text_modality"], "mandatory")
+
+    def test_stochastic_completeness_counts_samples_that_were_never_written(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        rows = [
+            self._task2_raw_row(
+                item,
+                "The system must export reports.",
+                sample_kind="stochastic",
+                sample_index=sample_index,
+            )
+            for sample_index in range(4)
+        ]
+
+        without_expectation = [
+            row for row in eu.build_uq_scores(benchmark, rows) if row["uq_method"] == "modality_consistency"
+        ]
+        with_expectation = [
+            row
+            for row in eu.build_uq_scores(benchmark, rows, expected_stochastic_samples=5)
+            if row["uq_method"] == "modality_consistency"
+        ]
+
+        self.assertEqual([row["total_n"] for row in without_expectation], [4])
+        self.assertTrue(without_expectation[0]["stochastic_complete"])
+        self.assertEqual([row["total_n"] for row in with_expectation], [5])
+        self.assertEqual(with_expectation[0]["valid_n"], 4)
+        self.assertEqual(with_expectation[0]["parse_failures"], 1)
+        self.assertFalse(with_expectation[0]["stochastic_complete"])
 
     def test_stale_raw_prompt_rows_are_excluded_from_scores(self):
         benchmark = eu.build_benchmark_items(
@@ -2725,7 +2997,8 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertTrue(all(row.get("job_config_sha") for row in records))
         self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), 0)
 
-    def test_batched_completion_missing_results_are_not_marked_ok(self):
+    def test_batched_completion_missing_results_fall_back_to_single_item_requests(self):
+        """An unusable batch response is re-sent per item, mirroring the Instructor path."""
         seeds = [
             {
                 "seed_id": "S0001",
@@ -2757,10 +3030,22 @@ class EvalUtilsTest(unittest.TestCase):
             api_key_env="LOCAL_OPENAI_API_KEY",
         )
 
+        prompts = []
+
         def fake_ignored_batch_completion(**kwargs):
+            prompts.append(kwargs["prompt"])
+            if "Items:\n" in kwargs["prompt"]:
+                # A batch answer that carries no per-item results at all.
+                return {
+                    "ok": True,
+                    "raw_text": '{"decision": "yes", "confidence": 0.8, "brief_reason": "ignored the batch"}',
+                    "response_json": {},
+                    "latency_s": 0.01,
+                    "error": "",
+                }
             return {
                 "ok": True,
-                "raw_text": '{"decision": "yes", "confidence": 80, "brief_reason": "single"}',
+                "raw_text": '{"decision": "yes", "confidence": 0.9, "brief_reason": "single"}',
                 "response_json": {},
                 "latency_s": 0.01,
                 "error": "",
@@ -2768,43 +3053,82 @@ class EvalUtilsTest(unittest.TestCase):
 
         records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_ignored_batch_completion, batch_size=2))
 
-        self.assertEqual({row["parse_status"] for row in records}, {"missing_batch_result"})
+        # One batch call plus one single-item call per item of that batch.
+        self.assertEqual(len(prompts), 1 + len(jobs))
+        self.assertEqual({row["parse_status"] for row in records}, {"ok"})
+        self.assertEqual({row["parsed_json"]["brief_reason"] for row in records}, {"single"})
+        # The rows were really sent alone: batch_size 1 and no batch_id.
+        self.assertEqual({row["batch_size"] for row in records}, {1})
+        self.assertTrue(all("batch_id" not in row for row in records))
+        self.assertEqual(eu.pending_completion_jobs(jobs, records, "full-1"), [])
+
+    def test_batched_completion_keeps_failing_when_the_fallback_also_fails(self):
+        jobs = self._task1_two_seed_jobs()
+
+        def fake_broken_completion(**kwargs):
+            if "Items:\n" in kwargs["prompt"]:
+                return {
+                    "ok": True,
+                    "raw_text": "not json at all",
+                    "response_json": {},
+                    "latency_s": 0.01,
+                    "error": "",
+                }
+            return {
+                "ok": True,
+                "raw_text": "still not json",
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_broken_completion, batch_size=2))
+
+        self.assertEqual({row["parse_status"] for row in records}, {"invalid_json"})
         self.assertTrue(all(row["parsed_json"] is None for row in records))
+        # The fallback's own status stands, but the batch-level cause is kept.
+        self.assertTrue(all(row["error"].startswith("batch_fallback:") for row in records))
+        self.assertTrue(all("missing request_index" in row["error"] for row in records))
         self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs))
 
+    def test_batched_completion_falls_back_when_the_batch_request_errors(self):
+        jobs = self._task1_two_seed_jobs()
+
+        def fake_failing_batch_completion(**kwargs):
+            if "Items:\n" in kwargs["prompt"]:
+                return {
+                    "ok": False,
+                    "raw_text": "",
+                    "response_json": None,
+                    "latency_s": 0.01,
+                    "error": "RateLimitError(429)",
+                }
+            return {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 0.9, "brief_reason": "single"}',
+                "response_json": {},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_failing_batch_completion, batch_size=2))
+
+        self.assertEqual({row["parse_status"] for row in records}, {"ok"})
+        self.assertEqual({row["batch_size"] for row in records}, {1})
+        self.assertEqual(eu.pending_completion_jobs(jobs, records, "full-1"), [])
+
     def test_batched_completion_count_matches_but_no_index_overlap_is_not_positional(self):
-        seeds = [
-            {
-                "seed_id": "S0001",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall export reports.",
-                "capability_text_final": "export reports",
-            },
-            {
-                "seed_id": "S0002",
-                "source_dataset": "NICE",
-                "original_requirement": "The system shall print invoices.",
-                "capability_text_final": "print invoices",
-            },
-        ]
-        benchmark = eu.build_benchmark_items(seeds)
-        jobs = eu.planned_completion_jobs(
-            [row for row in benchmark if row["source_modality"] == "mandatory"],
-            tasks=["task1"],
-            model="m1",
-            host="http://localhost:1234/v1",
-            run_id="full-1",
-            prompt_version="v1",
-            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
-            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
-            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
-            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
-            max_tokens=64,
-            timeout_s=30,
-            api_key_env="LOCAL_OPENAI_API_KEY",
-        )
+        jobs = self._task1_two_seed_jobs()
 
         def fake_no_index_batch_completion(**kwargs):
+            if "Items:\n" not in kwargs["prompt"]:
+                return {
+                    "ok": True,
+                    "raw_text": '{"decision": "no", "confidence": 0.6, "brief_reason": "fallback"}',
+                    "response_json": {},
+                    "latency_s": 0.01,
+                    "error": "",
+                }
             items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
             # Right count, but each result omits request_index (parse assigns
             # synthetic negative indices -> no overlap with expected indices).
@@ -2826,9 +3150,12 @@ class EvalUtilsTest(unittest.TestCase):
         records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_no_index_batch_completion, batch_size=2))
 
         self.assertEqual(len(records), 2)
-        self.assertEqual({row["parse_status"] for row in records}, {"missing_batch_result"})
-        self.assertTrue(all(row["parsed_json"] is None for row in records))
-        self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs))
+        # Index-less batch results are never matched positionally: every row is
+        # the single-item fallback answer, not the batch's first result.
+        self.assertEqual({row["parse_status"] for row in records}, {"ok"})
+        self.assertEqual({row["parsed_json"]["brief_reason"] for row in records}, {"fallback"})
+        self.assertEqual({row["parsed_json"]["decision"] for row in records}, {"no"})
+        self.assertEqual({row["batch_size"] for row in records}, {1})
 
     def test_resume_reruns_on_config_sha_mismatch_and_reuses_on_match(self):
         job = {
@@ -2868,11 +3195,11 @@ class EvalUtilsTest(unittest.TestCase):
             }
         ]
 
-        with redirect_stdout(io.StringIO()) as captured:
+        with self.assertLogs("re_uq", level="WARNING") as captured:
             pending = eu.pending_completion_jobs([job], legacy, "full-1")
 
         self.assertEqual(pending, [])
-        self.assertIn("job_config_sha", captured.getvalue())
+        self.assertIn("job_config_sha", "\n".join(captured.output))
 
     def test_resume_planning_skips_completed_records(self):
         job = {
@@ -3137,10 +3464,12 @@ class EvalUtilsTest(unittest.TestCase):
             ):
                 run_config_cli.main()
 
-            rows = eu.read_jsonl(root / "data/processed/model_outputs_raw.jsonl")
-            registry = eu.read_csv_rows(root / "data/processed/run_registry.csv")
-            progress = eu.read_csv_rows(root / "data/processed/run_progress_live.csv")
-            events = eu.read_jsonl(root / "data/processed/run_events.jsonl")
+            # Fake/smoke runs are isolated from the paper-facing artifact tree.
+            self.assertFalse((root / "data/processed/model_outputs_raw.jsonl").exists())
+            rows = eu.read_jsonl(root / "data/processed/smoke/model_outputs_raw.jsonl")
+            registry = eu.read_csv_rows(root / "data/processed/smoke/run_registry.csv")
+            progress = eu.read_csv_rows(root / "data/processed/smoke/run_progress_live.csv")
+            events = eu.read_jsonl(root / "data/processed/smoke/run_events.jsonl")
             self.assertEqual(len(rows), 8)
             self.assertEqual(len({row["batch_id"] for row in rows}), 4)
             self.assertEqual(registry[0]["status"], "complete")
@@ -3260,11 +3589,21 @@ class EvalUtilsTest(unittest.TestCase):
             ):
                 task3_cli.main()
 
-            task3_items_path = eu.task3_verification_items_path(root, "nice", "must", "full-source", "fake-model", "blind")
+            task3_items_path = eu.task3_verification_items_path(
+                root, "nice", "must", "full-source", "fake-model", "blind", smoke=True
+            )
             task3_items = eu.read_csv_rows(task3_items_path)
-            task3_rows = eu.read_jsonl(root / "data/processed/model_outputs_raw_task3_verification.jsonl")
-            registry = eu.read_csv_rows(root / "data/processed/run_registry_task3_verification.csv")
-            progress = eu.read_csv_rows(root / "data/processed/run_progress_live_task3_verification.csv")
+            # The fake run must not touch the paper-facing item file.
+            self.assertEqual(task3_items_path.parent.name, "smoke")
+            self.assertFalse(
+                eu.task3_verification_items_path(
+                    root, "nice", "must", "full-source", "fake-model", "blind"
+                ).exists()
+            )
+            task3_rows = eu.read_jsonl(root / "data/processed/smoke/model_outputs_raw_task3_verification.jsonl")
+            registry = eu.read_csv_rows(root / "data/processed/smoke/run_registry_task3_verification.csv")
+            progress = eu.read_csv_rows(root / "data/processed/smoke/run_progress_live_task3_verification.csv")
+            self.assertFalse((root / "data/processed/model_outputs_raw_task3_verification.jsonl").exists())
             self.assertEqual(len(task3_items), len(benchmark))
             self.assertEqual(len(task3_rows), 2)
             self.assertFalse((root / "data/processed/task3_verification_items.csv").exists())
@@ -3747,6 +4086,921 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertTrue(paths["csv"].exists())
             self.assertIn("predictive_entropy", paths["markdown"].read_text(encoding="utf-8"))
             self.assertIn(eu.ACSE_PROXY_METHOD, paths["markdown"].read_text(encoding="utf-8"))
+
+
+class ResponseProvenanceAndRetryTest(unittest.TestCase):
+    """Provider-response provenance, seeding, retries, and batch composition."""
+
+    def _benchmark_items(self):
+        return eu.build_benchmark_items(export_report_seeds())
+
+    def _plan(self, **overrides):
+        kwargs = dict(
+            tasks=["task2"],
+            model="m1",
+            host="http://localhost:8000/v1",
+            run_id="full-1",
+            prompt_version="v2-conf01",
+            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
+            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+        )
+        kwargs.update(overrides)
+        rows = kwargs.pop("benchmark_rows", self._benchmark_items())
+        return eu.planned_completion_jobs(rows, **kwargs)
+
+    # --- item 1: response provenance -------------------------------------
+
+    def test_extract_response_fields_from_provider_payload(self):
+        fields = eu.extract_response_fields(
+            {
+                "id": "chatcmpl-abc",
+                "model": "served-m1",
+                "system_fingerprint": "fp_123",
+                "choices": [{"finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+            }
+        )
+
+        self.assertEqual(fields["finish_reason"], "stop")
+        self.assertEqual(fields["usage_prompt_tokens"], 11)
+        self.assertEqual(fields["usage_completion_tokens"], 7)
+        self.assertEqual(fields["usage_total_tokens"], 18)
+        self.assertEqual(fields["served_model"], "served-m1")
+        self.assertEqual(fields["system_fingerprint"], "fp_123")
+        self.assertEqual(fields["response_id"], "chatcmpl-abc")
+
+    def test_extract_response_fields_defaults_when_absent(self):
+        self.assertEqual(eu.extract_response_fields(None), eu.EMPTY_RESPONSE_FIELDS)
+        self.assertEqual(eu.extract_response_fields({}), eu.EMPTY_RESPONSE_FIELDS)
+
+    def test_raw_record_persists_response_fields_and_derived_counts(self):
+        jobs = self._plan()
+
+        def fake_completion(**kwargs):
+            return {
+                "ok": True,
+                "raw_text": '{"requirement": "The system must export reports.", "modality": "mandatory", "confidence": 0.9}',
+                "response_json": {
+                    "id": "chatcmpl-xyz",
+                    "model": "served-m1",
+                    "system_fingerprint": "fp_9",
+                    "choices": [{"finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 30, "completion_tokens": 12, "total_tokens": 42},
+                },
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        record = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
+
+        self.assertEqual(record["finish_reason"], "stop")
+        self.assertEqual(record["usage_prompt_tokens"], 30)
+        self.assertEqual(record["usage_completion_tokens"], 12)
+        self.assertEqual(record["usage_total_tokens"], 42)
+        self.assertEqual(record["served_model"], "served-m1")
+        self.assertEqual(record["system_fingerprint"], "fp_9")
+        self.assertEqual(record["response_id"], "chatcmpl-xyz")
+        self.assertEqual(record["response_chars"], len(record["raw_text"]))
+        self.assertEqual(record["requirement_word_count"], 5)
+        self.assertEqual(record["system_prompt"], "")
+        self.assertEqual(record["request_messages_role_layout"], "user_only")
+        self.assertEqual(record["job_config_sha_version"], eu.JOB_CONFIG_SHA_VERSION)
+
+    def test_batched_rows_copy_batch_usage_under_explicit_name(self):
+        jobs = self._plan()
+
+        def fake_completion(**kwargs):
+            items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+            return {
+                "ok": True,
+                "raw_text": json.dumps(
+                    {
+                        "results": [
+                            {
+                                "request_index": item["request_index"],
+                                "requirement": "The system must export reports.",
+                                "modality": "mandatory",
+                                "confidence": 0.8,
+                            }
+                            for item in items
+                        ]
+                    }
+                ),
+                "response_json": {
+                    "model": "served-m1",
+                    "choices": [{"finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 80, "total_tokens": 180},
+                },
+                "latency_s": 0.02,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=4))
+
+        self.assertGreater(len(records), 1)
+        for record in records:
+            self.assertEqual(record["usage_completion_tokens"], 80)
+            self.assertEqual(record["batch_usage_completion_tokens"], 80)
+            self.assertEqual(record["finish_reason"], "stop")
+
+    # --- item 2: truncation ----------------------------------------------
+
+    def test_length_finish_reason_marks_parse_failure_as_truncated(self):
+        jobs = self._plan()
+
+        def fake_completion(**kwargs):
+            return {
+                "ok": True,
+                "raw_text": '{"requirement": "The system must expo',
+                "response_json": {"choices": [{"finish_reason": "length"}], "model": "m1"},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        record = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
+
+        self.assertEqual(record["parse_status"], "truncated")
+        self.assertNotEqual(record["parse_status"], "ok")
+
+    def test_length_finish_reason_keeps_ok_status_when_parse_succeeds(self):
+        jobs = self._plan()
+
+        def fake_completion(**kwargs):
+            return {
+                "ok": True,
+                "raw_text": '{"requirement": "The system must export reports.", "modality": "mandatory", "confidence": 0.9}',
+                "response_json": {"choices": [{"finish_reason": "length"}], "model": "m1"},
+                "latency_s": 0.01,
+                "error": "",
+            }
+
+        self.assertEqual(eu.run_completion_job(jobs[0], completion_fn=fake_completion)["parse_status"], "ok")
+
+    def test_request_error_is_not_relabelled_as_truncated(self):
+        jobs = self._plan()
+
+        def fake_completion(**kwargs):
+            return {
+                "ok": False,
+                "raw_text": "",
+                "response_json": {"choices": [{"finish_reason": "length"}]},
+                "latency_s": 0.01,
+                "error": "boom",
+            }
+
+        self.assertEqual(eu.run_completion_job(jobs[0], completion_fn=fake_completion)["parse_status"], "request_error")
+
+    # --- item 3: seed -----------------------------------------------------
+
+    def test_profile_defaults_expose_seed_retry_and_batch_order_knobs(self):
+        profile = eu.normalize_provider_profile(
+            {
+                "profile_id": "p1",
+                "provider_id": "prov",
+                "base_url": "http://localhost:8000/v1",
+                "models": ["m1"],
+            }
+        )
+
+        self.assertEqual(profile["seed"], eu.DEFAULT_REQUEST_SEED)
+        self.assertTrue(profile["send_seed"])
+        self.assertEqual(profile["max_retries"], eu.DEFAULT_MAX_RETRIES)
+        self.assertEqual(profile["batch_order"], eu.DEFAULT_BATCH_ORDER)
+
+    def test_profile_seed_and_batch_order_overrides(self):
+        profile = eu.normalize_provider_profile(
+            {
+                "profile_id": "p1",
+                "provider_id": "prov",
+                "base_url": "http://localhost:8000/v1",
+                "models": ["m1"],
+                "seed": 7,
+                "send_seed": False,
+                "max_retries": 5,
+                "batch_order": "shuffled",
+            }
+        )
+
+        self.assertEqual(profile["seed"], 7)
+        self.assertFalse(profile["send_seed"])
+        self.assertEqual(profile["max_retries"], 5)
+        self.assertEqual(profile["batch_order"], "shuffled")
+        with self.assertRaises(ValueError):
+            eu.normalize_batch_order("interleaved")
+
+    def test_chat_completion_sends_seed_and_records_it(self):
+        captured = {}
+
+        class FakeResponse:
+            choices = [type("C", (), {"message": type("M", (), {"content": "{}"})()})()]
+
+            def model_dump(self, mode="json"):
+                return {"model": "m1", "choices": [{"finish_reason": "stop"}]}
+
+        class FakeClient:
+            def __init__(self, **_kwargs):
+                self.chat = type("Chat", (), {"completions": self})()
+
+            def create(self, **kwargs):
+                captured.update(kwargs)
+                return FakeResponse()
+
+        with mock.patch.object(eu, "OpenAI", FakeClient):
+            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, seed=1234)
+
+        self.assertEqual(captured["seed"], 1234)
+        self.assertEqual(captured["messages"], [{"role": "user", "content": "prompt"}])
+        self.assertEqual(result["request_seed"], 1234)
+        self.assertEqual(result["retry_count"], 0)
+
+        captured.clear()
+        with mock.patch.object(eu, "OpenAI", FakeClient):
+            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, seed=None)
+
+        self.assertNotIn("seed", captured)
+        self.assertIsNone(result["request_seed"])
+
+    def test_send_seed_false_drops_seed_from_job_and_request(self):
+        jobs = self._plan(send_seed=False)
+        captured = {}
+
+        def fake_completion(**kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "raw_text": "{}", "response_json": {}, "latency_s": 0.0, "error": ""}
+
+        record = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
+
+        self.assertIsNone(jobs[0]["seed"])
+        self.assertIsNone(captured["seed"])
+        self.assertIsNone(record["request_seed"])
+
+        seeded_jobs = self._plan(seed=99)
+        self.assertEqual(seeded_jobs[0]["seed"], 99)
+
+    # --- item 4: fingerprints ---------------------------------------------
+
+    def test_request_payload_sha_is_stable_and_field_sensitive(self):
+        payload = {
+            "model": "m1",
+            "messages": [{"role": "user", "content": "hello"}],
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "max_tokens": 64,
+            "seed": 20260518,
+            "response_format": {"type": "json_object"},
+            "extra_body": {"thinking": {"type": "disabled"}},
+        }
+        first = eu.request_payload_sha(payload)
+
+        self.assertEqual(first, eu.request_payload_sha(dict(reversed(list(payload.items())))))
+        # Transport-only kwargs do not move the fingerprint...
+        self.assertEqual(first, eu.request_payload_sha({**payload, "logprobs": True}))
+        # ...but any hashed request field does.
+        self.assertNotEqual(first, eu.request_payload_sha({**payload, "seed": 1}))
+        self.assertNotEqual(first, eu.request_payload_sha({**payload, "max_tokens": 65}))
+
+    def test_chat_completion_reports_request_payload_sha(self):
+        class FakeResponse:
+            choices = [type("C", (), {"message": type("M", (), {"content": "{}"})()})()]
+
+            def model_dump(self, mode="json"):
+                return {}
+
+        class FakeClient:
+            def __init__(self, **_kwargs):
+                self.chat = type("Chat", (), {"completions": self})()
+
+            def create(self, **kwargs):
+                return FakeResponse()
+
+        with mock.patch.object(eu, "OpenAI", FakeClient):
+            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_tokens=64, seed=5)
+
+        self.assertEqual(
+            result["request_payload_sha"],
+            eu.request_payload_sha(
+                {
+                    "model": "m1",
+                    "messages": [{"role": "user", "content": "prompt"}],
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                    "max_tokens": 64,
+                    "seed": 5,
+                }
+            ),
+        )
+
+    def test_record_falls_back_to_locally_computed_payload_sha(self):
+        jobs = self._plan()
+
+        def fake_completion(**kwargs):
+            return {"ok": True, "raw_text": "{}", "response_json": {}, "latency_s": 0.0, "error": ""}
+
+        record = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
+        again = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
+
+        self.assertTrue(record["request_payload_sha"])
+        self.assertEqual(record["request_payload_sha"], again["request_payload_sha"])
+
+    def test_job_config_sha_covers_extra_body_and_new_inputs(self):
+        base = dict(
+            prompt="p",
+            prompt_version="v2-conf01",
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=64,
+            structured_output="json_object",
+            json_mode=True,
+        )
+        baseline = eu.compute_job_config_sha(**base)
+
+        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, extra_body={"thinking": {"type": "disabled"}}))
+        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, response_format={"type": "json_object"}))
+        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, instructor_mode="tools"))
+        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, validation_retries=5))
+        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, seed=1))
+        self.assertEqual(baseline, eu.compute_job_config_sha(**base))
+
+    def test_job_config_sha_covers_the_batching_setup(self):
+        base = dict(
+            prompt="p",
+            prompt_version="v2-conf01",
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=64,
+            structured_output="json_object",
+            json_mode=True,
+        )
+        baseline = eu.compute_job_config_sha(**base)
+        batched = eu.compute_job_config_sha(**base, task="task2", batch_size=16)
+
+        self.assertNotEqual(baseline, batched)
+        self.assertNotEqual(batched, eu.compute_job_config_sha(**base, task="task2", batch_size=8))
+        self.assertNotEqual(
+            batched,
+            eu.compute_job_config_sha(**base, task="task2", batch_size=16, batch_order="shuffled"),
+        )
+        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, fallback_batch_size=4))
+        # Different tasks render different batch wrappers.
+        self.assertNotEqual(batched, eu.compute_job_config_sha(**base, task="task1", batch_size=16))
+
+        # The wrapper text is hashed for batched plans ...
+        with mock.patch.object(eu, "batch_prompt_wrapper_sha", return_value="EDITED-WRAPPER"):
+            self.assertNotEqual(batched, eu.compute_job_config_sha(**base, task="task2", batch_size=16))
+            # ... and never for single-item plans, whatever the wrapper says.
+            self.assertEqual(baseline, eu.compute_job_config_sha(**base, task="task2", batch_size=1))
+            self.assertEqual(baseline, eu.compute_job_config_sha(**base, task="task1"))
+
+    def test_batch_prompt_wrapper_sha_digests_the_rendered_wrapper(self):
+        probe_jobs = [
+            {"task": "task2", "request_index": index, "item": dict(eu.BATCH_WRAPPER_PROBE_ITEM)}
+            for index in range(2)
+        ]
+
+        self.assertEqual(
+            eu.batch_prompt_wrapper_sha("task2"),
+            eu.sha256_text(eu.batch_prompt_for_completion_jobs(probe_jobs)),
+        )
+        self.assertNotEqual(eu.batch_prompt_wrapper_sha("task1"), eu.batch_prompt_wrapper_sha("task2"))
+        self.assertNotEqual(eu.batch_prompt_wrapper_sha("task2"), eu.batch_prompt_wrapper_sha("task3"))
+
+    def test_planned_jobs_record_the_batch_size(self):
+        unbatched = self._plan()
+        batched = self._plan(batch_size=16)
+
+        self.assertEqual({job["batch_size"] for job in unbatched}, {1})
+        self.assertEqual({job["batch_size"] for job in batched}, {16})
+        # The planned batch size is part of the resume fingerprint.
+        self.assertNotEqual(batched[0]["job_config_sha"], unbatched[0]["job_config_sha"])
+
+    def test_planned_task3_jobs_record_the_batch_size(self):
+        items = [
+            {
+                "item_id": "S0001_mandatory__task3__m1__blind",
+                "seed_id": "S0001",
+                "source_modality": "mandatory",
+                "source_statement": "The system MUST export reports.",
+                "task2_requirement": "The system must export reports.",
+            }
+        ]
+        jobs = eu.planned_completion_jobs_for_items(
+            items,
+            prompt_fn=lambda item: "audit this",
+            prompt_version="v2-conf01",
+            model="m1",
+            host="http://localhost:8000/v1",
+            run_id="task3-1",
+            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            max_tokens=64,
+            timeout_s=30,
+            api_key_env="LOCAL_OPENAI_API_KEY",
+            batch_size=16,
+        )
+
+        self.assertEqual([job["batch_size"] for job in jobs], [16])
+        self.assertEqual(jobs[0]["task"], "task3")
+
+    def test_planned_jobs_record_sha_version(self):
+        jobs = self._plan()
+
+        self.assertEqual(jobs[0]["job_config_sha_version"], eu.JOB_CONFIG_SHA_VERSION)
+        self.assertEqual(eu.JOB_CONFIG_SHA_VERSION, 3)
+
+    # --- item 5: retries ---------------------------------------------------
+
+    def _fake_client_raising(self, errors):
+        calls = {"count": 0}
+
+        class FakeResponse:
+            choices = [type("C", (), {"message": type("M", (), {"content": "{}"})()})()]
+
+            def model_dump(self, mode="json"):
+                return {"model": "m1"}
+
+        class FakeClient:
+            def __init__(self, **_kwargs):
+                self.chat = type("Chat", (), {"completions": self})()
+
+            def create(self, **kwargs):
+                index = calls["count"]
+                calls["count"] += 1
+                if index < len(errors):
+                    raise errors[index]
+                return FakeResponse()
+
+        return FakeClient, calls
+
+    def test_chat_completion_retries_rate_limit_then_succeeds(self):
+        import httpx
+        import openai
+
+        request = httpx.Request("POST", "http://x/v1/chat/completions")
+        rate_limited = openai.RateLimitError(
+            "slow down",
+            response=httpx.Response(429, request=request),
+            body=None,
+        )
+        FakeClient, calls = self._fake_client_raising([rate_limited])
+
+        with mock.patch.object(eu, "OpenAI", FakeClient), mock.patch.object(eu.time, "sleep") as sleeper:
+            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["retry_count"], 1)
+        self.assertEqual(calls["count"], 2)
+        sleeper.assert_called_once()
+
+    def test_chat_completion_stops_after_max_attempts(self):
+        import httpx
+        import openai
+
+        request = httpx.Request("POST", "http://x/v1/chat/completions")
+        server_error = openai.InternalServerError(
+            "boom",
+            response=httpx.Response(503, request=request),
+            body=None,
+        )
+        FakeClient, calls = self._fake_client_raising([server_error] * 10)
+
+        with mock.patch.object(eu, "OpenAI", FakeClient), mock.patch.object(eu.time, "sleep"):
+            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(calls["count"], 3)
+        self.assertEqual(result["retry_count"], 2)
+
+    def test_chat_completion_does_not_retry_bad_request(self):
+        import httpx
+        import openai
+
+        request = httpx.Request("POST", "http://x/v1/chat/completions")
+        budget_error = openai.BadRequestError(
+            "ExceededBudget",
+            response=httpx.Response(400, request=request),
+            body=None,
+        )
+        FakeClient, calls = self._fake_client_raising([budget_error] * 5)
+
+        with mock.patch.object(eu, "OpenAI", FakeClient), mock.patch.object(eu.time, "sleep") as sleeper:
+            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(calls["count"], 1)
+        self.assertEqual(result["retry_count"], 0)
+        sleeper.assert_not_called()
+        self.assertIn("ExceededBudget", result["error"])
+
+    def test_is_transient_provider_error_status_classification(self):
+        class Err(Exception):
+            def __init__(self, status_code):
+                self.status_code = status_code
+
+        for status in (408, 429, 500, 502, 503):
+            self.assertTrue(eu.is_transient_provider_error(Err(status)), status)
+        for status in (400, 401, 403, 404, 422):
+            self.assertFalse(eu.is_transient_provider_error(Err(status)), status)
+        self.assertTrue(eu.is_transient_provider_error(TimeoutError()))
+        self.assertFalse(eu.is_transient_provider_error(ValueError("nope")))
+
+    def test_retry_count_reaches_the_raw_record(self):
+        jobs = self._plan()
+
+        def fake_completion(**kwargs):
+            return {
+                "ok": True,
+                "raw_text": '{"requirement": "r", "modality": "mandatory", "confidence": 0.9}',
+                "response_json": {},
+                "latency_s": 0.0,
+                "error": "",
+                "retry_count": 2,
+            }
+
+        self.assertEqual(eu.run_completion_job(jobs[0], completion_fn=fake_completion)["retry_count"], 2)
+
+    # --- item 6: batch composition ----------------------------------------
+
+    def _multi_seed_jobs(self, **overrides):
+        seeds = [
+            {
+                "seed_id": f"S000{index}",
+                "source_dataset": "NICE",
+                "original_requirement": "The system shall export reports.",
+                "capability_text_final": f"export reports {index}",
+            }
+            for index in range(1, 5)
+        ]
+        return self._plan(benchmark_rows=eu.build_benchmark_items(seeds), **overrides)
+
+    def test_grouped_batches_keep_consecutive_request_indices(self):
+        jobs = self._multi_seed_jobs()
+        batches = eu.completion_job_batches(jobs, batch_size=4)
+
+        self.assertEqual(
+            [[int(job["request_index"]) for job in batch] for batch in batches],
+            [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]],
+        )
+        # Grouped batching packs all four modality variants of one seed together.
+        for batch in batches:
+            self.assertEqual(len({job["item"]["seed_id"] for job in batch}), 1)
+            self.assertEqual(len({job["item"]["source_modality"] for job in batch}), 4)
+
+    def test_shuffled_batches_are_deterministic_and_mix_seeds(self):
+        jobs = self._multi_seed_jobs(batch_order="shuffled")
+        first = eu.completion_job_batches(jobs, batch_size=4)
+        second = eu.completion_job_batches(jobs, batch_size=4)
+
+        indices = [[int(job["request_index"]) for job in batch] for batch in first]
+        self.assertEqual(indices, [[int(job["request_index"]) for job in batch] for batch in second])
+        self.assertNotEqual(indices, [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]])
+        self.assertEqual(sorted(index for batch in indices for index in batch), list(range(16)))
+        self.assertTrue(any(len({job["item"]["seed_id"] for job in batch}) > 1 for batch in first))
+
+        other_seed = eu.completion_job_batches(jobs, batch_size=4, batch_order="shuffled", seed=1)
+        self.assertNotEqual(indices, [[int(job["request_index"]) for job in batch] for batch in other_seed])
+
+    def test_batch_composition_fields_are_recorded(self):
+        jobs = self._multi_seed_jobs(batch_order="shuffled")
+
+        def fake_completion(**kwargs):
+            items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+            return {
+                "ok": True,
+                "raw_text": json.dumps(
+                    {
+                        "results": [
+                            {
+                                "request_index": item["request_index"],
+                                "requirement": "The system must export reports.",
+                                "modality": "mandatory",
+                                "confidence": 0.8,
+                            }
+                            for item in items
+                        ]
+                    }
+                ),
+                "response_json": {"model": "m1", "choices": [{"finish_reason": "stop"}]},
+                "latency_s": 0.0,
+                "error": "",
+            }
+
+        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=4))
+
+        self.assertEqual({row["batch_order"] for row in records}, {"shuffled"})
+        by_batch = {}
+        for row in records:
+            by_batch.setdefault(row["batch_id"], []).append(row)
+        for batch_rows in by_batch.values():
+            seed_ids = {tuple(row["batch_seed_ids"]) for row in batch_rows}
+            self.assertEqual(len(seed_ids), 1)
+            self.assertEqual(sorted(next(iter(seed_ids))), list(next(iter(seed_ids))))
+            self.assertEqual({row["batch_variant_mix"] for row in batch_rows}, {len({r["source_modality"] for r in batch_rows})})
+        self.assertTrue(any(len(row["batch_seed_ids"]) > 1 for row in records))
+
+    def test_single_job_records_carry_singleton_batch_composition(self):
+        jobs = self._plan()
+
+        def fake_completion(**kwargs):
+            return {"ok": True, "raw_text": "{}", "response_json": {}, "latency_s": 0.0, "error": ""}
+
+        record = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
+
+        self.assertEqual(record["batch_seed_ids"], ["S0001"])
+        self.assertEqual(record["batch_variant_mix"], 1)
+        self.assertEqual(record["batch_order"], "grouped")
+
+    def test_run_config_seed_and_batch_order_flow_into_profiles(self):
+        run_config = eu.normalize_run_config(
+            {
+                "run_group_id": "g1",
+                "seed": 4242,
+                "batch_order": "shuffled",
+                "profiles": [
+                    {
+                        "profile_id": "p1",
+                        "provider_id": "prov",
+                        "base_url": "http://localhost:8000/v1",
+                        "models": ["m1"],
+                    },
+                    {
+                        "profile_id": "p2",
+                        "provider_id": "prov",
+                        "base_url": "http://localhost:8000/v1",
+                        "models": ["m2"],
+                        "seed": 1,
+                        "batch_order": "grouped",
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(run_config["seed"], 4242)
+        self.assertEqual(run_config["batch_order"], "shuffled")
+        self.assertEqual(run_config["profiles"][0]["seed"], 4242)
+        self.assertEqual(run_config["profiles"][0]["batch_order"], "shuffled")
+        self.assertEqual(run_config["profiles"][1]["seed"], 1)
+        self.assertEqual(run_config["profiles"][1]["batch_order"], "grouped")
+
+    # --- item 7: shuffled batches never repeat a seed ----------------------
+
+    def _full_matrix_task2_jobs(self, **overrides):
+        """The real 180-seed x 4-variant benchmark cell, planned as 720 Task 2 jobs."""
+        benchmark = eu.read_csv_rows("data/processed/benchmark_items_mlm_tapt.csv")
+        self.assertEqual(len(benchmark), 720)
+        self.assertEqual(len({row["seed_id"] for row in benchmark}), 180)
+        return self._plan(benchmark_rows=benchmark, **overrides)
+
+    def test_shuffled_batches_never_put_two_variants_of_a_seed_together(self):
+        jobs = self._full_matrix_task2_jobs(batch_order="shuffled", batch_size=16)
+        first = eu.completion_job_batches(jobs, 16)
+        second = eu.completion_job_batches(jobs, 16)
+
+        self.assertEqual(len(first), 45)
+        self.assertEqual({len(batch) for batch in first}, {16})
+        for batch in first:
+            self.assertEqual(len({job["item"]["seed_id"] for job in batch}), 16)
+        self.assertEqual(
+            sorted(int(job["request_index"]) for batch in first for job in batch),
+            list(range(720)),
+        )
+
+        indices = [[int(job["request_index"]) for job in batch] for batch in first]
+        self.assertEqual(indices, [[int(job["request_index"]) for job in batch] for batch in second])
+
+        grouped = eu.completion_job_batches(jobs, 16, batch_order="grouped")
+        self.assertNotEqual(indices, [[int(job["request_index"]) for job in batch] for batch in grouped])
+        # The grouped default is exactly what the ablation breaks up: 16 jobs
+        # from only 4 seeds, i.e. all four variants of each seed side by side.
+        self.assertEqual({len({job["item"]["seed_id"] for job in batch}) for batch in grouped}, {4})
+
+    def test_shuffled_batching_falls_back_loudly_when_seeds_are_too_few(self):
+        # 4 seeds x 4 variants into batches of 8: a seed collision is unavoidable.
+        jobs = self._multi_seed_jobs(batch_order="shuffled")
+
+        with self.assertLogs(eu.logger, level="WARNING") as captured:
+            batches = eu.completion_job_batches(jobs, 8)
+
+        self.assertEqual([len(batch) for batch in batches], [8, 8])
+        self.assertIn("shuffled batching", "\n".join(captured.output))
+        self.assertEqual(
+            sorted(int(job["request_index"]) for batch in batches for job in batch),
+            list(range(16)),
+        )
+
+    # --- item 8: resume keeps the original batch composition ---------------
+
+    def test_resume_batches_over_the_full_plan_instead_of_reshuffling(self):
+        jobs = self._full_matrix_task2_jobs(batch_order="shuffled", batch_size=16)
+        planned_batches = eu.completion_job_batches(jobs, 16)
+        dropped = planned_batches[7]
+        done_keys = {eu.completion_record_key(job) for job in dropped}
+        pending = [job for job in jobs if eu.completion_record_key(job) not in done_keys]
+
+        resumed = eu.completion_job_batches(pending, 16, planned_jobs=jobs)
+
+        self.assertEqual(len(resumed), len(planned_batches) - 1)
+        self.assertEqual(
+            [sorted(eu.completion_record_key(job) for job in batch) for batch in resumed],
+            [
+                sorted(eu.completion_record_key(job) for job in batch)
+                for batch in planned_batches
+                if batch is not dropped
+            ],
+        )
+        # Re-batching the pending subset on its own would NOT reproduce them.
+        self.assertNotEqual(
+            [sorted(eu.completion_record_key(job) for job in batch) for batch in resumed],
+            [sorted(eu.completion_record_key(job) for job in batch) for batch in eu.completion_job_batches(pending, 16)],
+        )
+
+    def test_resume_drops_partially_completed_batches_to_their_pending_items(self):
+        jobs = self._multi_seed_jobs(batch_order="shuffled")
+        planned_batches = eu.completion_job_batches(jobs, 4)
+        done = {int(planned_batches[0][0]["request_index"]), int(planned_batches[1][1]["request_index"])}
+        pending = [job for job in jobs if int(job["request_index"]) not in done]
+
+        resumed = eu.completion_job_batches(pending, 4, planned_jobs=jobs)
+
+        # Each planned batch keeps its identity, minus the items already done.
+        self.assertEqual([len(batch) for batch in resumed], [3, 3, 4, 4])
+        self.assertEqual(
+            sorted(int(job["request_index"]) for batch in resumed for job in batch),
+            sorted(int(job["request_index"]) for job in pending),
+        )
+
+    def test_run_completion_jobs_accepts_the_full_plan_for_resume(self):
+        jobs = self._multi_seed_jobs(batch_order="shuffled")
+        planned_batches = eu.completion_job_batches(jobs, 4)
+        pending = [job for job in jobs if job not in planned_batches[0]]
+        batch_sizes = []
+
+        def fake_completion(**kwargs):
+            items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+            batch_sizes.append(len(items))
+            return {
+                "ok": True,
+                "raw_text": json.dumps(
+                    {
+                        "results": [
+                            {
+                                "request_index": item["request_index"],
+                                "requirement": "The system must export reports.",
+                                "modality": "mandatory",
+                                "confidence": 0.8,
+                            }
+                            for item in items
+                        ]
+                    }
+                ),
+                "response_json": {"model": "m1", "choices": [{"finish_reason": "stop"}]},
+                "latency_s": 0.0,
+                "error": "",
+            }
+
+        records = list(
+            eu.run_completion_jobs(
+                pending,
+                max_workers=1,
+                completion_fn=fake_completion,
+                batch_size=4,
+                planned_jobs=jobs,
+            )
+        )
+
+        self.assertEqual(len(records), len(pending))
+        self.assertEqual(sorted(batch_sizes), [4, 4, 4])
+        self.assertEqual(len(eu.completion_job_batches(pending, 4, planned_jobs=jobs)), 3)
+
+    # --- item 9: batched rows keep the driver's provenance ------------------
+
+    def test_batched_records_carry_the_driver_seed_sha_and_retry_count(self):
+        jobs = self._multi_seed_jobs()[:2]
+
+        def fake_completion(**kwargs):
+            items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+            return {
+                "ok": True,
+                "raw_text": json.dumps(
+                    {
+                        "results": [
+                            {
+                                "request_index": item["request_index"],
+                                "requirement": "The system must export reports.",
+                                "modality": "mandatory",
+                                "confidence": 0.8,
+                            }
+                            for item in items
+                        ]
+                    }
+                ),
+                "response_json": {"model": "m1", "choices": [{"finish_reason": "stop"}]},
+                "latency_s": 0.0,
+                "error": "",
+                "retry_count": 2,
+                "request_seed": 20260518,
+                "request_payload_sha": "SHA_FROM_DRIVER",
+            }
+
+        records = eu.run_completion_batch(jobs, completion_fn=fake_completion)
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual({row["retry_count"] for row in records}, {2})
+        self.assertEqual({row["request_seed"] for row in records}, {20260518})
+        # The batch request's payload sha, not a per-item recomputation.
+        self.assertEqual({row["request_payload_sha"] for row in records}, {"SHA_FROM_DRIVER"})
+
+    def test_instructor_batched_records_carry_the_driver_provenance(self):
+        jobs = self._multi_seed_jobs(structured_output="instructor", prompt_version="v2-instructor-conf01")[:2]
+
+        def fake_completion(**kwargs):
+            items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
+            return {
+                "ok": True,
+                "raw_text": json.dumps(
+                    {
+                        "results": [
+                            {
+                                "request_index": item["request_index"],
+                                "requirement": "The system must export reports.",
+                                "modality": "mandatory",
+                                "confidence": 0.8,
+                            }
+                            for item in items
+                        ]
+                    }
+                ),
+                "response_json": {},
+                "latency_s": 0.0,
+                "error": "",
+                "retry_count": 2,
+                "request_seed": 20260518,
+                "request_payload_sha": "SHA_FROM_DRIVER",
+            }
+
+        records = eu.run_instructor_completion_batch(jobs, completion_fn=fake_completion)
+
+        self.assertEqual({row["parse_status"] for row in records}, {"ok"})
+        self.assertEqual({row["retry_count"] for row in records}, {2})
+        self.assertEqual({row["request_seed"] for row in records}, {20260518})
+        self.assertEqual({row["request_payload_sha"] for row in records}, {"SHA_FROM_DRIVER"})
+
+    # --- item 10: the SDK must not retry behind our back --------------------
+
+    def _recording_openai_class(self):
+        seen = {}
+
+        class FakeResponse:
+            choices = [type("C", (), {"message": type("M", (), {"content": "{}"})()})()]
+
+            def model_dump(self, mode="json"):
+                return {"model": "m1"}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                seen.update(kwargs)
+                self.chat = type("Chat", (), {"completions": self})()
+
+            def create(self, **kwargs):
+                return FakeResponse()
+
+        return FakeClient, seen
+
+    def test_chat_completion_disables_the_sdk_retry_loop(self):
+        FakeClient, seen = self._recording_openai_class()
+
+        with mock.patch.object(eu, "OpenAI", FakeClient):
+            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(seen["max_retries"], 0)
+        self.assertEqual(result["retry_count"], 0)
+
+    def test_instructor_completion_disables_the_sdk_retry_loop(self):
+        FakeClient, seen = self._recording_openai_class()
+
+        class FakeInstructorClient:
+            def __init__(self):
+                self.chat = type("Chat", (), {"completions": self})()
+
+            def create(self, **kwargs):
+                raise RuntimeError("stop after client construction")
+
+        with (
+            mock.patch.object(eu, "OpenAI", FakeClient),
+            mock.patch.dict(
+                sys.modules,
+                {"instructor": mock.Mock(from_openai=lambda *_args, **_kwargs: FakeInstructorClient())},
+            ),
+        ):
+            result = eu.instructor_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=0)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(seen["max_retries"], 0)
 
 
 if __name__ == "__main__":

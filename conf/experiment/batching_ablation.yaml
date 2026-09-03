@@ -1,0 +1,37 @@
+# @package _global_
+# TODO.md section A: does the 16-item grouped batch leak the minimal-pair
+# contrast into the context window?
+#
+# Cell: dataset mlm_tapt, variant must, Task 2, deterministic pass only.
+# Arms: grouped (baseline) / shuffled / batch_size=1 (true single-item delivery).
+#
+# Arm 1+2 (batch order) for the GLM half of the cohort:
+#   .venv/bin/python scripts/run.py --multirun +experiment=batching_ablation
+# Arm 3 (single-item delivery):
+#   .venv/bin/python scripts/run.py +experiment=batching_ablation \
+#     profile.batch_size=1 profile.batch_order=grouped
+# Same three arms for the non-GLM half of the cohort:
+#   ... +experiment=batching_ablation profile=kit_toolbox model=kit.gemma4-31b-it
+#
+# `profile.batch_order` / `profile.batch_size` are per-profile overrides, so the
+# arms differ only in batching: same items, same seeds, same parameters.
+defaults:
+  - override /profile: zai
+  - override /dataset: mlm_tapt
+  - override /variant: must
+  - override /sampling: deterministic_only
+
+task: task2
+mode: full
+model: glm-5.1
+
+# The grouped arm must be the paper condition: every official run delivered the
+# 16 items of a batch (the 4 variants of 4 seeds) in one request.
+profile:
+  batch_size: 16
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      profile.batch_order: grouped,shuffled

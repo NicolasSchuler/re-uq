@@ -1,0 +1,10 @@
+# Deterministic pass only: no stochastic samples, no UQ scoring.
+# Useful for ablations where only the declared label matters.
+deterministic:
+  temperature: 0.0
+  top_p: 1.0
+  samples: 1
+stochastic:
+  temperature: 0.7
+  top_p: 1.0
+  samples: 0

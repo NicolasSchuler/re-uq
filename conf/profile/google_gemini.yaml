@@ -1,0 +1,23 @@
+# Provider profile: google_gemini
+# Mirrors the `google_gemini` entry of run_configs/full_matrix.example.json.
+# Secrets are never stored here: `api_key_env` holds the *name* of the
+# environment variable that carries the key.
+profile_id: "google_gemini"
+provider_id: "google_gemini"
+base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+api_key_env: ${oc.env:RE_UQ_GOOGLE_GEMINI_API_KEY_ENV,GEMINI_API_KEY}
+models:
+  - "gemini-2.5-flash"
+  - "gemini-2.5-pro"
+concurrency: 2
+batch_size: 8
+timeout_s: 180
+max_tokens: 256
+seed: 20260518
+send_seed: false
+max_retries: 3
+batch_order: "grouped"
+json_mode: true
+structured_output: "json_object"
+requires_manual_server: false
+notes: "Gemini OpenAI-compatibility layer. seed is not honoured (send_seed=false); response_format json_object is supported, json_schema is not exercised here."

@@ -2,6 +2,8 @@
 
 This repository supports a short empirical study of modality-conditioned uncertainty in LLM-assisted requirements engineering. The evaluation asks whether a model preserves stakeholder commitment when the functional capability is held constant and only the source modality changes.
 
+This page defines the constructs, tasks, signals, and metrics. The operational setup — seeds, filters, template inventory, prompts as actually sent, batching, model cohort, request parameters, and limitations — is in [`docs/experimental_setup.md`](experimental_setup.md). How per-cell metrics are pooled into headline numbers is in [`docs/aggregation.md`](aggregation.md).
+
 ## Research Focus
 
 Primary claim:
@@ -37,7 +39,15 @@ For each accepted seed capability, generate four controlled source variants:
 
 The benchmark holds functional content constant and varies only requirement strength. This makes modality preservation and over-commitment measurable without relying on naturally occurring modality labels.
 
-Before treating weak-intent findings as paper-ready, complete `docs/weak_modality_construct_review.csv` with two reviewer judgments. Every weak template should be marked weaker than `SHOULD/recommended` on the study scale.
+Before treating weak-intent findings as paper-ready, complete `docs/weak_modality_construct_review.csv` with two reviewer judgments. Every weak template should be marked weaker than `SHOULD/recommended` on the study scale. The tracked file is currently filled by an author-delegated LLM-assisted review in both reviewer slots (declared in `reviewer_role`) and is pending human confirmation.
+
+The full template inventory, including the `SHALL` swap and the four weak-intent phrasing-probe templates, is exported to `outputs/modality_template_inventory.csv` / `.md` by `eval_utils.write_main_modality_template_inventory`.
+
+## Batching
+
+All reported runs sent batched prompts: **16 benchmark items per request**, built by `batch_prompt_for_completion_jobs` in `scripts/eval_utils.py`, for Task 1, Task 2, and Task 3 alike. Batches are consecutive request indices with no shuffling, and benchmark rows are ordered seed x variant, so each Task 2 batch contained all four modality variants of the same four seeds side by side. The batch prompt instructs the model to evaluate each item independently, but the minimal-pair contrast was visible inside its context window.
+
+Treat this as a confound on every rate reported here, not as an implementation detail. `max_tokens` is 256 per item scaled by batch size; if a batch response fails to parse, the affected items are re-sent individually. The `batch_order: grouped|shuffled` knob and a `batch_size=1` run exist to bound the effect; see [`docs/experimental_setup.md`](experimental_setup.md) and [`TODO.md`](../TODO.md).
 
 ## Tasks
 
@@ -111,6 +121,29 @@ Task 2 headline risks:
 - `label_correct_text_overcommit@tau`: among label-correct Task 2 outputs, generated requirement text still strengthens the source at confidence at least `tau`.
 - `strict_text_over_commitment`: generated-text strengthening using explicit modal or weak-phrase evidence, excluding the generic system-verb fallback.
 
+Answer-length metrics (reported alongside, not as a headline risk):
+
+- `requirement_word_count` and `source_word_count` per item, plus `response_chars` on the raw record;
+- mean generated-requirement length per source condition. Weak-intent sources produce longer answers (18.65 words on average over the four cells; 18.31 in the MUST cells) than the other three conditions (15.57 words; 15.48 in the MUST cells). Read this as an answer-bloat signal that accompanies strengthening, not as evidence of it.
+
+## Text-Strengthening Detector
+
+Declared-label accuracy misses the failure mode, so `requirement_text_modality_diagnostic` in `scripts/eval_utils.py` classifies the modal force of the generated requirement text independently of the declared label.
+
+| Basis | Rule | Strengthening evidence |
+| --- | --- | --- |
+| `weak_phrase` | `would be nice/useful if`, `low-priority enhancement`, `future enhancement`, `nice-to-have`, `wishlist`. | strict and broad |
+| `explicit_modal` | Positive modal cue: `must`/`shall`/`required to` -> mandatory; `should`/`recommended` -> recommended; `may`/`optional`/`could`/`can` -> optional. | strict and broad |
+| `negated_modal` | A modal cue negated by contraction (`must not`, `cannot`, `shouldn't`), by `not`/`never` within 3 preceding tokens, or by a following `not`/`n't`. Resolves to `negated`. | neither |
+| `heuristic_system_verb` | No modal cue, but the text matches `^(the )?system <verb>`; defaulted to mandatory. | broad only |
+| `unknown` | Nothing matched. | neither |
+
+- **Strict** evidence requires an explicit modal or a weak phrase. It is the conservative measure.
+- **Broad** evidence additionally accepts the `heuristic_system_verb` default, which encodes the RE convention that a bare `The system X.` reads as an obligation. That is a modelling assumption.
+- The two are not close: **11.5% of successful Task 2 outputs contain no modal at all** (17.6% in the MUST cells, 5.5% in the SHALL cells). Always report strict and broad together and name which one a number uses.
+- Negation is handled explicitly so that `The system must not export reports.` is never scored as a positive mandatory strengthening.
+- When several modal categories co-occur the record is flagged `text_modality_multi_modal` and the strongest positive category wins (`mandatory > recommended > optional`).
+
 Task 3 diagnostic metrics:
 
 - relation macro-F1;
@@ -120,16 +153,22 @@ Task 3 diagnostic metrics:
 
 Report bootstrap confidence intervals over seeds for accuracy, Brier score, unsupported mandatory acceptance, `HC-OC_overcommittable`, `weak_strengthening`, and `label_correct_text_overcommit`.
 
+### Agreement-metric guard
+
+Repeated-sample agreement and unanimity summaries are restricted to stochastic rows marked `stochastic_complete` (`valid_n == total_n`, i.e. all five samples parsed). Items with a partially parsed stochastic group are excluded, not counted as agreeing. Without this guard a run with parse failures would report inflated agreement, because a group that survived with a single valid sample is trivially unanimous. The reported 100% repeated-sample agreement is a statement about complete groups only.
+
+Aggregation across the four dataset x variant cells (pooled vs macro-of-cells, denominators, CI construction) is specified in [`docs/aggregation.md`](aggregation.md).
+
 ## Run Protocol
 
-Use the provider-aware CLI for reproducible Task 1 and Task 2 provider/model matrices:
+Use the provider-aware CLI for reproducible Task 1 and Task 2 provider/model matrices. Examples use the canonical cell defined in [`docs/reproduction.md`](reproduction.md) (`zai` / `glm-5.1` / `mlm_tapt` / `must` / blind Task 3), which is also the default cell of `scripts/reproduce.sh`. Override it with `RE_UQ_PROFILE`, `RE_UQ_MODEL`, `RE_UQ_DATASET`, and `RE_UQ_VARIANT`; note that the default points at a paid endpoint.
 
 ```bash
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
-  --profile local_llama_cpp \
-  --model qwen/qwen3.5-9b \
-  --dataset nice \
+  --profile zai \
+  --model glm-5.1 \
+  --dataset mlm_tapt \
   --mode smoke
 ```
 
@@ -140,9 +179,9 @@ Task 3 should run only after a complete Task 2 full run:
 ```bash
 .venv/bin/python scripts/run_task3_verification_from_config.py \
   --config run_configs/current_run.json \
-  --profile local_llama_cpp \
-  --model qwen/qwen3.5-9b \
-  --dataset nice \
+  --profile zai \
+  --model glm-5.1 \
+  --dataset mlm_tapt \
   --source-run-id RUN_ID \
   --audit-mode blind \
   --mode full
@@ -152,7 +191,7 @@ Generate paper-facing analysis artifacts from a complete run with:
 
 ```bash
 .venv/bin/python scripts/generate_evaluation_analysis.py \
-  --dataset nice \
+  --dataset mlm_tapt \
   --variant must \
   --run-id RUN_ID \
   --task3-run-id TASK3_RUN_ID \
@@ -185,7 +224,7 @@ Before using results in the IST manuscript:
 - confirm parse success, missing-batch handling, and run registry completeness;
 - recompute metrics from the current raw outputs;
 - inspect bootstrap CIs, qualitative examples, and generated figures;
-- treat the current 468-row metric tables as stale until replaced by a post-fix full run.
+- regenerate the paper tables with `scripts/export_paper_tables.py` and check that every quoted number matches the regenerated table and its stated aggregation scope.
 
 ## Verification
 

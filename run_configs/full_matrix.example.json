@@ -12,6 +12,8 @@
     "task2"
   ],
   "prompt_version": "v2-conf01",
+  "seed": 20260518,
+  "batch_order": "grouped",
   "deterministic": {
     "temperature": 0.0,
     "top_p": 1.0,
@@ -44,6 +46,10 @@
       "batch_size": 4,
       "timeout_s": 120,
       "max_tokens": 256,
+      "seed": 20260518,
+      "send_seed": true,
+      "max_retries": 3,
+      "batch_order": "grouped",
       "json_mode": false,
       "structured_output": "none",
       "requires_manual_server": true,
@@ -58,13 +64,43 @@
         "azure.gpt-4.1-mini"
       ],
       "concurrency": 2,
-      "batch_size": 8,
+      "batch_size": 16,
       "timeout_s": 180,
       "max_tokens": 256,
+      "seed": 20260518,
+      "send_seed": true,
+      "max_retries": 3,
+      "batch_order": "grouped",
       "json_mode": true,
       "structured_output": "json_schema",
       "requires_manual_server": false,
       "notes": "Coordinate large automated runs with the institutional LLM endpoint operator."
+    },
+    {
+      "profile_id": "kit_toolbox",
+      "provider_id": "kit_toolbox",
+      "base_url": "https://ki-toolbox.scc.kit.edu/api/v1",
+      "api_key_env": "KIT_TOOLBOX_API_KEY",
+      "models": [
+        "kit.gemma4-31b-it"
+      ],
+      "concurrency": 2,
+      "batch_size": 16,
+      "timeout_s": 180,
+      "max_tokens": 256,
+      "seed": 20260518,
+      "send_seed": true,
+      "max_retries": 3,
+      "batch_order": "grouped",
+      "json_mode": true,
+      "structured_output": "json_object",
+      "extra_body": {
+        "response_format": {
+          "type": "json_object"
+        }
+      },
+      "requires_manual_server": false,
+      "notes": "KIT institutional endpoint used for the official kit.gemma4-31b-it runs (registry provider_id kit_toolbox)."
     },
     {
       "profile_id": "zai",
@@ -72,14 +108,20 @@
       "base_url": "https://api.z.ai/api/coding/paas/v4",
       "api_key_env": "ZAI_API_KEY",
       "models": [
-        "glm-5.1",
+        "glm-4.5-air",
+        "glm-4.7",
+        "glm-5",
         "glm-5-turbo",
-        "glm-4.7"
+        "glm-5.1"
       ],
       "concurrency": 2,
-      "batch_size": 8,
+      "batch_size": 16,
       "timeout_s": 180,
       "max_tokens": 256,
+      "seed": 20260518,
+      "send_seed": true,
+      "max_retries": 3,
+      "batch_order": "grouped",
       "json_mode": true,
       "structured_output": "json_object",
       "extra_body": {
@@ -92,6 +134,118 @@
       },
       "requires_manual_server": false,
       "notes": "GLM Coding Plan endpoint. Standard paid API users should switch this to https://api.z.ai/api/paas/v4."
+    },
+    {
+      "profile_id": "openai",
+      "provider_id": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "models": [
+        "gpt-5-mini",
+        "gpt-5",
+        "gpt-4.1-mini"
+      ],
+      "concurrency": 4,
+      "batch_size": 8,
+      "timeout_s": 180,
+      "max_tokens": 256,
+      "seed": 20260518,
+      "send_seed": true,
+      "max_retries": 3,
+      "batch_order": "grouped",
+      "json_mode": true,
+      "structured_output": "json_object",
+      "requires_manual_server": false,
+      "notes": "Native OpenAI endpoint. json_schema structured output is available but json_object is the conservative default that all listed models accept."
+    },
+    {
+      "profile_id": "anthropic",
+      "provider_id": "anthropic",
+      "base_url": "https://api.anthropic.com/v1/",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "models": [
+        "claude-sonnet-5",
+        "claude-haiku-4-5-20251001"
+      ],
+      "concurrency": 2,
+      "batch_size": 4,
+      "timeout_s": 180,
+      "max_tokens": 512,
+      "seed": 20260518,
+      "send_seed": false,
+      "max_retries": 3,
+      "batch_order": "grouped",
+      "json_mode": false,
+      "structured_output": "none",
+      "requires_manual_server": false,
+      "notes": "Anthropic OpenAI-compatible chat endpoint (POST /v1/chat/completions). The compatibility layer ignores response_format and seed, so structured output stays off and the parser relies on the prompt JSON contract."
+    },
+    {
+      "profile_id": "mistral",
+      "provider_id": "mistral",
+      "base_url": "https://api.mistral.ai/v1",
+      "api_key_env": "MISTRAL_API_KEY",
+      "models": [
+        "mistral-large-latest",
+        "mistral-small-latest"
+      ],
+      "concurrency": 2,
+      "batch_size": 8,
+      "timeout_s": 180,
+      "max_tokens": 256,
+      "seed": 20260518,
+      "send_seed": true,
+      "max_retries": 3,
+      "batch_order": "grouped",
+      "json_mode": true,
+      "structured_output": "json_object",
+      "requires_manual_server": false,
+      "notes": "Mistral OpenAI-compatible endpoint. Supports response_format json_object; json_schema support varies by model, so json_object is the conservative choice."
+    },
+    {
+      "profile_id": "google_gemini",
+      "provider_id": "google_gemini",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "api_key_env": "GEMINI_API_KEY",
+      "models": [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro"
+      ],
+      "concurrency": 2,
+      "batch_size": 8,
+      "timeout_s": 180,
+      "max_tokens": 256,
+      "seed": 20260518,
+      "send_seed": false,
+      "max_retries": 3,
+      "batch_order": "grouped",
+      "json_mode": true,
+      "structured_output": "json_object",
+      "requires_manual_server": false,
+      "notes": "Gemini OpenAI-compatibility layer. seed is not honoured (send_seed=false); response_format json_object is supported, json_schema is not exercised here."
+    },
+    {
+      "profile_id": "ollama_local",
+      "provider_id": "ollama",
+      "base_url": "http://127.0.0.1:11434/v1",
+      "api_key_env": "OLLAMA_API_KEY",
+      "models": [
+        "llama3.3",
+        "gemma3",
+        "qwen3"
+      ],
+      "concurrency": 1,
+      "batch_size": 4,
+      "timeout_s": 300,
+      "max_tokens": 512,
+      "seed": 20260518,
+      "send_seed": true,
+      "max_retries": 3,
+      "batch_order": "grouped",
+      "json_mode": false,
+      "structured_output": "none",
+      "requires_manual_server": false,
+      "notes": "Local Ollama daemon (`ollama serve`) with the listed models pulled beforehand. Ollama swaps models on demand, so no manual restart per model is required, but keep concurrency at 1 on a single GPU. Small local models are unreliable under forced JSON mode, so structured output stays off."
     }
   ]
 }

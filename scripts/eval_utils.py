@@ -9,15 +9,21 @@ points and notebooks should stay thin wrappers around these helpers.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import contextlib
+import fcntl
 import json
 import hashlib
+import heapq
+import logging
 import math
 import os
 import random
 import re
+import tempfile
 import time
 import uuid
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -26,7 +32,9 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     import structured_outputs as so
 
-_CACHE_DIR = Path(os.environ.get("RE_UQ_CACHE_DIR", Path(__file__).resolve().parents[1] / ".cache"))
+_CACHE_DIR = Path(
+    os.environ.get("RE_UQ_CACHE_DIR", Path(__file__).resolve().parents[1] / ".cache")
+)
 os.environ.setdefault("MPLCONFIGDIR", str(_CACHE_DIR / "matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", str(_CACHE_DIR))
 Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
@@ -120,7 +128,12 @@ ACSE_CALIBRATION_FIELDS = [
     "all_error_rate",
     "all_error_detection_auroc",
 ]
-TEXT_MODALITY_BASES = ["weak_phrase", "explicit_modal", "heuristic_system_verb", "unknown"]
+TEXT_MODALITY_BASES = [
+    "weak_phrase",
+    "explicit_modal",
+    "heuristic_system_verb",
+    "unknown",
+]
 STRICT_TEXT_MODALITY_BASES = {"weak_phrase", "explicit_modal"}
 MONOTONICITY_TOLERANCE = 0.05
 WEAK_MODALITY_PROBE_TEMPLATES = [
@@ -269,8 +282,12 @@ CAPABILITY_MODAL_RE = re.compile(
     r"\b(shall|must|should|may|will|can|could|able\s+to|capable(?:\s+(?:of|to))?|possible\s+to|possibility\s+to)\b",
     re.I,
 )
-TABLE_FIGURE_RE = re.compile(r"\b(table|figure|fig\.|annex|section|clause)\s+[A-Za-z0-9.-]+", re.I)
-LIST_MARKER_RE = re.compile(r"(^|\s)(\d+\.|\([a-z]\)|[a-z]\)|[ivx]+\.|[-*]\s|[•·]|\t)", re.I)
+TABLE_FIGURE_RE = re.compile(
+    r"\b(table|figure|fig\.|annex|section|clause)\s+[A-Za-z0-9.-]+", re.I
+)
+LIST_MARKER_RE = re.compile(
+    r"(^|\s)(\d+\.|\([a-z]\)|[a-z]\)|[ivx]+\.|[-*]\s|[•·]|\t)", re.I
+)
 SYMBOL_HEAVY_RE = re.compile(r"([=<>±×µ%]|\b0x[0-9a-f]+\b)", re.I)
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -333,6 +350,14 @@ RUN_REGISTRY_FIELDS = [
     "structured_output",
     "request_extra_body",
     "server_model_probe",
+    "batch_order",
+    # Run-quality diagnostics (see run_quality_counters in Section 9).
+    "parse_status_histogram",
+    "retry_total",
+    "truncated_records",
+    "latency_p50_s",
+    "latency_p95_s",
+    "usage_completion_tokens",
     "notes",
 ]
 
@@ -378,7 +403,9 @@ RUN_PROGRESS_FIELDS = [
 def project_root() -> Path:
     cwd = Path.cwd().resolve()
     for candidate in [cwd, *cwd.parents]:
-        if (candidate / "AGENTS.md").exists() and (candidate / "docs" / "evaluation.md").exists():
+        if (candidate / "AGENTS.md").exists() and (
+            candidate / "docs" / "evaluation.md"
+        ).exists():
             return candidate
     return Path(__file__).resolve().parents[1]
 
@@ -418,7 +445,9 @@ def nonnegative_int(value: Any, name: str) -> int:
     try:
         resolved = int(str(value).strip())
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a non-negative integer, got {value!r}") from exc
+        raise ValueError(
+            f"{name} must be a non-negative integer, got {value!r}"
+        ) from exc
     if resolved < 0:
         raise ValueError(f"{name} must be a non-negative integer, got {value!r}")
     return resolved
@@ -428,7 +457,9 @@ def nonnegative_float(value: Any, name: str) -> float:
     try:
         resolved = float(str(value).strip())
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a non-negative number, got {value!r}") from exc
+        raise ValueError(
+            f"{name} must be a non-negative number, got {value!r}"
+        ) from exc
     if resolved < 0:
         raise ValueError(f"{name} must be a non-negative number, got {value!r}")
     return resolved
@@ -484,8 +515,14 @@ def read_csv_rows(path: str | Path) -> list[dict[str, str]]:
     return read_csv_frame(path).to_dict(orient="records")
 
 
-def _csv_frame(rows: list[dict[str, Any]] | pd.DataFrame, fieldnames: list[str] | None = None) -> pd.DataFrame:
-    frame = rows.copy() if isinstance(rows, pd.DataFrame) else pd.DataFrame.from_records(rows)
+def _csv_frame(
+    rows: list[dict[str, Any]] | pd.DataFrame, fieldnames: list[str] | None = None
+) -> pd.DataFrame:
+    frame = (
+        rows.copy()
+        if isinstance(rows, pd.DataFrame)
+        else pd.DataFrame.from_records(rows)
+    )
     if fieldnames is not None:
         for field in fieldnames:
             if field not in frame.columns:
@@ -519,13 +556,21 @@ def write_csv_rows_if_changed(
 
     if overwrite or not existed_before:
         path.write_text(candidate_text, encoding="utf-8")
-        return {"status": "overwritten" if existed_before else "written", "path": path, "candidate_path": ""}
+        return {
+            "status": "overwritten" if existed_before else "written",
+            "path": path,
+            "candidate_path": "",
+        }
 
     existing_text = path.read_text(encoding="utf-8")
     if existing_text == candidate_text:
         return {"status": "unchanged", "path": path, "candidate_path": ""}
 
-    candidate = Path(candidate_path) if candidate_path is not None else path.with_name(f"{path.stem}_candidate{path.suffix}")
+    candidate = (
+        Path(candidate_path)
+        if candidate_path is not None
+        else path.with_name(f"{path.stem}_candidate{path.suffix}")
+    )
     candidate.parent.mkdir(parents=True, exist_ok=True)
     candidate.write_text(candidate_text, encoding="utf-8")
     return {"status": "candidate_written", "path": path, "candidate_path": candidate}
@@ -552,7 +597,9 @@ def dataset_variant_suffix(dataset_id: str | None, variant: str | None = None) -
     return f"{dataset_suffix(dataset_id)}{variant_suffix(variant)}"
 
 
-def artifact_path(path: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
+def artifact_path(
+    path: str | Path, dataset_id: str | None = None, variant: str | None = None
+) -> Path:
     path = Path(path)
     suffix = dataset_variant_suffix(dataset_id, variant)
     if not suffix:
@@ -567,7 +614,17 @@ def task3_verification_items_path(
     source_run_id: str,
     model: str,
     audit_mode: str = OFFICIAL_TASK3_AUDIT_MODE,
+    *,
+    run_id: Any = None,
+    smoke: bool | None = None,
 ) -> Path:
+    """Path of the derived Task 3 audit items for one (source run, model, mode).
+
+    ``run_id`` / ``smoke`` route smoke and fake runs into the parallel smoke tree
+    (``data/processed/task3_verification_items/smoke/``) through
+    :func:`resolve_run_artifact_path`, so a fake Task 3 run can never overwrite
+    the paper-facing item file. Full runs keep the unchanged default path.
+    """
     parts = [
         "task3_verification_items",
         normalize_dataset_id(dataset_id),
@@ -576,7 +633,13 @@ def task3_verification_items_path(
         safe_identifier(model),
         safe_identifier(normalize_task3_audit_mode(audit_mode)),
     ]
-    return Path(root) / "data/processed/task3_verification_items" / ("_".join(parts) + ".csv")
+    return resolve_run_artifact_path(
+        Path(root)
+        / "data/processed/task3_verification_items"
+        / ("_".join(parts) + ".csv"),
+        run_id=run_id,
+        smoke=smoke,
+    )
 
 
 def candidate_path(path: str | Path) -> Path:
@@ -593,9 +656,14 @@ def dataset_target_seed_count(config: Mapping[str, Any], dataset_id: str | None)
     dataset_id = normalize_dataset_id(dataset_id)
     project_config = config.get("project", {}) if isinstance(config, Mapping) else {}
     datasets_config = config.get("datasets", {}) if isinstance(config, Mapping) else {}
-    default_count = project_config.get("target_seed_count", DEFAULT_CONFIG["project"]["target_seed_count"])
+    default_count = project_config.get(
+        "target_seed_count", DEFAULT_CONFIG["project"]["target_seed_count"]
+    )
     if dataset_id == DATASET_MLM_TAPT and isinstance(datasets_config, Mapping):
-        return positive_int(datasets_config.get("mlm_tapt_target_seed_count", default_count), "datasets.mlm_tapt_target_seed_count")
+        return positive_int(
+            datasets_config.get("mlm_tapt_target_seed_count", default_count),
+            "datasets.mlm_tapt_target_seed_count",
+        )
     return positive_int(default_count, "project.target_seed_count")
 
 
@@ -644,13 +712,21 @@ def normalize_benchmark_variant(variant: str | None) -> str:
 def selected_values(values: list[str], requested: str | None, name: str) -> list[str]:
     if not requested:
         return values
-    normalized = normalize_dataset_id(requested) if name == "dataset" else normalize_benchmark_variant(requested)
+    normalized = (
+        normalize_dataset_id(requested)
+        if name == "dataset"
+        else normalize_benchmark_variant(requested)
+    )
     if normalized not in values:
-        raise ValueError(f"Requested {name} {normalized!r} is not present in the run config.")
+        raise ValueError(
+            f"Requested {name} {normalized!r} is not present in the run config."
+        )
     return [normalized]
 
 
-def logging_config_from_args(run_config: Mapping[str, Any], args: Any) -> dict[str, Any]:
+def logging_config_from_args(
+    run_config: Mapping[str, Any], args: Any
+) -> dict[str, Any]:
     return normalize_run_logging_config(
         run_config.get("logging"),
         overrides={
@@ -666,7 +742,13 @@ def logging_config_from_args(run_config: Mapping[str, Any], args: Any) -> dict[s
 
 
 def normalize_task3_audit_mode(value: Any) -> str:
-    normalized = str(value or OFFICIAL_TASK3_AUDIT_MODE).strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = (
+        str(value or OFFICIAL_TASK3_AUDIT_MODE)
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
     aliases = {
         "": OFFICIAL_TASK3_AUDIT_MODE,
         "official": OFFICIAL_TASK3_AUDIT_MODE,
@@ -707,20 +789,38 @@ def normalize_run_logging_config(
     if logging_config:
         config.update(dict(logging_config))
     if overrides:
-        config.update({key: value for key, value in overrides.items() if value is not None})
+        config.update(
+            {key: value for key, value in overrides.items() if value is not None}
+        )
 
     return {
-        "progress_every_records": positive_int(config["progress_every_records"], "logging.progress_every_records"),
-        "progress_every_seconds": nonnegative_int(config["progress_every_seconds"], "logging.progress_every_seconds"),
-        "warn_after_records": nonnegative_int(config["warn_after_records"], "logging.warn_after_records"),
-        "warn_parse_failure_rate": nonnegative_float(config["warn_parse_failure_rate"], "logging.warn_parse_failure_rate"),
-        "warn_request_error_rate": nonnegative_float(config["warn_request_error_rate"], "logging.warn_request_error_rate"),
-        "write_progress_csv": bool_config(config["write_progress_csv"], "logging.write_progress_csv"),
-        "write_event_jsonl": bool_config(config["write_event_jsonl"], "logging.write_event_jsonl"),
+        "progress_every_records": positive_int(
+            config["progress_every_records"], "logging.progress_every_records"
+        ),
+        "progress_every_seconds": nonnegative_int(
+            config["progress_every_seconds"], "logging.progress_every_seconds"
+        ),
+        "warn_after_records": nonnegative_int(
+            config["warn_after_records"], "logging.warn_after_records"
+        ),
+        "warn_parse_failure_rate": nonnegative_float(
+            config["warn_parse_failure_rate"], "logging.warn_parse_failure_rate"
+        ),
+        "warn_request_error_rate": nonnegative_float(
+            config["warn_request_error_rate"], "logging.warn_request_error_rate"
+        ),
+        "write_progress_csv": bool_config(
+            config["write_progress_csv"], "logging.write_progress_csv"
+        ),
+        "write_event_jsonl": bool_config(
+            config["write_event_jsonl"], "logging.write_event_jsonl"
+        ),
     }
 
 
-def normalize_structured_output_mode(value: Any, *, json_mode: bool = False, json_schema: bool = False) -> str:
+def normalize_structured_output_mode(
+    value: Any, *, json_mode: bool = False, json_schema: bool = False
+) -> str:
     if value is None:
         if json_schema:
             return "json_schema"
@@ -753,9 +853,46 @@ def normalize_structured_output_mode(value: Any, *, json_mode: bool = False, jso
     return aliases[normalized]
 
 
-def normalize_provider_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
-    provider_id = str(profile.get("provider_id") or profile.get("provider") or "").strip()
-    profile_id = str(profile.get("profile_id") or profile.get("id") or provider_id).strip()
+# Request-level reproducibility knobs. `seed` is sent to OpenAI-compatible
+# providers so that greedy decoding is reproducible on servers that honour it;
+# `batch_order` controls how jobs are packed into multi-item batch prompts.
+DEFAULT_REQUEST_SEED = 20260518
+DEFAULT_MAX_RETRIES = 3
+BATCH_ORDER_GROUPED = "grouped"
+BATCH_ORDER_SHUFFLED = "shuffled"
+BATCH_ORDERS = (BATCH_ORDER_GROUPED, BATCH_ORDER_SHUFFLED)
+DEFAULT_BATCH_ORDER = BATCH_ORDER_GROUPED
+
+
+def normalize_batch_order(value: Any, field: str = "batch_order") -> str:
+    """Normalize the batch-composition ablation knob.
+
+    `grouped` keeps consecutive request indices together (all four modality
+    variants of a seed land in one batch); `shuffled` deterministically shuffles
+    job order inside each batch key group before chunking so batches mix seeds.
+    """
+    if value is None or value == "":
+        return DEFAULT_BATCH_ORDER
+    normalized = str(value).strip().lower().replace("-", "_")
+    if normalized not in BATCH_ORDERS:
+        raise ValueError(
+            f"Unknown {field}: {value!r} (expected one of {list(BATCH_ORDERS)})"
+        )
+    return normalized
+
+
+def normalize_provider_profile(
+    profile: Mapping[str, Any],
+    *,
+    default_seed: int = DEFAULT_REQUEST_SEED,
+    default_batch_order: str = DEFAULT_BATCH_ORDER,
+) -> dict[str, Any]:
+    provider_id = str(
+        profile.get("provider_id") or profile.get("provider") or ""
+    ).strip()
+    profile_id = str(
+        profile.get("profile_id") or profile.get("id") or provider_id
+    ).strip()
     base_url = normalize_base_url(profile.get("base_url") or profile.get("host"))
     models = _string_list(profile.get("models"), f"profiles.{profile_id}.models")
     if not provider_id:
@@ -775,33 +912,78 @@ def normalize_provider_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
         json_mode=json_mode,
         json_schema=bool(profile.get("json_schema", False)),
     )
-    json_mode = json_mode or structured_output in {"json_object", "json_schema", "instructor"}
+    json_mode = json_mode or structured_output in {
+        "json_object",
+        "json_schema",
+        "instructor",
+    }
     response_format = profile.get("response_format")
     if structured_output == "instructor" and "response_format" in extra_body:
-        extra_body = {key: value for key, value in extra_body.items() if key != "response_format"}
-    if response_format is None and structured_output == "json_object" and "response_format" not in extra_body:
+        extra_body = {
+            key: value for key, value in extra_body.items() if key != "response_format"
+        }
+    if (
+        response_format is None
+        and structured_output == "json_object"
+        and "response_format" not in extra_body
+    ):
         response_format = {"type": "json_object"}
     if structured_output == "instructor":
         response_format = None
     if response_format is not None and not isinstance(response_format, Mapping):
-        raise ValueError(f"Provider profile {profile_id} response_format must be an object.")
+        raise ValueError(
+            f"Provider profile {profile_id} response_format must be an object."
+        )
     return {
         "profile_id": profile_id,
         "provider_id": provider_id,
         "base_url": base_url,
-        "api_key_env": str(profile.get("api_key_env") or "LOCAL_OPENAI_API_KEY").strip(),
+        "api_key_env": str(
+            profile.get("api_key_env") or "LOCAL_OPENAI_API_KEY"
+        ).strip(),
         "models": models,
-        "concurrency": positive_int(profile.get("concurrency", DEFAULT_CONFIG["llm"]["concurrency"]), f"profiles.{profile_id}.concurrency"),
-        "batch_size": positive_int(profile.get("batch_size", 1), f"profiles.{profile_id}.batch_size"),
-        "timeout_s": positive_int(profile.get("timeout_s", DEFAULT_CONFIG["llm"]["timeout_s"]), f"profiles.{profile_id}.timeout_s"),
-        "max_tokens": positive_int(profile.get("max_tokens", DEFAULT_CONFIG["llm"]["max_tokens"]), f"profiles.{profile_id}.max_tokens"),
+        "concurrency": positive_int(
+            profile.get("concurrency", DEFAULT_CONFIG["llm"]["concurrency"]),
+            f"profiles.{profile_id}.concurrency",
+        ),
+        "batch_size": positive_int(
+            profile.get("batch_size", 1), f"profiles.{profile_id}.batch_size"
+        ),
+        "timeout_s": positive_int(
+            profile.get("timeout_s", DEFAULT_CONFIG["llm"]["timeout_s"]),
+            f"profiles.{profile_id}.timeout_s",
+        ),
+        "max_tokens": positive_int(
+            profile.get("max_tokens", DEFAULT_CONFIG["llm"]["max_tokens"]),
+            f"profiles.{profile_id}.max_tokens",
+        ),
         "json_mode": json_mode,
         "structured_output": structured_output,
-        "response_format": dict(response_format) if response_format is not None else None,
+        "response_format": dict(response_format)
+        if response_format is not None
+        else None,
         "extra_body": dict(extra_body),
-        "instructor_mode": normalize_instructor_mode_name(profile.get("instructor_mode") or "json"),
-        "validation_retries": nonnegative_int(profile.get("validation_retries", 2), f"profiles.{profile_id}.validation_retries"),
-        "fallback_batch_size": positive_int(profile.get("fallback_batch_size", 1), f"profiles.{profile_id}.fallback_batch_size"),
+        "instructor_mode": normalize_instructor_mode_name(
+            profile.get("instructor_mode") or "json"
+        ),
+        "validation_retries": nonnegative_int(
+            profile.get("validation_retries", 2),
+            f"profiles.{profile_id}.validation_retries",
+        ),
+        "fallback_batch_size": positive_int(
+            profile.get("fallback_batch_size", 1),
+            f"profiles.{profile_id}.fallback_batch_size",
+        ),
+        "seed": int(profile.get("seed", default_seed)),
+        "send_seed": bool(profile.get("send_seed", True)),
+        "max_retries": nonnegative_int(
+            profile.get("max_retries", DEFAULT_MAX_RETRIES),
+            f"profiles.{profile_id}.max_retries",
+        ),
+        "batch_order": normalize_batch_order(
+            profile.get("batch_order", default_batch_order),
+            f"profiles.{profile_id}.batch_order",
+        ),
         "requires_manual_server": bool(profile.get("requires_manual_server", False)),
         "notes": str(profile.get("notes", "")).strip(),
     }
@@ -814,31 +996,91 @@ def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
     profiles_value = config.get("profiles")
     if not isinstance(profiles_value, list) or not profiles_value:
         raise ValueError("Run config must define a non-empty profiles list.")
-    project_config = config.get("project", {}) if isinstance(config.get("project"), Mapping) else {}
+    project_config = (
+        config.get("project", {}) if isinstance(config.get("project"), Mapping) else {}
+    )
     llm_config = config.get("llm", {}) if isinstance(config.get("llm"), Mapping) else {}
-    deterministic = config.get("deterministic") or llm_config.get("deterministic") or DEFAULT_CONFIG["llm"]["deterministic"]
-    stochastic = config.get("stochastic") or llm_config.get("stochastic") or DEFAULT_CONFIG["llm"]["stochastic"]
-    datasets = [normalize_dataset_id(value) for value in _string_list(config.get("datasets", [DATASET_NICE]), "datasets")]
-    variants = [normalize_benchmark_variant(value) for value in _string_list(config.get("benchmark_variants", ["must"]), "benchmark_variants")]
+    deterministic = (
+        config.get("deterministic")
+        or llm_config.get("deterministic")
+        or DEFAULT_CONFIG["llm"]["deterministic"]
+    )
+    stochastic = (
+        config.get("stochastic")
+        or llm_config.get("stochastic")
+        or DEFAULT_CONFIG["llm"]["stochastic"]
+    )
+    datasets = [
+        normalize_dataset_id(value)
+        for value in _string_list(config.get("datasets", [DATASET_NICE]), "datasets")
+    ]
+    variants = [
+        normalize_benchmark_variant(value)
+        for value in _string_list(
+            config.get("benchmark_variants", ["must"]), "benchmark_variants"
+        )
+    ]
     tasks = normalize_task_filter(config.get("tasks", ["task1", "task2"]))
+    run_seed = int(config.get("seed", llm_config.get("seed", DEFAULT_REQUEST_SEED)))
+    run_batch_order = normalize_batch_order(
+        config.get("batch_order", llm_config.get("batch_order")), "batch_order"
+    )
     return {
         "run_group_id": run_group_id,
+        "seed": run_seed,
+        "batch_order": run_batch_order,
         "datasets": datasets,
         "benchmark_variants": variants,
         "tasks": tasks,
-        "prompt_version": str(config.get("prompt_version") or project_config.get("prompt_version") or DEFAULT_CONFIG["project"]["prompt_version"]),
+        "prompt_version": str(
+            config.get("prompt_version")
+            or project_config.get("prompt_version")
+            or DEFAULT_CONFIG["project"]["prompt_version"]
+        ),
         "deterministic": {
-            "temperature": float(deterministic.get("temperature", DEFAULT_CONFIG["llm"]["deterministic"]["temperature"])),
-            "top_p": float(deterministic.get("top_p", DEFAULT_CONFIG["llm"]["deterministic"]["top_p"])),
-            "samples": positive_int(deterministic.get("samples", 1), "deterministic.samples"),
+            "temperature": float(
+                deterministic.get(
+                    "temperature", DEFAULT_CONFIG["llm"]["deterministic"]["temperature"]
+                )
+            ),
+            "top_p": float(
+                deterministic.get(
+                    "top_p", DEFAULT_CONFIG["llm"]["deterministic"]["top_p"]
+                )
+            ),
+            "samples": positive_int(
+                deterministic.get("samples", 1), "deterministic.samples"
+            ),
         },
         "stochastic": {
-            "temperature": float(stochastic.get("temperature", DEFAULT_CONFIG["llm"]["stochastic"]["temperature"])),
-            "top_p": float(stochastic.get("top_p", DEFAULT_CONFIG["llm"]["stochastic"]["top_p"])),
-            "samples": max(0, int(stochastic.get("samples", DEFAULT_CONFIG["llm"]["stochastic"]["samples"]))),
+            "temperature": float(
+                stochastic.get(
+                    "temperature", DEFAULT_CONFIG["llm"]["stochastic"]["temperature"]
+                )
+            ),
+            "top_p": float(
+                stochastic.get("top_p", DEFAULT_CONFIG["llm"]["stochastic"]["top_p"])
+            ),
+            "samples": max(
+                0,
+                int(
+                    stochastic.get(
+                        "samples", DEFAULT_CONFIG["llm"]["stochastic"]["samples"]
+                    )
+                ),
+            ),
         },
-        "logging": normalize_run_logging_config(config.get("logging") if isinstance(config.get("logging"), Mapping) else None),
-        "profiles": [normalize_provider_profile(profile) for profile in profiles_value],
+        "logging": normalize_run_logging_config(
+            config.get("logging")
+            if isinstance(config.get("logging"), Mapping)
+            else None
+        ),
+        "profiles": [
+            normalize_provider_profile(
+                profile, default_seed=run_seed, default_batch_order=run_batch_order
+            )
+            for profile in profiles_value
+        ],
     }
 
 
@@ -906,7 +1148,11 @@ def filter_run_profiles(
     profiles = [dict(profile) for profile in run_config.get("profiles", [])]
     if profile_id:
         requested = str(profile_id).strip()
-        profiles = [profile for profile in profiles if profile["profile_id"] == requested or profile["provider_id"] == requested]
+        profiles = [
+            profile
+            for profile in profiles
+            if profile["profile_id"] == requested or profile["provider_id"] == requested
+        ]
     if model:
         requested_model = str(model).strip()
         selected: list[dict[str, Any]] = []
@@ -937,28 +1183,178 @@ def validate_manual_server_profile(profile: Mapping[str, Any]) -> None:
 # (append_jsonl appends; write_json overwrites).
 
 
-def run_registry_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
-    return artifact_path(Path(root) / "data/processed/run_registry.csv", dataset_id, variant)
+SMOKE_RUN_PREFIX = "smoke-"
+SMOKE_TREE_DIRNAME = "smoke"
+SMOKE_TREE_ENV_VAR = "RE_UQ_SMOKE_TREE"
 
 
-def model_outputs_raw_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
-    return artifact_path(Path(root) / "data/processed/model_outputs_raw.jsonl", dataset_id, variant)
+def is_smoke_run_id(run_id: Any) -> bool:
+    """True for run ids produced by smoke/fake Task 1/2/3 runs.
+
+    Task 3 inserts optional audit-mode and benchmark-variant components before
+    ``smoke`` (for example ``task3-declared-text-shall-smoke-*``), so checking
+    only the historical ``task3-smoke-*`` prefix misses valid smoke runs.
+    """
+    value = str(run_id or "").strip()
+    if value.startswith(SMOKE_RUN_PREFIX):
+        return True
+    return bool(
+        re.match(
+            r"^task3(?:-declared-(?:text|source))?(?:-shall)?-smoke-",
+            value,
+        )
+    )
 
 
-def task3_raw_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
-    return artifact_path(Path(root) / "data/processed/model_outputs_raw_task3_verification.jsonl", dataset_id, variant)
+def smoke_tree_env_enabled() -> bool:
+    """Allow read-only consumers to opt into the smoke tree via the environment."""
+    return str(os.environ.get(SMOKE_TREE_ENV_VAR, "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
-def task3_registry_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
-    return artifact_path(Path(root) / "data/processed/run_registry_task3_verification.csv", dataset_id, variant)
+def smoke_tree_path(path: str | Path) -> Path:
+    """Map ``data/processed/<name>`` to ``data/processed/smoke/<name>`` (idempotent)."""
+    path = Path(path)
+    if path.parent.name == SMOKE_TREE_DIRNAME:
+        return path
+    return path.parent / SMOKE_TREE_DIRNAME / path.name
 
 
-def task3_progress_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
-    return artifact_path(Path(root) / "data/processed/run_progress_live_task3_verification.csv", dataset_id, variant)
+def resolve_run_artifact_path(
+    path: str | Path,
+    *,
+    run_id: Any = None,
+    smoke: bool | None = None,
+) -> Path:
+    """Route run artifacts of smoke/fake runs into the parallel smoke tree.
+
+    Paper-facing full runs keep writing into ``data/processed/``; smoke runs never
+    touch those files so a fake run can never contaminate published numbers.
+    """
+    use_smoke = (
+        bool(smoke)
+        or is_smoke_run_id(run_id)
+        or (smoke is None and run_id is None and smoke_tree_env_enabled())
+    )
+    return smoke_tree_path(path) if use_smoke else Path(path)
 
 
-def task3_events_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
-    return artifact_path(Path(root) / "data/processed/run_events_task3_verification.jsonl", dataset_id, variant)
+def run_registry_path(
+    root: str | Path,
+    dataset_id: str | None = None,
+    variant: str | None = None,
+    *,
+    run_id: Any = None,
+    smoke: bool | None = None,
+) -> Path:
+    return resolve_run_artifact_path(
+        artifact_path(
+            Path(root) / "data/processed/run_registry.csv", dataset_id, variant
+        ),
+        run_id=run_id,
+        smoke=smoke,
+    )
+
+
+def model_outputs_raw_path(
+    root: str | Path,
+    dataset_id: str | None = None,
+    variant: str | None = None,
+    *,
+    run_id: Any = None,
+    smoke: bool | None = None,
+) -> Path:
+    return resolve_run_artifact_path(
+        artifact_path(
+            Path(root) / "data/processed/model_outputs_raw.jsonl", dataset_id, variant
+        ),
+        run_id=run_id,
+        smoke=smoke,
+    )
+
+
+def task3_raw_path(
+    root: str | Path,
+    dataset_id: str | None = None,
+    variant: str | None = None,
+    *,
+    run_id: Any = None,
+    smoke: bool | None = None,
+) -> Path:
+    return resolve_run_artifact_path(
+        artifact_path(
+            Path(root) / "data/processed/model_outputs_raw_task3_verification.jsonl",
+            dataset_id,
+            variant,
+        ),
+        run_id=run_id,
+        smoke=smoke,
+    )
+
+
+def task3_registry_path(
+    root: str | Path,
+    dataset_id: str | None = None,
+    variant: str | None = None,
+    *,
+    run_id: Any = None,
+    smoke: bool | None = None,
+) -> Path:
+    return resolve_run_artifact_path(
+        artifact_path(
+            Path(root) / "data/processed/run_registry_task3_verification.csv",
+            dataset_id,
+            variant,
+        ),
+        run_id=run_id,
+        smoke=smoke,
+    )
+
+
+def task3_progress_path(
+    root: str | Path,
+    dataset_id: str | None = None,
+    variant: str | None = None,
+    *,
+    run_id: Any = None,
+    smoke: bool | None = None,
+) -> Path:
+    return resolve_run_artifact_path(
+        artifact_path(
+            Path(root) / "data/processed/run_progress_live_task3_verification.csv",
+            dataset_id,
+            variant,
+        ),
+        run_id=run_id,
+        smoke=smoke,
+    )
+
+
+def task3_events_path(
+    root: str | Path,
+    dataset_id: str | None = None,
+    variant: str | None = None,
+    *,
+    run_id: Any = None,
+    smoke: bool | None = None,
+) -> Path:
+    return resolve_run_artifact_path(
+        artifact_path(
+            Path(root) / "data/processed/run_events_task3_verification.jsonl",
+            dataset_id,
+            variant,
+        ),
+        run_id=run_id,
+        smoke=smoke,
+    )
+
+
+def run_log_path(root: str | Path, run_id: str) -> Path:
+    return Path(root) / "data/processed/logs" / f"{safe_identifier(run_id)}.log"
 
 
 def acse_semantic_cache_dir(analysis_dir: str | Path, backend_label: str) -> Path:
@@ -981,11 +1377,17 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def artifact_metadata(path: str | Path, root: str | Path | None = None) -> dict[str, Any]:
+def artifact_metadata(
+    path: str | Path, root: str | Path | None = None
+) -> dict[str, Any]:
     path = Path(path)
     root_path = Path(root).resolve() if root is not None else None
     resolved = path.resolve()
-    relative = str(resolved.relative_to(root_path)) if root_path and resolved.is_relative_to(root_path) else str(path)
+    relative = (
+        str(resolved.relative_to(root_path))
+        if root_path and resolved.is_relative_to(root_path)
+        else str(path)
+    )
     metadata: dict[str, Any] = {
         "path": relative,
         "exists": path.exists(),
@@ -995,7 +1397,9 @@ def artifact_metadata(path: str | Path, root: str | Path | None = None) -> dict[
         return metadata
     metadata["sha256"] = sha256_file(path)
     metadata["bytes"] = path.stat().st_size
-    metadata["rows"] = len(read_csv_frame(path)) if path.suffix.lower() == ".csv" else ""
+    metadata["rows"] = (
+        len(read_csv_frame(path)) if path.suffix.lower() == ".csv" else ""
+    )
     return metadata
 
 
@@ -1012,7 +1416,9 @@ def write_benchmark_manifest(
         "metadata": metadata or {},
         "artifacts": [artifact_metadata(path, root=root) for path in paths],
     }
-    output_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return manifest
 
 
@@ -1022,10 +1428,16 @@ def _manifest_artifact_required(rel_path: str) -> bool:
     if normalized.startswith("prompts/"):
         return True
     name = Path(normalized).name
-    return normalized.startswith("data/processed/") and name.startswith("benchmark_items") and name.endswith(".csv")
+    return (
+        normalized.startswith("data/processed/")
+        and name.startswith("benchmark_items")
+        and name.endswith(".csv")
+    )
 
 
-def verify_benchmark_manifest(manifest_path: str | Path, project_root: str | Path) -> dict[str, Any]:
+def verify_benchmark_manifest(
+    manifest_path: str | Path, project_root: str | Path
+) -> dict[str, Any]:
     """Recompute sha256 for each artifact listed in the frozen benchmark manifest.
 
     Hard-fails (ValueError) on any hash mismatch, and on a missing required artifact
@@ -1047,7 +1459,9 @@ def verify_benchmark_manifest(manifest_path: str | Path, project_root: str | Pat
         target = root / rel_path
         if not target.exists():
             if _manifest_artifact_required(rel_path):
-                raise ValueError(f"Required benchmark artifact missing: {rel_path} (listed in {manifest_path.name}).")
+                raise ValueError(
+                    f"Required benchmark artifact missing: {rel_path} (listed in {manifest_path.name})."
+                )
             missing.append(rel_path)
             continue
         if not expected:
@@ -1080,7 +1494,9 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
     return rows
 
 
-def latest_run_id(raw_rows: list[dict[str, Any]], prefix: str | None = None) -> str | None:
+def latest_run_id(
+    raw_rows: list[dict[str, Any]], prefix: str | Iterable[str] | None = None
+) -> str | None:
     latest: str | None = None
     for row in raw_rows:
         run_id = str(row.get("run_id", "")).strip()
@@ -1095,19 +1511,30 @@ def latest_run_id(raw_rows: list[dict[str, Any]], prefix: str | None = None) -> 
 def select_run_rows(
     raw_rows: list[dict[str, Any]],
     run_id: str | None = None,
-    prefix: str | None = None,
+    prefix: str | Iterable[str] | None = None,
 ) -> tuple[str | None, list[dict[str, Any]]]:
-    selected_run_id = str(run_id).strip() if run_id else latest_run_id(raw_rows, prefix=prefix)
+    selected_run_id = (
+        str(run_id).strip() if run_id else latest_run_id(raw_rows, prefix=prefix)
+    )
     if not selected_run_id:
         return None, []
     if not run_id_matches_prefix(selected_run_id, prefix):
         return selected_run_id, []
-    return selected_run_id, [row for row in raw_rows if row.get("run_id") == selected_run_id]
+    return selected_run_id, [
+        row for row in raw_rows if row.get("run_id") == selected_run_id
+    ]
 
 
-def run_id_matches_prefix(run_id: Any, prefix: str | None = None) -> bool:
+def run_id_matches_prefix(
+    run_id: Any, prefix: str | Iterable[str] | None = None
+) -> bool:
     if not prefix:
         return True
+    if not isinstance(prefix, str):
+        prefixes = [str(value) for value in prefix]
+        if not prefixes:
+            return True
+        return any(run_id_matches_prefix(run_id, value) for value in prefixes)
     candidate = str(run_id or "").strip()
     normalized = str(prefix).strip().strip("-")
     if not candidate:
@@ -1123,11 +1550,56 @@ def run_id_matches_prefix(run_id: Any, prefix: str | None = None) -> bool:
     return remainder.split("-", 1)[0] not in {"shall"}
 
 
+@contextlib.contextmanager
+def file_lock(path: str | Path):
+    """Advisory exclusive lock on a sidecar ``<path>.lock`` file.
+
+    Concurrent runners share the per-dataset raw JSONL and registry CSVs, so
+    every append/rewrite is serialized across processes. The lock is advisory:
+    it only protects writers that go through these helpers.
+    """
+    lock_path = Path(str(path) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield handle
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def append_jsonl(path: str | Path, row: dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=True, sort_keys=True) + "\n")
+    payload = json.dumps(row, ensure_ascii=True, sort_keys=True) + "\n"
+    with file_lock(path):
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+
+def atomic_write_text(path: str | Path, text: str) -> None:
+    """Write ``text`` to ``path`` via a temp file + ``os.replace`` (never a torn file)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    try:
+        with handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(handle.name, path)
+    except BaseException:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
 
 
 def write_json(path: str | Path, value: Any) -> None:
@@ -1147,7 +1619,9 @@ def compact_json(value: Any) -> str:
 def download_file(url: str, dest: str | Path, timeout_s: int = 120) -> Path:
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    response = requests.get(url, timeout=timeout_s, headers={"User-Agent": "re-uq-evaluation/0.1"})
+    response = requests.get(
+        url, timeout=timeout_s, headers={"User-Agent": "re-uq-evaluation/0.1"}
+    )
     response.raise_for_status()
     dest.write_bytes(response.content)
     return dest
@@ -1155,7 +1629,9 @@ def download_file(url: str, dest: str | Path, timeout_s: int = 120) -> Path:
 
 SPACE_RE = re.compile(r"\s+")
 WORD_RE = re.compile(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?")
-NEGATION_RE = re.compile(r"\b(no|not|never|none|without|cannot|can't|won't|mustn't|shouldn't)\b", re.I)
+NEGATION_RE = re.compile(
+    r"\b(no|not|never|none|without|cannot|can't|won't|mustn't|shouldn't)\b", re.I
+)
 FORMULA_RE = re.compile(r"(<=|>=|==|!=|[<>]|%|\b\d+\s*[*/+-]\s*\d+\b)")
 SENTENCE_END_RE = re.compile(r"[.!?]+")
 OUTER_QUOTES_RE = re.compile(r"^[\"'“”‘’]+|[\"'“”‘’]+$")
@@ -1240,8 +1716,18 @@ def auto_capability_text(requirement: str) -> str:
             break
     if not stripped_leading_requirement:
         text = GENERIC_MODAL_PREFIX_RE.sub("", text).strip()
-    text = re.sub(r"^(?:the\s+)?(?:system|software|application|app|product|platform|service|tool|data|table)\s+", "", text, flags=re.I)
-    text = re.sub(r"^(?:shall|must|should|may|will|can|could)\s+(?:be\s+able\s+to\s+)?", "", text, flags=re.I)
+    text = re.sub(
+        r"^(?:the\s+)?(?:system|software|application|app|product|platform|service|tool|data|table)\s+",
+        "",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(
+        r"^(?:shall|must|should|may|will|can|could)\s+(?:be\s+able\s+to\s+)?",
+        "",
+        text,
+        flags=re.I,
+    )
     text = re.sub(r"^(?:be\s+able\s+to|able\s+to)\s+", "", text, flags=re.I)
     return lower_initial(text)
 
@@ -1255,13 +1741,17 @@ def automatic_filter(requirement: str, capability: str) -> tuple[bool, str]:
         reasons.append("too_short")
     if wc > 35:
         reasons.append("too_long")
-    if SENTENCE_END_RE.search(cleaned_requirement) or SENTENCE_END_RE.search(cleaned_capability):
+    if SENTENCE_END_RE.search(cleaned_requirement) or SENTENCE_END_RE.search(
+        cleaned_capability
+    ):
         reasons.append("multi_sentence")
     if NEGATION_RE.search(requirement):
         reasons.append("negation")
     if FORMULA_RE.search(requirement):
         reasons.append("formula_or_symbol")
-    heavy_conjunctions = sum(requirement.lower().count(token) for token in [" and ", " or ", ";"])
+    heavy_conjunctions = sum(
+        requirement.lower().count(token) for token in [" and ", " or ", ";"]
+    )
     if heavy_conjunctions > 1:
         reasons.append("possibly_multiple_capabilities")
     if not capability or word_count(capability) < 2:
@@ -1273,7 +1763,12 @@ def automatic_filter(requirement: str, capability: str) -> tuple[bool, str]:
     return not reasons, ";".join(reasons)
 
 
-def mlm_tapt_filter(requirement: str, capability: str, source_corpus: str = "", exclude_source_regex: str = "_PURE$") -> tuple[bool, str]:
+def mlm_tapt_filter(
+    requirement: str,
+    capability: str,
+    source_corpus: str = "",
+    exclude_source_regex: str = "_PURE$",
+) -> tuple[bool, str]:
     auto_include, reason = automatic_filter(requirement, capability)
     reasons = [item for item in reason.split(";") if item]
     if exclude_source_regex and re.search(exclude_source_regex, source_corpus or ""):
@@ -1300,7 +1795,13 @@ def find_requirement_text_column(rows: list[dict[str, str]]) -> str:
     if not rows:
         raise ValueError("No rows found in the source dataset.")
     columns = list(rows[0].keys())
-    for preferred in ["RequirementText", "requirementtext", "requirement", "text", "Requirement"]:
+    for preferred in [
+        "RequirementText",
+        "requirementtext",
+        "requirement",
+        "text",
+        "Requirement",
+    ]:
         for column in columns:
             if column.lower() == preferred.lower():
                 return column
@@ -1346,7 +1847,9 @@ def make_seed_candidates(
             "capability_text_final": capability if include else "",
         }
         if source_corpus_field is not None:
-            candidate["source_corpus"] = normalize_space(row.get(source_corpus_field, ""))
+            candidate["source_corpus"] = normalize_space(
+                row.get(source_corpus_field, "")
+            )
         candidates.append(candidate)
     return candidates
 
@@ -1355,12 +1858,24 @@ def load_mlm_tapt_rows(config: Mapping[str, Any]) -> list[dict[str, str]]:
     try:
         from datasets import load_dataset
     except ImportError as exc:
-        raise ImportError("Install the 'datasets' dependency to load limsc/mlm-tapt-requirements.") from exc
+        raise ImportError(
+            "Install the 'datasets' dependency to load limsc/mlm-tapt-requirements."
+        ) from exc
 
     datasets_config = config.get("datasets", {}) if isinstance(config, Mapping) else {}
-    repo = str(datasets_config.get("mlm_tapt_repo", DEFAULT_CONFIG["datasets"]["mlm_tapt_repo"]))
-    config_name = str(datasets_config.get("mlm_tapt_config", DEFAULT_CONFIG["datasets"]["mlm_tapt_config"]))
-    splits = datasets_config.get("mlm_tapt_splits", DEFAULT_CONFIG["datasets"]["mlm_tapt_splits"])
+    repo = str(
+        datasets_config.get(
+            "mlm_tapt_repo", DEFAULT_CONFIG["datasets"]["mlm_tapt_repo"]
+        )
+    )
+    config_name = str(
+        datasets_config.get(
+            "mlm_tapt_config", DEFAULT_CONFIG["datasets"]["mlm_tapt_config"]
+        )
+    )
+    splits = datasets_config.get(
+        "mlm_tapt_splits", DEFAULT_CONFIG["datasets"]["mlm_tapt_splits"]
+    )
     if isinstance(splits, str):
         splits = [splits]
     rows: list[dict[str, str]] = []
@@ -1384,11 +1899,20 @@ def weighted_sample_candidate_indices(
     source_cap: int = 30,
     source_field: str = "source_corpus",
 ) -> list[int]:
-    eligible_indices = [index for index, row in enumerate(candidates) if is_truthy(row.get("auto_include", ""))]
+    eligible_indices = [
+        index
+        for index, row in enumerate(candidates)
+        if is_truthy(row.get("auto_include", ""))
+    ]
     if len(eligible_indices) < target_count:
-        raise ValueError(f"Expected at least {target_count} eligible candidates, found {len(eligible_indices)}.")
+        raise ValueError(
+            f"Expected at least {target_count} eligible candidates, found {len(eligible_indices)}."
+        )
 
-    source_counts = Counter(str(candidates[index].get(source_field, "") or "unknown") for index in eligible_indices)
+    source_counts = Counter(
+        str(candidates[index].get(source_field, "") or "unknown")
+        for index in eligible_indices
+    )
     rng = random.Random(seed)
     remaining = set(eligible_indices)
     selected: list[int] = []
@@ -1398,17 +1922,26 @@ def weighted_sample_candidate_indices(
         allowed = [
             index
             for index in sorted(remaining)
-            if selected_by_source[str(candidates[index].get(source_field, "") or "unknown")] < source_cap
+            if selected_by_source[
+                str(candidates[index].get(source_field, "") or "unknown")
+            ]
+            < source_cap
         ]
         if not allowed:
             raise ValueError(
                 f"Could not sample {target_count} candidates with source_cap={source_cap}; selected {len(selected)}."
             )
-        weights = [1.0 / source_counts[str(candidates[index].get(source_field, "") or "unknown")] for index in allowed]
+        weights = [
+            1.0
+            / source_counts[str(candidates[index].get(source_field, "") or "unknown")]
+            for index in allowed
+        ]
         chosen = rng.choices(allowed, weights=weights, k=1)[0]
         selected.append(chosen)
         remaining.remove(chosen)
-        selected_by_source[str(candidates[chosen].get(source_field, "") or "unknown")] += 1
+        selected_by_source[
+            str(candidates[chosen].get(source_field, "") or "unknown")
+        ] += 1
     return selected
 
 
@@ -1452,7 +1985,11 @@ def make_mlm_tapt_seed_candidates(
             }
         )
 
-    selected_indices = set(weighted_sample_candidate_indices(candidates, target_count, seed=seed, source_cap=source_cap))
+    selected_indices = set(
+        weighted_sample_candidate_indices(
+            candidates, target_count, seed=seed, source_cap=source_cap
+        )
+    )
     for index, candidate in enumerate(candidates):
         if index in selected_indices:
             candidate["include"] = "yes"
@@ -1467,7 +2004,9 @@ def _review_compare_text(value: Any) -> str:
     return strip_final_punctuation(str(value)).lower()
 
 
-def refresh_capability_suggestions(rows: list[dict[str, Any]], force: bool = False) -> tuple[list[dict[str, Any]], int]:
+def refresh_capability_suggestions(
+    rows: list[dict[str, Any]], force: bool = False
+) -> tuple[list[dict[str, Any]], int]:
     refreshed: list[dict[str, Any]] = []
     updated = 0
     for row in rows:
@@ -1483,7 +2022,11 @@ def refresh_capability_suggestions(rows: list[dict[str, Any]], force: bool = Fal
             _review_compare_text(old_auto),
             _review_compare_text(original),
         }
-        if is_truthy(row.get("include", "")) and new_auto and (force or final_is_unedited):
+        if (
+            is_truthy(row.get("include", ""))
+            and new_auto
+            and (force or final_is_unedited)
+        ):
             if row.get("capability_text_final", "") != new_auto:
                 updated += 1
             row["capability_text_final"] = new_auto
@@ -1512,14 +2055,18 @@ def load_reviewed_seeds(
     for row in rows:
         if not is_truthy(row.get("include", "")):
             continue
-        capability = strip_final_punctuation(row.get("capability_text_final") or row.get("capability_text_auto") or "")
+        capability = strip_final_punctuation(
+            row.get("capability_text_final") or row.get("capability_text_auto") or ""
+        )
         if not capability:
             continue
         row = dict(row)
         row["capability_text_final"] = capability
         selected.append(row)
     if strict and len(selected) != target_count:
-        raise ValueError(f"Expected exactly {target_count} included seeds, found {len(selected)}.")
+        raise ValueError(
+            f"Expected exactly {target_count} included seeds, found {len(selected)}."
+        )
     return selected
 
 
@@ -1533,11 +2080,18 @@ def load_reviewed_seeds(
 
 def included_capability_review_frame(path: str | Path) -> pd.DataFrame:
     frame = read_csv_frame(path)
-    for column in ["seed_id", "original_requirement", "capability_text_final", "include"]:
+    for column in [
+        "seed_id",
+        "original_requirement",
+        "capability_text_final",
+        "include",
+    ]:
         if column not in frame.columns:
             raise ValueError(f"Missing required review column: {column}")
     included = frame[frame["include"].map(is_truthy)].copy()
-    included["capability_text_final"] = included["capability_text_final"].map(strip_final_punctuation)
+    included["capability_text_final"] = included["capability_text_final"].map(
+        strip_final_punctuation
+    )
     columns = ["seed_id"]
     if "source_corpus" in included.columns:
         columns.append("source_corpus")
@@ -1552,7 +2106,9 @@ def included_capability_review_frame(path: str | Path) -> pd.DataFrame:
     )
 
 
-def write_included_capability_review(path: str | Path, output_dir: str | Path, suffix: str = "") -> dict[str, Path]:
+def write_included_capability_review(
+    path: str | Path, output_dir: str | Path, suffix: str = ""
+) -> dict[str, Path]:
     frame = included_capability_review_frame(path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1567,7 +2123,9 @@ def capability_clause(capability: str) -> str:
     return strip_final_punctuation(capability)
 
 
-def source_statement(capability: str, modality: str, mandatory_keyword: str = "MUST") -> str:
+def source_statement(
+    capability: str, modality: str, mandatory_keyword: str = "MUST"
+) -> str:
     cap = capability_clause(capability)
     if modality == "mandatory":
         return f"The system {mandatory_keyword.upper()} {cap}."
@@ -1597,7 +2155,9 @@ def build_weak_modality_probe_items(
         capability = seed["capability_text_final"]
         for template in templates:
             template_id = template["template_id"]
-            source = template["source_template"].format(capability=capability_clause(capability))
+            source = template["source_template"].format(
+                capability=capability_clause(capability)
+            )
             items.append(
                 {
                     "item_id": f"{seed['seed_id']}_weak_{template_id}",
@@ -1622,13 +2182,19 @@ def build_task3_verification_items(
 ) -> list[dict[str, Any]]:
     audit_mode = normalize_task3_audit_mode(audit_mode)
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
-    task2_raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, task2_raw_rows)
+    # Append-only raw files can hold several rows per planned request; keep one.
+    task2_raw_rows = dedupe_raw_rows(task2_raw_rows)
+    task2_raw_rows = filter_raw_rows_to_current_benchmark(
+        benchmark_rows, task2_raw_rows
+    )
     items: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for raw in task2_raw_rows:
         if raw.get("task") != "task2" or raw.get("sample_kind") != "deterministic":
             continue
-        if raw.get("parse_status") != "ok" or not isinstance(raw.get("parsed_json"), dict):
+        if raw.get("parse_status") != "ok" or not isinstance(
+            raw.get("parsed_json"), dict
+        ):
             continue
         source_item = benchmark_by_item.get(str(raw.get("item_id", "")))
         if not source_item:
@@ -1637,7 +2203,9 @@ def build_task3_verification_items(
         extracted_modality = normalize_modality(parsed.get("modality"))
         if extracted_modality is None:
             continue
-        text_diagnostic = requirement_text_modality_diagnostic(parsed.get("requirement", ""))
+        text_diagnostic = requirement_text_modality_diagnostic(
+            parsed.get("requirement", "")
+        )
         text_modality = normalize_modality(text_diagnostic["text_modality"])
         if text_modality is None:
             continue
@@ -1648,7 +2216,9 @@ def build_task3_verification_items(
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
-        declared_relation = task3_gold_relation(source_item["source_modality"], extracted_modality)
+        declared_relation = task3_gold_relation(
+            source_item["source_modality"], extracted_modality
+        )
         relation = task3_gold_relation(source_item["source_modality"], text_modality)
         confidence = confidence_probability(raw, parsed)
         items.append(
@@ -1717,7 +2287,9 @@ def weak_modality_template_sanity_rows() -> list[dict[str, Any]]:
             {
                 "template_id": template["template_id"],
                 "source_statement_template": template["source_template"],
-                "example_source_statement": template["source_template"].format(capability="export reports"),
+                "example_source_statement": template["source_template"].format(
+                    capability="export reports"
+                ),
                 "intended_gold_modality": "nice_to_have",
                 "weaker_than_should": "",
                 "reviewer": "",
@@ -1727,7 +2299,9 @@ def weak_modality_template_sanity_rows() -> list[dict[str, Any]]:
     return rows
 
 
-def write_weak_modality_template_sanity_check(output_dir: str | Path, suffix: str = "") -> dict[str, Path]:
+def write_weak_modality_template_sanity_check(
+    output_dir: str | Path, suffix: str = ""
+) -> dict[str, Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / f"weak_modality_template_sanity_check{suffix}.csv"
@@ -1737,7 +2311,121 @@ def write_weak_modality_template_sanity_check(output_dir: str | Path, suffix: st
     else:
         rows = weak_modality_template_sanity_rows()
         write_csv_rows(csv_path, rows, fieldnames=WEAK_MODALITY_SANITY_FIELDS)
-    markdown_path.write_text(markdown_table(rows, WEAK_MODALITY_SANITY_FIELDS) + "\n", encoding="utf-8")
+    markdown_path.write_text(
+        markdown_table(rows, WEAK_MODALITY_SANITY_FIELDS) + "\n", encoding="utf-8"
+    )
+    return {"csv": csv_path, "markdown": markdown_path}
+
+
+MAIN_MODALITY_TEMPLATE_INVENTORY_FIELDS = [
+    "template_id",
+    "condition",
+    "variant",
+    "source_statement_template",
+    "example_source_statement",
+    "intended_gold_modality",
+    "note",
+]
+MODALITY_TEMPLATE_INVENTORY_EXAMPLE_CAPABILITY = "export reports"
+
+
+def main_modality_template_rows(
+    capability: str = MODALITY_TEMPLATE_INVENTORY_EXAMPLE_CAPABILITY,
+) -> list[dict[str, Any]]:
+    """Return the full modality-template inventory used to build benchmark sources.
+
+    Covers the four main benchmark conditions (``MUST`` wording), the ``SHALL``
+    robustness variant of the mandatory condition, and the four weak-intent
+    phrasing-probe templates. Mirrors ``weak_modality_template_sanity_rows`` and
+    is exported for the experimental-setup documentation.
+    """
+    cap = capability_clause(capability)
+    rows: list[dict[str, Any]] = []
+    main_conditions = [
+        (
+            "main_mandatory_must",
+            "mandatory",
+            "must",
+            "Main benchmark mandatory condition.",
+        ),
+        (
+            "main_recommended_should",
+            "recommended",
+            "must",
+            "Main benchmark recommended condition.",
+        ),
+        ("main_optional_may", "optional", "must", "Main benchmark optional condition."),
+        (
+            "main_nice_to_have_useful_if",
+            "nice_to_have",
+            "must",
+            "Main benchmark weak stakeholder-intent condition.",
+        ),
+    ]
+    for template_id, condition, variant, note in main_conditions:
+        rows.append(
+            {
+                "template_id": template_id,
+                "condition": condition,
+                "variant": variant,
+                "source_statement_template": source_statement(
+                    "{capability}", condition
+                ),
+                "example_source_statement": source_statement(cap, condition),
+                "intended_gold_modality": condition,
+                "note": note,
+            }
+        )
+    rows.append(
+        {
+            "template_id": "shall_mandatory_shall",
+            "condition": "mandatory",
+            "variant": "shall",
+            "source_statement_template": source_statement(
+                "{capability}", "mandatory", mandatory_keyword="SHALL"
+            ),
+            "example_source_statement": source_statement(
+                cap, "mandatory", mandatory_keyword="SHALL"
+            ),
+            "intended_gold_modality": "mandatory",
+            "note": "SHALL robustness variant; swaps MUST in the mandatory condition only.",
+        }
+    )
+    for template in WEAK_MODALITY_PROBE_TEMPLATES:
+        rows.append(
+            {
+                "template_id": f"probe_{template['template_id']}",
+                "condition": "nice_to_have",
+                "variant": "weak_probe",
+                "source_statement_template": template["source_template"],
+                "example_source_statement": template["source_template"].format(
+                    capability=cap
+                ),
+                "intended_gold_modality": "nice_to_have",
+                "note": (
+                    "Weak-intent phrasing probe; identical to the main nice_to_have template."
+                    if template["source_template"]
+                    == source_statement("{capability}", "nice_to_have")
+                    else "Weak-intent phrasing probe."
+                ),
+            }
+        )
+    return rows
+
+
+def write_main_modality_template_inventory(
+    path: str | Path,
+    capability: str = MODALITY_TEMPLATE_INVENTORY_EXAMPLE_CAPABILITY,
+) -> dict[str, Path]:
+    """Write the modality-template inventory as a CSV plus a sibling Markdown table."""
+    csv_path = Path(path)
+    markdown_path = csv_path.with_suffix(".md")
+    rows = main_modality_template_rows(capability)
+    write_csv_rows(csv_path, rows, fieldnames=MAIN_MODALITY_TEMPLATE_INVENTORY_FIELDS)
+    markdown_path.write_text(
+        markdown_table(rows, MAIN_MODALITY_TEMPLATE_INVENTORY_FIELDS) + "\n",
+        encoding="utf-8",
+    )
     return {"csv": csv_path, "markdown": markdown_path}
 
 
@@ -1767,7 +2455,10 @@ def weak_modality_sanity_status(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if template_rows.empty:
             missing.append(template_id)
             continue
-        answers = [_sanity_answer(value) for value in template_rows["weaker_than_should"].tolist()]
+        answers = [
+            _sanity_answer(value)
+            for value in template_rows["weaker_than_should"].tolist()
+        ]
         if "no" in answers:
             disagreeing.append(template_id)
         if not answers or any(answer != "yes" for answer in answers):
@@ -1782,7 +2473,9 @@ def weak_modality_sanity_status(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def weak_modality_construct_review_rows(reviewer_ids: Iterable[str] = ("R1", "R2")) -> list[dict[str, Any]]:
+def weak_modality_construct_review_rows(
+    reviewer_ids: Iterable[str] = ("R1", "R2"),
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for reviewer_id in reviewer_ids:
         for template in WEAK_MODALITY_PROBE_TEMPLATES:
@@ -1792,7 +2485,9 @@ def weak_modality_construct_review_rows(reviewer_ids: Iterable[str] = ("R1", "R2
                     "reviewer_role": "",
                     "template_id": template["template_id"],
                     "source_statement_template": template["source_template"],
-                    "example_source_statement": template["source_template"].format(capability="export reports"),
+                    "example_source_statement": template["source_template"].format(
+                        capability="export reports"
+                    ),
                     "weaker_than_should": "",
                     "ordinal_rank": "",
                     "review_note": "",
@@ -1835,10 +2530,15 @@ def weak_modality_construct_review_status(
         if len(reviewer_ids) < expected_reviewers_per_template:
             insufficient.append(template_id)
 
-        answers = [_sanity_answer(value) for value in template_rows["weaker_than_should"].tolist()]
+        answers = [
+            _sanity_answer(value)
+            for value in template_rows["weaker_than_should"].tolist()
+        ]
         if "no" in answers:
             disagreeing.append(template_id)
-        if len(answers) < expected_reviewers_per_template or any(answer != "yes" for answer in answers):
+        if len(answers) < expected_reviewers_per_template or any(
+            answer != "yes" for answer in answers
+        ):
             incomplete.append(template_id)
 
     valid = not missing and not insufficient and not incomplete and not disagreeing
@@ -1879,8 +2579,12 @@ def build_benchmark_items(
                     "original_requirement": seed.get("original_requirement", ""),
                     "capability_text": capability,
                     "source_modality": modality,
-                    "source_statement": source_statement(capability, modality, mandatory_keyword=mandatory_keyword),
-                    "candidate_requirement": candidate_requirement(capability, mandatory_keyword=mandatory_keyword),
+                    "source_statement": source_statement(
+                        capability, modality, mandatory_keyword=mandatory_keyword
+                    ),
+                    "candidate_requirement": candidate_requirement(
+                        capability, mandatory_keyword=mandatory_keyword
+                    ),
                     "mandatory_keyword": mandatory_keyword,
                     "task1_gold_decision": "yes" if modality == "mandatory" else "no",
                     "task1_gold_yes": 1 if modality == "mandatory" else 0,
@@ -1892,14 +2596,22 @@ def build_benchmark_items(
     return items
 
 
-def benchmark_statement_review_frame(items: list[dict[str, Any]] | pd.DataFrame | str | Path) -> pd.DataFrame:
+def benchmark_statement_review_frame(
+    items: list[dict[str, Any]] | pd.DataFrame | str | Path,
+) -> pd.DataFrame:
     if isinstance(items, (str, Path)):
         frame = read_csv_frame(items)
     elif isinstance(items, pd.DataFrame):
         frame = items.copy()
     else:
         frame = pd.DataFrame.from_records(items)
-    required = ["seed_id", "capability_text", "candidate_requirement", "source_modality", "source_statement"]
+    required = [
+        "seed_id",
+        "capability_text",
+        "candidate_requirement",
+        "source_modality",
+        "source_statement",
+    ]
     for column in required:
         if column not in frame.columns:
             raise ValueError(f"Missing required benchmark column: {column}")
@@ -1956,6 +2668,11 @@ def write_benchmark_statement_review(
 # response-format objects for json_object / json_schema / instructor modes,
 # and the planner that turns benchmark rows into provider completion jobs.
 
+# Version of the compute_job_config_sha input schema. Bump whenever the set of
+# hashed request parameters changes; recorded on every raw record so resume and
+# provenance tooling can tell which fingerprint definition produced a row.
+JOB_CONFIG_SHA_VERSION = 3
+
 
 def load_prompt(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8")
@@ -1982,7 +2699,9 @@ def prompt_for_benchmark_task(
     raise ValueError(f"Unsupported benchmark task: {task}")
 
 
-def _json_schema_object(properties: Mapping[str, Any], required: list[str]) -> dict[str, Any]:
+def _json_schema_object(
+    properties: Mapping[str, Any], required: list[str]
+) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": dict(properties),
@@ -2022,13 +2741,20 @@ def task_response_schema(task: str, *, batched: bool = False) -> dict[str, Any]:
         properties = {"request_index": {"type": "integer"}, **properties}
         required = ["request_index", *required]
         return _json_schema_object(
-            {"results": {"type": "array", "items": _json_schema_object(properties, required)}},
+            {
+                "results": {
+                    "type": "array",
+                    "items": _json_schema_object(properties, required),
+                }
+            },
             ["results"],
         )
     return _json_schema_object(properties, required)
 
 
-def response_format_for_task(task: str, structured_output: str, *, batched: bool = False) -> dict[str, Any] | None:
+def response_format_for_task(
+    task: str, structured_output: str, *, batched: bool = False
+) -> dict[str, Any] | None:
     mode = normalize_structured_output_mode(structured_output)
     if mode in {"none", "instructor"}:
         return None
@@ -2058,7 +2784,9 @@ def resolve_response_format_args(
     mode = normalize_structured_output_mode(structured_output, json_mode=json_mode)
     if mode == "instructor":
         if extra is not None and "response_format" in extra:
-            extra = {key: value for key, value in extra.items() if key != "response_format"}
+            extra = {
+                key: value for key, value in extra.items() if key != "response_format"
+            }
         return None, extra
     if mode == "none":
         return (dict(response_format) if response_format else None), extra
@@ -2079,21 +2807,75 @@ def compute_job_config_sha(
     max_tokens: int,
     structured_output: str,
     json_mode: bool,
+    extra_body: Mapping[str, Any] | None = None,
+    response_format: Mapping[str, Any] | None = None,
+    instructor_mode: str = "json",
+    validation_retries: int = 2,
+    seed: int | None = DEFAULT_REQUEST_SEED,
+    task: str = "",
+    batch_size: int = 1,
+    batch_order: str = DEFAULT_BATCH_ORDER,
+    fallback_batch_size: int = 1,
 ) -> str:
     """Config fingerprint for a single completion job.
 
     Covers the request parameters that change model output but are not part of
     completion_record_key, so config-aware resume can detect stale cached rows.
+
+    Version 2 (see JOB_CONFIG_SHA_VERSION) additionally hashes extra_body,
+    response_format, instructor_mode, validation_retries, and seed.
+
+    Version 3 additionally hashes the batching setup: batch_size, batch_order,
+    fallback_batch_size, and -- only when batch_size > 1 -- the SHA of the batch
+    prompt wrapper for `task` (see :func:`batch_prompt_wrapper_sha`). A batched
+    request sees a different prompt envelope and neighbouring items than a
+    single-item request, so a cached row produced under a different batching
+    setup is not interchangeable with the planned one. Single-item plans
+    (batch_size == 1) carry no wrapper hash, so editing the batch wrapper never
+    invalidates an unbatched run.
+
+    Resume impact: `pending_completion_jobs` (Section 9) reuses a cached row when
+    it carries no job_config_sha at all (legacy cache, key-only match) but
+    re-requests any row whose recorded sha differs from the planned one. Because
+    v2 hashes more inputs, rows written under the v1 definition carry an OLD (not
+    missing) sha and will therefore be re-requested on resume. That is intended:
+    a v1 sha cannot prove the extra_body/response_format/seed of the cached row
+    matches the current plan. To keep an old run resumable without re-requesting,
+    replay it with the v1 fingerprint or accept the re-request cost. The same
+    applies to v2 rows under the v3 definition.
     """
+    resolved_batch_size = positive_int(batch_size, "batch_size")
     canonical = compact_json(
         {
+            "sha_version": JOB_CONFIG_SHA_VERSION,
             "prompt": prompt,
             "prompt_version": prompt_version,
             "temperature": float(temperature),
             "top_p": float(top_p),
             "max_tokens": int(max_tokens),
-            "structured_output": normalize_structured_output_mode(structured_output, json_mode=json_mode),
+            "structured_output": normalize_structured_output_mode(
+                structured_output, json_mode=json_mode
+            ),
             "json_mode": bool(json_mode),
+            "extra_body": dict(extra_body) if extra_body else None,
+            "response_format": dict(response_format) if response_format else None,
+            "instructor_mode": normalize_instructor_mode_name(instructor_mode),
+            "validation_retries": nonnegative_int(
+                validation_retries, "validation_retries"
+            ),
+            "seed": None if seed is None else int(seed),
+            "batch_size": resolved_batch_size,
+            "batch_order": normalize_batch_order(batch_order),
+            "fallback_batch_size": positive_int(
+                fallback_batch_size, "fallback_batch_size"
+            ),
+            # Only batched plans depend on the wrapper text, so single-item runs
+            # keep a fingerprint that is stable across wrapper edits.
+            **(
+                {"batch_wrapper_sha": batch_prompt_wrapper_sha(task)}
+                if resolved_batch_size > 1
+                else {}
+            ),
         }
     )
     return sha256_text(canonical)
@@ -2126,6 +2908,11 @@ def completion_request_job(
     instructor_mode: str = "json",
     validation_retries: int = 2,
     fallback_batch_size: int = 1,
+    seed: int = DEFAULT_REQUEST_SEED,
+    send_seed: bool = True,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    batch_order: str = DEFAULT_BATCH_ORDER,
+    batch_size: int = 1,
     server_model_probe: Mapping[str, Any] | str | None = None,
 ) -> dict[str, Any]:
     resolved_response_format, resolved_extra_body = resolve_response_format_args(
@@ -2136,6 +2923,7 @@ def completion_request_job(
         extra_body=extra_body,
         batched=False,
     )
+    resolved_seed = int(seed) if send_seed else None
     return {
         "request_index": request_index,
         "run_id": run_id,
@@ -2147,7 +2935,17 @@ def completion_request_job(
             max_tokens=max_tokens,
             structured_output=structured_output,
             json_mode=json_mode,
+            extra_body=resolved_extra_body,
+            response_format=resolved_response_format,
+            instructor_mode=instructor_mode,
+            validation_retries=validation_retries,
+            seed=resolved_seed,
+            task=task,
+            batch_size=batch_size,
+            batch_order=batch_order,
+            fallback_batch_size=fallback_batch_size,
         ),
+        "job_config_sha_version": JOB_CONFIG_SHA_VERSION,
         "model": model,
         "host": host,
         "base_url": host,
@@ -2166,12 +2964,21 @@ def completion_request_job(
         "profile_id": profile_id,
         "run_group_id": run_group_id,
         "json_mode": bool(json_mode),
-        "structured_output": normalize_structured_output_mode(structured_output, json_mode=json_mode),
-        "response_format": dict(resolved_response_format) if resolved_response_format else None,
+        "structured_output": normalize_structured_output_mode(
+            structured_output, json_mode=json_mode
+        ),
+        "response_format": dict(resolved_response_format)
+        if resolved_response_format
+        else None,
         "extra_body": dict(resolved_extra_body) if resolved_extra_body else None,
         "instructor_mode": normalize_instructor_mode_name(instructor_mode),
         "validation_retries": nonnegative_int(validation_retries, "validation_retries"),
         "fallback_batch_size": positive_int(fallback_batch_size, "fallback_batch_size"),
+        "seed": resolved_seed,
+        "send_seed": bool(send_seed),
+        "max_retries": nonnegative_int(max_retries, "max_retries"),
+        "batch_order": normalize_batch_order(batch_order),
+        "batch_size": positive_int(batch_size, "batch_size"),
         "server_model_probe": server_model_probe,
     }
 
@@ -2201,6 +3008,11 @@ def _append_completion_jobs(
     instructor_mode: str,
     validation_retries: int,
     fallback_batch_size: int,
+    seed: int,
+    send_seed: bool,
+    max_retries: int,
+    batch_order: str,
+    batch_size: int,
     server_model_probe: Mapping[str, Any] | str | None,
 ) -> None:
     """Append the deterministic job and any stochastic samples for one rendered prompt."""
@@ -2225,6 +3037,11 @@ def _append_completion_jobs(
         instructor_mode=instructor_mode,
         validation_retries=validation_retries,
         fallback_batch_size=fallback_batch_size,
+        seed=seed,
+        send_seed=send_seed,
+        max_retries=max_retries,
+        batch_order=batch_order,
+        batch_size=batch_size,
         server_model_probe=server_model_probe,
     )
     jobs.append(
@@ -2275,6 +3092,11 @@ def planned_completion_jobs(
     instructor_mode: str = "json",
     validation_retries: int = 2,
     fallback_batch_size: int = 1,
+    seed: int = DEFAULT_REQUEST_SEED,
+    send_seed: bool = True,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    batch_order: str = DEFAULT_BATCH_ORDER,
+    batch_size: int = 1,
     server_model_probe: Mapping[str, Any] | str | None = None,
 ) -> list[dict[str, Any]]:
     jobs: list[dict[str, Any]] = []
@@ -2285,7 +3107,9 @@ def planned_completion_jobs(
                 jobs,
                 item=item,
                 task=task,
-                prompt=prompt_for_benchmark_task(task, item, task1_template, task2_template),
+                prompt=prompt_for_benchmark_task(
+                    task, item, task1_template, task2_template
+                ),
                 prompt_version=prompt_version,
                 model=model,
                 host=host,
@@ -2305,6 +3129,11 @@ def planned_completion_jobs(
                 instructor_mode=instructor_mode,
                 validation_retries=validation_retries,
                 fallback_batch_size=fallback_batch_size,
+                seed=seed,
+                send_seed=send_seed,
+                max_retries=max_retries,
+                batch_order=batch_order,
+                batch_size=batch_size,
                 server_model_probe=server_model_probe,
             )
     return jobs
@@ -2334,6 +3163,11 @@ def planned_completion_jobs_for_items(
     instructor_mode: str = "json",
     validation_retries: int = 2,
     fallback_batch_size: int = 1,
+    seed: int = DEFAULT_REQUEST_SEED,
+    send_seed: bool = True,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    batch_order: str = DEFAULT_BATCH_ORDER,
+    batch_size: int = 1,
     server_model_probe: Mapping[str, Any] | str | None = None,
 ) -> list[dict[str, Any]]:
     """Plan deterministic + stochastic jobs for pre-built items with a per-item prompt.
@@ -2367,6 +3201,11 @@ def planned_completion_jobs_for_items(
             instructor_mode=instructor_mode,
             validation_retries=validation_retries,
             fallback_batch_size=fallback_batch_size,
+            seed=seed,
+            send_seed=send_seed,
+            max_retries=max_retries,
+            batch_order=batch_order,
+            batch_size=batch_size,
             server_model_probe=server_model_probe,
         )
     return jobs
@@ -2425,7 +3264,9 @@ def extract_json_value(text: str) -> Any | None:
     return None
 
 
-def normalize_confidence_scale(value: Any, default: str = CONFIDENCE_SCALE_0_100) -> str:
+def normalize_confidence_scale(
+    value: Any, default: str = CONFIDENCE_SCALE_0_100
+) -> str:
     if value in {"", None}:
         return default
     normalized = str(value).strip().lower().replace("-", "_")
@@ -2465,7 +3306,9 @@ def prompt_text_uses_confidence_0_1(prompt: Any) -> bool:
 
 
 def output_contract_uses_confidence_0_1(output_contract_version: Any) -> bool:
-    return str(output_contract_version or "") in so.CONFIDENCE_0_1_OUTPUT_CONTRACT_VERSIONS
+    return (
+        str(output_contract_version or "") in so.CONFIDENCE_0_1_OUTPUT_CONTRACT_VERSIONS
+    )
 
 
 def confidence_scale_for_record(record: Mapping[str, Any]) -> str:
@@ -2481,9 +3324,13 @@ def confidence_scale_for_record(record: Mapping[str, Any]) -> str:
     return CONFIDENCE_SCALE_0_100
 
 
-def parse_confidence(value: Any, confidence_scale: str = CONFIDENCE_SCALE_0_100) -> float | None:
+def parse_confidence(
+    value: Any, confidence_scale: str = CONFIDENCE_SCALE_0_100
+) -> float | None:
     scale = normalize_confidence_scale(confidence_scale)
-    if isinstance(value, bool) or (scale == CONFIDENCE_SCALE_0_1 and isinstance(value, str)):
+    if isinstance(value, bool) or (
+        scale == CONFIDENCE_SCALE_0_1 and isinstance(value, str)
+    ):
         return None
     try:
         confidence = float(value)
@@ -2500,7 +3347,9 @@ def row_uses_confidence_0_1(row: Mapping[str, Any]) -> bool:
     return confidence_scale_for_record(row) == CONFIDENCE_SCALE_0_1
 
 
-def confidence_probability(row_or_parsed: Mapping[str, Any], parsed: Mapping[str, Any] | None = None) -> float:
+def confidence_probability(
+    row_or_parsed: Mapping[str, Any], parsed: Mapping[str, Any] | None = None
+) -> float:
     if parsed is None and isinstance(row_or_parsed.get("parsed_json"), Mapping):
         parsed = row_or_parsed["parsed_json"]  # type: ignore[index]
     value_source = parsed if parsed is not None else row_or_parsed
@@ -2599,7 +3448,9 @@ def evidence_phrase_in_source(evidence_phrase: Any, source_statement_text: Any) 
     return bool(evidence and evidence in source)
 
 
-def raw_record_matches_benchmark_item(raw: Mapping[str, Any], item: Mapping[str, Any]) -> bool:
+def raw_record_matches_benchmark_item(
+    raw: Mapping[str, Any], item: Mapping[str, Any]
+) -> bool:
     prompt = raw.get("prompt")
     if not prompt:
         return True
@@ -2622,6 +3473,35 @@ def filter_raw_rows_to_current_benchmark(
     return filtered
 
 
+def dedupe_raw_rows(raw_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse duplicate completions of the same request to one row (latest ok wins).
+
+    A raw JSONL file is append-only, so a resumed or retried run can hold several
+    rows for one ``run_id`` + :func:`completion_record_key`. Scoring and progress
+    must count each planned request exactly once; this keeps the LAST row in file
+    order whose ``parse_status`` is ``ok`` (a later successful retry supersedes an
+    earlier failure), or the last row of the group when none parsed. The relative
+    order of the surviving rows follows the first appearance of each key so
+    downstream ordering (and grouping) stays stable.
+    """
+    rows = [dict(row) for row in raw_rows]
+    first_position: dict[tuple[Any, ...], int] = {}
+    keep_index: dict[tuple[Any, ...], int] = {}
+    for index, row in enumerate(rows):
+        key = (str(row.get("run_id", "")), completion_record_key(row))
+        first_position.setdefault(key, index)
+        previous = keep_index.get(key)
+        is_ok = str(row.get("parse_status", "")) == "ok"
+        if (
+            previous is None
+            or is_ok
+            or str(rows[previous].get("parse_status", "")) != "ok"
+        ):
+            keep_index[key] = index
+    kept = sorted(keep_index.items(), key=lambda entry: first_position[entry[0]])
+    return [rows[index] for _, index in kept]
+
+
 def benchmark_rows_with_current_raw_outputs(
     benchmark_rows: list[dict[str, Any]],
     raw_rows: list[dict[str, Any]],
@@ -2635,7 +3515,9 @@ def benchmark_rows_with_current_raw_outputs(
         if (item := item_by_id.get(str(raw.get("item_id", ""))))
         and raw_record_matches_benchmark_item(raw, item)
     }
-    return [row for row in benchmark_rows if str(row.get("item_id", "")) in fresh_item_ids]
+    return [
+        row for row in benchmark_rows if str(row.get("item_id", "")) in fresh_item_ids
+    ]
 
 
 def rule_based_source_modality(source_statement_text: str) -> str | None:
@@ -2651,10 +3533,111 @@ def rule_based_source_modality(source_statement_text: str) -> str | None:
     return None
 
 
-def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, str]:
+# Surface modal cues mapped to the modality category they signal in generated
+# requirement text. Used by ``requirement_text_modality_diagnostic``.
+MODAL_CUE_CATEGORY = {
+    "must": "mandatory",
+    "shall": "mandatory",
+    "required to": "mandatory",
+    "should": "recommended",
+    "recommended": "recommended",
+    "may": "optional",
+    "optional": "optional",
+    "could": "optional",
+    "can": "optional",
+}
+# Contractions that are themselves a negated modal cue, mapped to the base cue.
+NEGATED_MODAL_CONTRACTIONS = {
+    "cannot": "can",
+    "can't": "can",
+    "cant": "can",
+    "mustn't": "must",
+    "mustnt": "must",
+    "shouldn't": "should",
+    "shouldnt": "should",
+    "shan't": "shall",
+    "shant": "shall",
+    "couldn't": "could",
+    "couldnt": "could",
+    "mayn't": "may",
+}
+NEGATION_TOKENS = {"not", "never"}
+# How many preceding tokens are inspected for a negation cue before a modal.
+MODAL_NEGATION_LOOKBACK = 3
+# Priority order applied when several distinct modal categories co-occur.
+MODAL_CATEGORY_PRIORITY = ["mandatory", "recommended", "optional"]
+
+
+def _modal_cue_scan(text: str) -> tuple[list[str], list[str], list[str]]:
+    """Return ``(cues_found, positive_cues, negated_cues)`` for lowercased ``text``.
+
+    ``cues_found`` is the sorted set of surface modal cues seen anywhere in the
+    text. A cue counts as negated when it is a negated contraction, when a
+    negation token appears within ``MODAL_NEGATION_LOOKBACK`` preceding tokens,
+    or when it is directly followed by ``not`` / ``n't``.
+    """
+    tokens = re.findall(r"[a-z]+(?:'[a-z]+)?", text)
+    positive: list[str] = []
+    negated: list[str] = []
+    for index, token in enumerate(tokens):
+        base_cue = NEGATED_MODAL_CONTRACTIONS.get(token)
+        if base_cue is not None:
+            negated.append(base_cue)
+            continue
+        if token not in MODAL_CUE_CATEGORY:
+            continue
+        window = tokens[max(0, index - MODAL_NEGATION_LOOKBACK) : index]
+        following = tokens[index + 1] if index + 1 < len(tokens) else ""
+        is_negated = bool(NEGATION_TOKENS.intersection(window)) or following in {
+            "not",
+            "n't",
+            "never",
+        }
+        (negated if is_negated else positive).append(token)
+    if re.search(r"\brequired\s+to\b", text):
+        if re.search(r"\b(?:not|never)\s+required\s+to\b", text):
+            negated.append("required to")
+        else:
+            positive.append("required to")
+    cues = sorted(set(positive) | set(negated))
+    return cues, positive, negated
+
+
+def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, Any]:
+    """Classify the modal force expressed by generated requirement text.
+
+    Returns the backward-compatible ``text_modality`` / ``text_modality_basis``
+    pair plus ``text_modality_multi_modal`` and ``text_modality_modals_found``.
+
+    Precedence, applied in this order:
+
+    1. A weak phrase ("would be nice if", ...) wins outright (``nice_to_have``).
+    2. A POSITIVE modal cue wins over any negated cue, ranked by
+       ``MODAL_CATEGORY_PRIORITY`` (mandatory > recommended > optional). Text
+       such as "The system must ensure that users cannot delete records." states
+       a mandatory obligation whose *content* is a prohibition; scoring it as
+       ``negated`` would drop a real strengthening case. Mixed cues still set
+       ``text_modality_multi_modal`` when the categories differ.
+    3. Only when there is NO positive cue does a negated modal ("must not",
+       "cannot", "shouldn't", ...) resolve to ``text_modality = "negated"`` with
+       basis ``negated_modal``, so an explicitly negated obligation is never
+       scored as a positive (strengthening) modality.
+    """
     text = normalize_space(str(requirement_text or "")).lower()
     if not text:
-        return {"text_modality": "unknown", "text_modality_basis": "unknown"}
+        return {
+            "text_modality": "unknown",
+            "text_modality_basis": "unknown",
+            "text_modality_multi_modal": False,
+            "text_modality_modals_found": [],
+        }
+
+    cues, positive_cues, negated_cues = _modal_cue_scan(text)
+    categories = {MODAL_CUE_CATEGORY[cue] for cue in cues}
+    result = {
+        "text_modality_multi_modal": len(categories) > 1,
+        "text_modality_modals_found": cues,
+    }
 
     weak_patterns = [
         r"\bwould\s+be\s+nice\s+if\b",
@@ -2665,22 +3648,40 @@ def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, str
         r"\bwishlist\b",
     ]
     if any(re.search(pattern, text) for pattern in weak_patterns):
-        return {"text_modality": "nice_to_have", "text_modality_basis": "weak_phrase"}
-    if re.search(r"\b(?:must|shall)\b", text) or re.search(r"\brequired\s+to\b", text):
-        return {"text_modality": "mandatory", "text_modality_basis": "explicit_modal"}
-    if re.search(r"\b(?:should|recommended)\b", text):
-        return {"text_modality": "recommended", "text_modality_basis": "explicit_modal"}
-    if re.search(r"\b(?:may|optional|could|can)\b", text):
-        return {"text_modality": "optional", "text_modality_basis": "explicit_modal"}
+        return {
+            "text_modality": "nice_to_have",
+            "text_modality_basis": "weak_phrase",
+            **result,
+        }
+    positive_categories = {MODAL_CUE_CATEGORY[cue] for cue in positive_cues}
+    for category in MODAL_CATEGORY_PRIORITY:
+        if category in positive_categories:
+            return {
+                "text_modality": category,
+                "text_modality_basis": "explicit_modal",
+                **result,
+            }
+    if negated_cues:
+        return {
+            "text_modality": "negated",
+            "text_modality_basis": "negated_modal",
+            **result,
+        }
     if re.match(r"^(?:the\s+)?system\s+\w+", text):
-        return {"text_modality": "mandatory", "text_modality_basis": "heuristic_system_verb"}
-    return {"text_modality": "unknown", "text_modality_basis": "unknown"}
+        return {
+            "text_modality": "mandatory",
+            "text_modality_basis": "heuristic_system_verb",
+            **result,
+        }
+    return {"text_modality": "unknown", "text_modality_basis": "unknown", **result}
 
 
 def empty_text_modality_fields() -> dict[str, Any]:
     return {
         "text_modality": "",
         "text_modality_basis": "",
+        "text_modality_multi_modal": "",
+        "text_modality_modals_found": "",
         "text_modality_parse_status": "",
         "text_modality_correct": "",
         "label_text_consistent": "",
@@ -2705,16 +3706,38 @@ def text_modality_fields(
     diagnostic = requirement_text_modality_diagnostic(requirement_text)
     text_modality = diagnostic["text_modality"]
     text_modality_basis = diagnostic["text_modality_basis"]
+    # "negated" and "unknown" are non-modality outcomes: they never count as a
+    # parsed modality, never strengthen, and never enter the strict basis.
     parse_ok = text_modality in MODALITIES
     gold_strength = ORDINAL_STRENGTH.get(str(gold_modality))
     text_strength = ORDINAL_STRENGTH.get(text_modality)
-    overcommit = bool(parse_ok and gold_strength is not None and text_strength is not None and text_strength > gold_strength)
-    undercommit = bool(parse_ok and gold_strength is not None and text_strength is not None and text_strength < gold_strength)
-    strict_overcommit = bool(overcommit and text_modality_basis in STRICT_TEXT_MODALITY_BASES)
-    label_correct = normalize_modality(pred_modality) == normalize_modality(gold_modality)
+    overcommit = bool(
+        parse_ok
+        and gold_strength is not None
+        and text_strength is not None
+        and text_strength > gold_strength
+    )
+    undercommit = bool(
+        parse_ok
+        and gold_strength is not None
+        and text_strength is not None
+        and text_strength < gold_strength
+    )
+    strict_overcommit = bool(
+        overcommit and text_modality_basis in STRICT_TEXT_MODALITY_BASES
+    )
+    label_correct = normalize_modality(pred_modality) == normalize_modality(
+        gold_modality
+    )
     return {
         "text_modality": text_modality,
         "text_modality_basis": text_modality_basis,
+        "text_modality_multi_modal": bool(
+            diagnostic.get("text_modality_multi_modal", False)
+        ),
+        "text_modality_modals_found": "|".join(
+            diagnostic.get("text_modality_modals_found", [])
+        ),
         "text_modality_parse_status": "ok" if parse_ok else "unknown",
         "text_modality_correct": bool(parse_ok and text_modality == gold_modality),
         "label_text_consistent": bool(parse_ok and text_modality == pred_modality),
@@ -2723,10 +3746,18 @@ def text_modality_fields(
         "strict_text_overcommit": strict_overcommit,
         "text_high_conf_overcommit_80": bool(overcommit and confidence >= 0.80),
         "text_high_conf_overcommit_90": bool(overcommit and confidence >= 0.90),
-        "strict_text_high_conf_overcommit_80": bool(strict_overcommit and confidence >= 0.80),
-        "strict_text_high_conf_overcommit_90": bool(strict_overcommit and confidence >= 0.90),
-        "label_correct_text_overcommit_80": bool(label_correct and overcommit and confidence >= 0.80),
-        "label_correct_text_overcommit_90": bool(label_correct and overcommit and confidence >= 0.90),
+        "strict_text_high_conf_overcommit_80": bool(
+            strict_overcommit and confidence >= 0.80
+        ),
+        "strict_text_high_conf_overcommit_90": bool(
+            strict_overcommit and confidence >= 0.90
+        ),
+        "label_correct_text_overcommit_80": bool(
+            label_correct and overcommit and confidence >= 0.80
+        ),
+        "label_correct_text_overcommit_90": bool(
+            label_correct and overcommit and confidence >= 0.90
+        ),
     }
 
 
@@ -2780,7 +3811,9 @@ def parse_task_response(
     raise ValueError(f"Unknown task: {task}")
 
 
-def parse_instructor_task_response(task: str, raw_text: str) -> tuple[dict[str, Any] | None, str]:
+def parse_instructor_task_response(
+    task: str, raw_text: str
+) -> tuple[dict[str, Any] | None, str]:
     json_text = extract_json_object(raw_text)
     if json_text is None:
         return None, "invalid_json"
@@ -2847,12 +3880,18 @@ def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
                 "source_statement": str(job["item"]["source_statement"]),
                 "extracted_requirement": str(job["item"]["task2_requirement"]),
             }
-            audit_mode = normalize_task3_audit_mode(job["item"].get("task3_audit_mode", OFFICIAL_TASK3_AUDIT_MODE))
+            audit_mode = normalize_task3_audit_mode(
+                job["item"].get("task3_audit_mode", OFFICIAL_TASK3_AUDIT_MODE)
+            )
             if audit_mode == "declared_text":
-                item["declared_extracted_modality"] = str(job["item"].get("task2_text_modality", ""))
+                item["declared_extracted_modality"] = str(
+                    job["item"].get("task2_text_modality", "")
+                )
                 has_declared_modality = True
             elif audit_mode == "declared_source":
-                item["declared_extracted_modality"] = str(job["item"].get("source_modality", ""))
+                item["declared_extracted_modality"] = str(
+                    job["item"].get("source_modality", "")
+                )
                 has_declared_modality = True
             items.append(item)
         declared_instruction = (
@@ -2877,7 +3916,38 @@ def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
     raise ValueError(f"Unsupported benchmark task for batching: {task}")
 
 
-def parse_batch_completion_results(raw_text: str) -> tuple[dict[int, dict[str, Any]], str]:
+# Fixed placeholder item used to render the batch wrapper for fingerprinting.
+BATCH_WRAPPER_PROBE_ITEM = {
+    "source_statement": "The system MUST export reports.",
+    "candidate_requirement": "The system MUST export reports.",
+    "task2_requirement": "The system must export reports.",
+}
+
+
+@lru_cache(maxsize=None)
+def batch_prompt_wrapper_sha(task: str) -> str:
+    """SHA-256 of the batch prompt wrapper for ``task``.
+
+    Renders :func:`batch_prompt_for_completion_jobs` for two fixed dummy jobs
+    (request_index 0 and 1, fixed placeholder statements) so the digest depends
+    only on the instruction envelope and item layout, not on real benchmark
+    content. Hashed into ``compute_job_config_sha`` for batched plans (v3) so
+    editing the wrapper invalidates cached batched rows on resume.
+    """
+    probe_jobs = [
+        {
+            "task": str(task),
+            "request_index": index,
+            "item": dict(BATCH_WRAPPER_PROBE_ITEM),
+        }
+        for index in range(2)
+    ]
+    return sha256_text(batch_prompt_for_completion_jobs(probe_jobs))
+
+
+def parse_batch_completion_results(
+    raw_text: str,
+) -> tuple[dict[int, dict[str, Any]], str]:
     payload = extract_json_value(raw_text)
     if payload is None:
         return {}, "invalid_json"
@@ -2919,6 +3989,111 @@ def parse_batch_completion_results(raw_text: str) -> tuple[dict[int, dict[str, A
 # Pydantic-validated path, logprob capability probing via /v1/responses, and
 # the run-ID and raw-record builders used during benchmark execution.
 
+# Fields of the outgoing request that define request_payload_sha. Kept explicit
+# (rather than hashing the whole kwargs dict) so the fingerprint stays stable when
+# transport-only kwargs such as logprobs probing are added.
+REQUEST_PAYLOAD_SHA_FIELDS = (
+    "model",
+    "messages",
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "seed",
+    "response_format",
+    "extra_body",
+)
+RETRY_BASE_DELAY_S = 1.0
+# Status codes that are worth retrying; 400/401/403 (e.g. ExceededBudget) must fail fast.
+RETRYABLE_STATUS_CODES = frozenset({408, 429})
+NON_RETRYABLE_STATUS_CODES = frozenset({400, 401, 403, 404, 422})
+
+
+def request_payload_sha(request_kwargs: Mapping[str, Any]) -> str:
+    """SHA-256 over the canonical JSON of the request payload actually sent."""
+    payload = {
+        key: request_kwargs.get(key)
+        for key in REQUEST_PAYLOAD_SHA_FIELDS
+        if key in request_kwargs
+    }
+    return sha256_text(
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    )
+
+
+def _openai_error_classes() -> tuple[type[BaseException], ...]:
+    try:
+        from openai import (
+            APIConnectionError,
+            APITimeoutError,
+            InternalServerError,
+            RateLimitError,
+        )
+    except Exception:  # pragma: no cover - openai always present in this repo
+        return ()
+    return (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)
+
+
+def is_transient_provider_error(exc: BaseException) -> bool:
+    """True for timeouts, connection resets, 408/429 and 5xx responses.
+
+    Deliberately excludes 400/401/403-class failures: a budget or auth rejection
+    will never succeed on retry and must surface immediately.
+    """
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int):
+        if status_code in NON_RETRYABLE_STATUS_CODES:
+            return False
+        if status_code in RETRYABLE_STATUS_CODES or status_code >= 500:
+            return True
+        return False
+    error_classes = _openai_error_classes()
+    if error_classes and isinstance(exc, error_classes):
+        return True
+    return isinstance(exc, (TimeoutError, ConnectionError))
+
+
+def retry_delay_seconds(
+    attempt: int, base_delay_s: float = RETRY_BASE_DELAY_S
+) -> float:
+    """Exponential backoff with full jitter for the given zero-based attempt."""
+    return random.uniform(0.0, base_delay_s * (2**attempt))
+
+
+def call_with_retries(
+    call: Callable[[], Any],
+    *,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    base_delay_s: float = RETRY_BASE_DELAY_S,
+) -> tuple[Any, int, BaseException | None]:
+    """Run `call`, retrying transient provider failures with bounded backoff.
+
+    Returns (result, retry_count, error). `max_retries` is the number of total
+    attempts (3 means one initial call plus two retries); non-transient errors
+    fail fast on the first attempt.
+    """
+    attempts = max(1, int(max_retries))
+    retry_count = 0
+    last_error: BaseException | None = None
+    for attempt in range(attempts):
+        try:
+            return call(), retry_count, None
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 >= attempts or not is_transient_provider_error(exc):
+                return None, retry_count, exc
+            retry_count += 1
+            time.sleep(retry_delay_seconds(attempt, base_delay_s))
+    return None, retry_count, last_error
+
 
 def chat_completion(
     host: str,
@@ -2933,46 +4108,79 @@ def chat_completion(
     top_logprobs: int | None = None,
     response_format: Mapping[str, Any] | None = None,
     extra_body: Mapping[str, Any] | None = None,
+    seed: int | None = DEFAULT_REQUEST_SEED,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> dict[str, Any]:
     api_key = os.getenv(api_key_env, "EMPTY")
-    client = OpenAI(base_url=host.rstrip("/") + "/", api_key=api_key, timeout=timeout_s)
+    # max_retries=0: the SDK's own retry loop is invisible to us, so it would
+    # silently inflate wall-clock latency and hide attempts from retry_count.
+    # call_with_retries is the single, recorded retry mechanism.
+    client = OpenAI(
+        base_url=host.rstrip("/") + "/",
+        api_key=api_key,
+        timeout=timeout_s,
+        max_retries=0,
+    )
+    request_kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": max_tokens,
+    }
+    if seed is not None:
+        request_kwargs["seed"] = int(seed)
+    if logprobs:
+        request_kwargs["logprobs"] = True
+        if top_logprobs is not None:
+            request_kwargs["top_logprobs"] = int(top_logprobs)
+    if response_format:
+        request_kwargs["response_format"] = dict(response_format)
+    if extra_body:
+        request_kwargs["extra_body"] = dict(extra_body)
+    payload_sha = request_payload_sha(request_kwargs)
+
     start = time.perf_counter()
-    try:
-        request_kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
-            "top_p": top_p,
-            "max_tokens": max_tokens,
-        }
-        if logprobs:
-            request_kwargs["logprobs"] = True
-            if top_logprobs is not None:
-                request_kwargs["top_logprobs"] = int(top_logprobs)
-        if response_format:
-            request_kwargs["response_format"] = dict(response_format)
-        if extra_body:
-            request_kwargs["extra_body"] = dict(extra_body)
-        response = client.chat.completions.create(
-            **request_kwargs,
-        )
-        latency_s = time.perf_counter() - start
-        raw_text = response.choices[0].message.content or ""
-        return {
-            "ok": True,
-            "raw_text": raw_text,
-            "response_json": response.model_dump(mode="json"),
-            "latency_s": latency_s,
-            "error": "",
-        }
-    except Exception as exc:
+    response, retry_count, error = call_with_retries(
+        lambda: client.chat.completions.create(**request_kwargs),
+        max_retries=max_retries,
+    )
+    latency_s = time.perf_counter() - start
+    if error is not None:
         return {
             "ok": False,
             "raw_text": "",
             "response_json": None,
-            "latency_s": time.perf_counter() - start,
-            "error": repr(exc),
+            "latency_s": latency_s,
+            "error": repr(error),
+            "request_payload_sha": payload_sha,
+            "request_seed": request_kwargs.get("seed"),
+            "retry_count": retry_count,
         }
+    try:
+        raw_text = response.choices[0].message.content or ""
+        response_json = response.model_dump(mode="json")
+    except Exception as exc:  # malformed provider payload
+        return {
+            "ok": False,
+            "raw_text": "",
+            "response_json": None,
+            "latency_s": latency_s,
+            "error": repr(exc),
+            "request_payload_sha": payload_sha,
+            "request_seed": request_kwargs.get("seed"),
+            "retry_count": retry_count,
+        }
+    return {
+        "ok": True,
+        "raw_text": raw_text,
+        "response_json": response_json,
+        "latency_s": latency_s,
+        "error": "",
+        "request_payload_sha": payload_sha,
+        "request_seed": request_kwargs.get("seed"),
+        "retry_count": retry_count,
+    }
 
 
 def normalize_instructor_mode_name(value: Any) -> str:
@@ -3005,10 +4213,14 @@ def instructor_mode_value(value: Any) -> Any:
     }[mode]
 
 
-def instructor_extra_body(extra_body: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def instructor_extra_body(
+    extra_body: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
     if not extra_body:
         return None
-    cleaned = {key: value for key, value in extra_body.items() if key != "response_format"}
+    cleaned = {
+        key: value for key, value in extra_body.items() if key != "response_format"
+    }
     return cleaned or None
 
 
@@ -3028,54 +4240,97 @@ def instructor_completion(
     instructor_mode: str = "json",
     validation_retries: int = 2,
     response_model: Any | None = None,
+    seed: int | None = DEFAULT_REQUEST_SEED,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> dict[str, Any]:
     # response_format is accepted for call-signature parity with chat_completion;
     # Instructor derives the schema from response_model instead.
     import instructor
 
     api_key = os.getenv(api_key_env, "EMPTY")
-    base_client = OpenAI(base_url=host.rstrip("/") + "/", api_key=api_key, timeout=timeout_s)
-    client = instructor.from_openai(base_client, mode=instructor_mode_value(instructor_mode))
+    # max_retries=0 for the same reason as in chat_completion: retry_count must
+    # be the whole retry story (Instructor's validation retries stay separate).
+    base_client = OpenAI(
+        base_url=host.rstrip("/") + "/",
+        api_key=api_key,
+        timeout=timeout_s,
+        max_retries=0,
+    )
+    client = instructor.from_openai(
+        base_client, mode=instructor_mode_value(instructor_mode)
+    )
     model_type = response_model or so.response_model_for_task(task, batched=batched)
+
+    request_kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": max_tokens,
+        "response_model": model_type,
+        # NOTE: Instructor's own `max_retries` is schema-VALIDATION retries, which is
+        # a different knob from this function's transport-level `max_retries`.
+        "max_retries": nonnegative_int(validation_retries, "validation_retries"),
+    }
+    if seed is not None:
+        request_kwargs["seed"] = int(seed)
+    cleaned_extra_body = instructor_extra_body(extra_body)
+    if cleaned_extra_body:
+        request_kwargs["extra_body"] = cleaned_extra_body
+    payload_sha = request_payload_sha(request_kwargs)
+    provenance = {
+        "request_payload_sha": payload_sha,
+        "request_seed": request_kwargs.get("seed"),
+    }
+
     start = time.perf_counter()
-    try:
-        request_kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
-            "top_p": top_p,
-            "max_tokens": max_tokens,
-            "response_model": model_type,
-            "max_retries": nonnegative_int(validation_retries, "validation_retries"),
-        }
-        cleaned_extra_body = instructor_extra_body(extra_body)
-        if cleaned_extra_body:
-            request_kwargs["extra_body"] = cleaned_extra_body
-        parsed = client.chat.completions.create(**request_kwargs)
+    parsed, retry_count, error = call_with_retries(
+        lambda: client.chat.completions.create(**request_kwargs),
+        max_retries=max_retries,
+    )
+    latency_s = time.perf_counter() - start
+    if error is None:
         payload = parsed.model_dump(mode="json")
+        # Instructor exposes the underlying provider response on the validated model.
+        raw_response = getattr(parsed, "_raw_response", None)
+        raw_response_json = None
+        if raw_response is not None:
+            try:
+                raw_response_json = raw_response.model_dump(mode="json")
+            except Exception:
+                raw_response_json = None
+        response_json: dict[str, Any] = {"instructor_validated": payload}
+        if isinstance(raw_response_json, Mapping):
+            response_json.update(dict(raw_response_json))
         return {
             "ok": True,
             "raw_text": json.dumps(payload, ensure_ascii=False),
-            "response_json": {"instructor_validated": payload},
-            "latency_s": time.perf_counter() - start,
+            "response_json": response_json,
+            "latency_s": latency_s,
             "error": "",
+            "retry_count": retry_count,
+            **provenance,
         }
-    except Exception as exc:
-        error_name = exc.__class__.__name__
-        parse_status_override = (
-            "instructor_validation_error"
-            if "Retry" in error_name or "Validation" in error_name or "Instructor" in error_name
-            else ""
-        )
-        raw_text = str(getattr(exc, "last_completion", "") or "")
-        return {
-            "ok": False,
-            "raw_text": raw_text,
-            "response_json": None,
-            "latency_s": time.perf_counter() - start,
-            "error": repr(exc),
-            "parse_status_override": parse_status_override,
-        }
+
+    error_name = error.__class__.__name__
+    parse_status_override = (
+        "instructor_validation_error"
+        if "Retry" in error_name
+        or "Validation" in error_name
+        or "Instructor" in error_name
+        else ""
+    )
+    raw_text = str(getattr(error, "last_completion", "") or "")
+    return {
+        "ok": False,
+        "raw_text": raw_text,
+        "response_json": None,
+        "latency_s": latency_s,
+        "error": repr(error),
+        "parse_status_override": parse_status_override,
+        "retry_count": retry_count,
+        **provenance,
+    }
 
 
 def normalize_logprob_tokens(content: Any) -> list[dict[str, Any]]:
@@ -3101,7 +4356,9 @@ def normalize_logprob_tokens(content: Any) -> list[dict[str, Any]]:
     return tokens
 
 
-def response_logprob_tokens(response_json: dict[str, Any] | None) -> list[dict[str, Any]]:
+def response_logprob_tokens(
+    response_json: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
     if not isinstance(response_json, dict):
         return []
 
@@ -3124,7 +4381,9 @@ def response_logprob_tokens(response_json: dict[str, Any] | None) -> list[dict[s
             if isinstance(content_items, list):
                 for content_item in content_items:
                     if isinstance(content_item, dict):
-                        tokens.extend(normalize_logprob_tokens(content_item.get("logprobs")))
+                        tokens.extend(
+                            normalize_logprob_tokens(content_item.get("logprobs"))
+                        )
         if tokens:
             return tokens
 
@@ -3158,7 +4417,9 @@ def responses_output_text(response_json: dict[str, Any] | None) -> str:
             content_items = output_item.get("content")
             if isinstance(content_items, list):
                 for content_item in content_items:
-                    if isinstance(content_item, dict) and isinstance(content_item.get("text"), str):
+                    if isinstance(content_item, dict) and isinstance(
+                        content_item.get("text"), str
+                    ):
                         pieces.append(content_item["text"])
     return "".join(pieces)
 
@@ -3184,14 +4445,18 @@ def logprob_support_probe(
     }
     start = time.perf_counter()
     try:
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout_s)
+        response = requests.post(
+            endpoint, headers=headers, json=payload, timeout=timeout_s
+        )
         latency_s = time.perf_counter() - start
         try:
             response_json = response.json()
         except ValueError:
             response_json = None
         raw_text = responses_output_text(response_json) or response.text[:500]
-        error = "" if response.ok else f"HTTP {response.status_code}: {response.text[:500]}"
+        error = (
+            "" if response.ok else f"HTTP {response.status_code}: {response.text[:500]}"
+        )
     except requests.RequestException as exc:
         latency_s = time.perf_counter() - start
         response_json = None
@@ -3216,6 +4481,58 @@ def logprob_support_probe(
 def new_run_id(prefix: str = "run") -> str:
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     return f"{prefix}-{timestamp}-{uuid.uuid4().hex[:8]}"
+
+
+EMPTY_RESPONSE_FIELDS: dict[str, Any] = {
+    "finish_reason": "",
+    "usage_prompt_tokens": None,
+    "usage_completion_tokens": None,
+    "usage_total_tokens": None,
+    "served_model": "",
+    "system_fingerprint": "",
+    "response_id": "",
+}
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_response_fields(response_json: Any) -> dict[str, Any]:
+    """Pull provider-response provenance out of a raw chat-completion payload.
+
+    Missing values stay at their empty defaults ("" for strings, None for token
+    counts) so downstream tables have a stable schema regardless of provider.
+    """
+    fields = dict(EMPTY_RESPONSE_FIELDS)
+    if not isinstance(response_json, Mapping):
+        return fields
+
+    choices = response_json.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
+        finish_reason = choices[0].get("finish_reason")
+        fields["finish_reason"] = str(finish_reason) if finish_reason else ""
+
+    usage = response_json.get("usage")
+    if isinstance(usage, Mapping):
+        fields["usage_prompt_tokens"] = _optional_int(
+            usage.get("prompt_tokens", usage.get("input_tokens"))
+        )
+        fields["usage_completion_tokens"] = _optional_int(
+            usage.get("completion_tokens", usage.get("output_tokens"))
+        )
+        fields["usage_total_tokens"] = _optional_int(usage.get("total_tokens"))
+
+    served_model = response_json.get("model")
+    fields["served_model"] = str(served_model) if served_model else ""
+    system_fingerprint = response_json.get("system_fingerprint")
+    fields["system_fingerprint"] = str(system_fingerprint) if system_fingerprint else ""
+    response_id = response_json.get("id")
+    fields["response_id"] = str(response_id) if response_id else ""
+    return fields
 
 
 def build_raw_record(
@@ -3250,11 +4567,18 @@ def build_raw_record(
     output_contract_version: str = "",
     confidence_scale: str = "",
     job_config_sha: str = "",
+    job_config_sha_version: int = JOB_CONFIG_SHA_VERSION,
+    request_seed: int | None = None,
+    max_tokens: int | None = None,
+    batch_order: str = DEFAULT_BATCH_ORDER,
+    batch_seed_ids: Iterable[str] | None = None,
+    batch_variant_mix: int | str = "",
 ) -> dict[str, Any]:
     record_contract_version = output_contract_version
     record_confidence_scale = confidence_scale
     if not record_contract_version and (
-        prompt_version_uses_confidence_0_1(prompt_version) or prompt_text_uses_confidence_0_1(prompt)
+        prompt_version_uses_confidence_0_1(prompt_version)
+        or prompt_text_uses_confidence_0_1(prompt)
     ):
         record_contract_version = so.PROMPT_OUTPUT_CONTRACT_VERSION
     if not record_confidence_scale:
@@ -3266,7 +4590,9 @@ def build_raw_record(
             }
         )
     if output_contract_version == so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION:
-        parsed_json, parse_status = parse_instructor_task_response(task, completion.get("raw_text", ""))
+        parsed_json, parse_status = parse_instructor_task_response(
+            task, completion.get("raw_text", "")
+        )
     else:
         parsed_json, parse_status = parse_task_response(
             task,
@@ -3279,6 +4605,18 @@ def build_raw_record(
         parse_status = parse_status_override
     elif not completion.get("ok"):
         parse_status = "request_error"
+
+    response_fields = extract_response_fields(completion.get("response_json"))
+    # A response cut off at the token limit is a budget problem, not malformed
+    # model output: give it its own status so it is not silently filed as
+    # invalid_json. It remains a parse failure (parse_status != "ok") everywhere.
+    if response_fields["finish_reason"] == "length" and parse_status not in {
+        "ok",
+        "request_error",
+    }:
+        parse_status = "truncated"
+
+    raw_text = completion.get("raw_text", "")
     record = {
         "run_id": run_id,
         "model": model,
@@ -3293,12 +4631,52 @@ def build_raw_record(
         "top_p": top_p,
         "prompt_version": prompt_version,
         "prompt": prompt,
-        "raw_text": completion.get("raw_text", ""),
+        "raw_text": raw_text,
         "parsed_json": parsed_json,
         "parse_status": parse_status,
         "latency_s": completion.get("latency_s", ""),
         "error": completion.get("error", ""),
+        # Provider-response provenance (see extract_response_fields).
+        **response_fields,
+        "response_chars": len(raw_text or ""),
+        "retry_count": int(completion.get("retry_count", 0) or 0),
+        # We send exactly one user message and no system prompt; recording both
+        # makes that auditable from the raw table alone.
+        "system_prompt": "",
+        "request_messages_role_layout": "user_only",
+        "request_seed": completion.get("request_seed", request_seed),
+        "job_config_sha_version": int(job_config_sha_version),
+        "batch_order": normalize_batch_order(batch_order),
     }
+    if (
+        task == "task2"
+        and isinstance(parsed_json, Mapping)
+        and parsed_json.get("requirement")
+    ):
+        record["requirement_word_count"] = len(str(parsed_json["requirement"]).split())
+    record["request_payload_sha"] = str(
+        completion.get("request_payload_sha")
+        or request_payload_sha(
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_tokens": max_tokens,
+                "seed": request_seed,
+                "response_format": dict(response_format) if response_format else None,
+                "extra_body": dict(request_extra_body) if request_extra_body else None,
+            }
+        )
+    )
+    if batch_seed_ids is not None:
+        record["batch_seed_ids"] = sorted({str(value) for value in batch_seed_ids})
+    else:
+        record["batch_seed_ids"] = [str(item.get("seed_id", ""))]
+    if batch_variant_mix != "":
+        record["batch_variant_mix"] = int(batch_variant_mix)
+    else:
+        record["batch_variant_mix"] = 1
     if provider_id:
         record["provider_id"] = provider_id
     if profile_id:
@@ -3311,7 +4689,9 @@ def build_raw_record(
         record["api_key_env"] = api_key_env
     if json_mode:
         record["json_mode"] = True
-    resolved_structured_output = normalize_structured_output_mode(structured_output, json_mode=json_mode)
+    resolved_structured_output = normalize_structured_output_mode(
+        structured_output, json_mode=json_mode
+    )
     if resolved_structured_output != "none":
         record["structured_output"] = resolved_structured_output
     if response_format:
@@ -3328,6 +4708,13 @@ def build_raw_record(
         record["batch_item_count"] = int(batch_item_count)
     if batch_prompt_hash:
         record["batch_prompt_hash"] = batch_prompt_hash
+    if batch_id:
+        # Usage/finish_reason on a batched row describe the whole batch request,
+        # not this single item; mirror completion tokens under an explicit
+        # batch-scoped name so per-item consumers cannot misread the copy.
+        record["batch_usage_completion_tokens"] = response_fields[
+            "usage_completion_tokens"
+        ]
     if job_config_sha:
         record["job_config_sha"] = job_config_sha
     if record_contract_version:
@@ -3363,6 +4750,17 @@ def build_raw_record(
     return record
 
 
+def batch_composition(jobs: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Auditable summary of which items share one batched provider request."""
+    items = [dict(job.get("item", {})) for job in jobs]
+    return {
+        "batch_seed_ids": sorted({str(item.get("seed_id", "")) for item in items}),
+        "batch_variant_mix": len(
+            {str(item.get("source_modality", "")) for item in items}
+        ),
+    }
+
+
 def _job_record(
     job: Mapping[str, Any],
     *,
@@ -3376,6 +4774,7 @@ def _job_record(
     batch_prompt_hash: str = "",
     output_contract_version: str = "",
     confidence_scale: str = "",
+    batch_jobs: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Map a planned job dict and its completion onto a raw output record.
 
@@ -3383,6 +4782,7 @@ def _job_record(
     instructor-batch completion paths; callers supply only the fields that
     genuinely differ between paths.
     """
+    composition = batch_composition(batch_jobs if batch_jobs is not None else [job])
     return build_raw_record(
         run_id=str(job["run_id"]),
         model=str(job["model"]),
@@ -3414,11 +4814,21 @@ def _job_record(
         output_contract_version=output_contract_version,
         confidence_scale=confidence_scale,
         job_config_sha=str(job.get("job_config_sha", "")),
+        job_config_sha_version=int(
+            job.get("job_config_sha_version", JOB_CONFIG_SHA_VERSION)
+        ),
+        request_seed=job.get("seed"),
+        max_tokens=int(job.get("max_tokens", 256)),
+        batch_order=str(job.get("batch_order", DEFAULT_BATCH_ORDER)),
+        batch_seed_ids=composition["batch_seed_ids"],
+        batch_variant_mix=composition["batch_variant_mix"],
     )
 
 
 def job_uses_instructor(job: Mapping[str, Any]) -> bool:
-    return normalize_structured_output_mode(job.get("structured_output")) == "instructor"
+    return (
+        normalize_structured_output_mode(job.get("structured_output")) == "instructor"
+    )
 
 
 def output_contract_version_for_job(job: Mapping[str, Any]) -> str:
@@ -3430,7 +4840,9 @@ def output_contract_version_for_job(job: Mapping[str, Any]) -> str:
 
 
 def confidence_scale_for_job(job: Mapping[str, Any]) -> str:
-    if job_uses_instructor(job) or prompt_version_uses_confidence_0_1(job.get("prompt_version")):
+    if job_uses_instructor(job) or prompt_version_uses_confidence_0_1(
+        job.get("prompt_version")
+    ):
         return CONFIDENCE_SCALE_0_1
     return ""
 
@@ -3464,6 +4876,8 @@ def completion_kwargs_for_job(
         "api_key_env": str(job.get("api_key_env", "LOCAL_OPENAI_API_KEY")),
         "response_format": response_format,
         "extra_body": extra_body,
+        "seed": job.get("seed"),
+        "max_retries": int(job.get("max_retries", DEFAULT_MAX_RETRIES)),
     }
     if job_uses_instructor(job):
         task = str(job["task"])
@@ -3500,7 +4914,9 @@ def run_completion_job(
         completion=completion,
         request_index=int(request_index) if request_index is not None else None,
         response_format=job.get("response_format"),
-        request_extra_body=instructor_extra_body(job.get("extra_body")) if job_uses_instructor(job) else job.get("extra_body"),
+        request_extra_body=instructor_extra_body(job.get("extra_body"))
+        if job_uses_instructor(job)
+        else job.get("extra_body"),
         output_contract_version=output_contract_version_for_job(job),
         confidence_scale=confidence_scale_for_job(job),
     )
@@ -3530,14 +4946,148 @@ def completion_batch_key(job: Mapping[str, Any]) -> tuple[Any, ...]:
         str(job.get("instructor_mode", "")),
         int(job.get("validation_retries", 0)),
         int(job.get("fallback_batch_size", 1)),
+        compact_json(job.get("seed")),
+        bool(job.get("send_seed", True)),
+        str(job.get("batch_order", DEFAULT_BATCH_ORDER)),
     )
 
 
-def completion_job_batches(jobs: Iterable[Mapping[str, Any]], batch_size: int) -> list[list[dict[str, Any]]]:
+def _job_seed_id(job: Mapping[str, Any]) -> str:
+    item = job.get("item")
+    return str(item.get("seed_id", "")) if isinstance(item, Mapping) else ""
+
+
+def _shuffled_group_jobs(
+    ordered: list[dict[str, Any]],
+    group_key: tuple[Any, ...],
+    seed: Any,
+    batch_size: int = 1,
+) -> list[list[dict[str, Any]]]:
+    """Deterministic seed-disjoint batches for one batch-key group.
+
+    Seeding the RNG from a SHA-256 of ``(seed, batch key)`` keeps the permutation
+    stable across processes and independent of dict iteration order, so a
+    `shuffled` run is exactly reproducible from its recorded seed.
+
+    The permutation is applied to the SEED GROUPS (and to the variants within a
+    seed), not to the flat job list: the jobs of one seed are then handed out to
+    distinct batches, always filling the currently emptiest one. So a shuffled
+    batch holds ``batch_size`` DIFFERENT seeds -- the point of the ablation is to
+    break the grouped default's "4 variants of one seed in one prompt" confound,
+    and a plain shuffle would still collide two variants of a seed in the same
+    request by chance. When a group has fewer distinct seeds than ``batch_size``
+    (or a seed has more jobs than there are batches) a collision is unavoidable;
+    the batches are still filled, and the shortfall is logged as a warning rather
+    than passing silently.
+    """
+    digest = sha256_text(f"{seed}|{compact_json([str(part) for part in group_key])}")
+    rng = random.Random(int(digest[:16], 16))
+    resolved_batch_size = max(1, int(batch_size))
+
+    by_seed: dict[str, list[dict[str, Any]]] = {}
+    for job in ordered:
+        by_seed.setdefault(_job_seed_id(job), []).append(job)
+    seed_ids = list(by_seed)
+    rng.shuffle(seed_ids)
+    for seed_id in seed_ids:
+        rng.shuffle(by_seed[seed_id])
+
+    batch_count = -(-len(ordered) // resolved_batch_size)
+    batches: list[list[dict[str, Any]]] = [[] for _ in range(batch_count)]
+    seeds_in_batch: list[set[str]] = [set() for _ in range(batch_count)]
+    # Min-heap of (current size, batch index) over the batches that still have
+    # room, so every job lands in the emptiest batch that does not hold its seed.
+    open_batches = [(0, index) for index in range(batch_count)]
+    heapq.heapify(open_batches)
+    collisions = 0
+    # Seeds with the most jobs are the hardest to spread; place them first.
+    for seed_id in sorted(seed_ids, key=lambda value: -len(by_seed[value])):
+        for job in by_seed[seed_id]:
+            skipped: list[tuple[int, int]] = []
+            chosen: tuple[int, int] | None = None
+            while open_batches:
+                candidate = heapq.heappop(open_batches)
+                if seed_id not in seeds_in_batch[candidate[1]]:
+                    chosen = candidate
+                    break
+                skipped.append(candidate)
+            if chosen is None:
+                if not skipped:  # pragma: no cover - capacity guarantees a slot
+                    raise RuntimeError("No batch slot left for a planned job.")
+                collisions += 1
+                chosen = skipped.pop(0)
+            for entry in skipped:
+                heapq.heappush(open_batches, entry)
+            size, index = chosen
+            batches[index].append(job)
+            seeds_in_batch[index].add(seed_id)
+            if size + 1 < resolved_batch_size:
+                heapq.heappush(open_batches, (size + 1, index))
+    if collisions:
+        logger.warning(
+            "shuffled batching: %d job(s) share a batch with another variant of the same seed "
+            "(group has %d distinct seed(s) for batch_size %d)",
+            collisions,
+            len(seed_ids),
+            resolved_batch_size,
+        )
+    return batches
+
+
+def completion_job_batches(
+    jobs: Iterable[Mapping[str, Any]],
+    batch_size: int,
+    batch_order: str | None = None,
+    seed: Any = None,
+    *,
+    planned_jobs: Iterable[Mapping[str, Any]] | None = None,
+) -> list[list[dict[str, Any]]]:
+    """Chunk planned jobs into provider batches.
+
+    `grouped` (default) keeps consecutive request indices together, so all four
+    modality variants of a seed share a batch. `shuffled` deterministically
+    permutes each batch-key group and then spreads the jobs of one seed across
+    DIFFERENT batches, so no batch contains two variants of the same seed
+    whenever that is feasible; it is an ablation for batch-composition effects,
+    not the default. Both knobs fall back to the values carried on the jobs
+    themselves.
+
+    `planned_jobs` makes resume batch-stable: pass the FULL plan there and the
+    already-completed subset in `jobs`, and the batches are computed over the
+    plan and then filtered (by :func:`completion_record_key`) to the jobs that
+    still have to run, dropping batches that are left empty. Without it a resumed
+    run would re-shuffle the pending subset and send different batch neighbours
+    than the first attempt.
+    """
     job_list = [dict(job) for job in jobs]
     if not job_list:
         return []
+    if planned_jobs is not None:
+        pending_by_key = {completion_record_key(job): job for job in job_list}
+        planned_batches = completion_job_batches(
+            planned_jobs,
+            batch_size,
+            batch_order=batch_order,
+            seed=seed,
+        )
+        filtered: list[list[dict[str, Any]]] = []
+        for batch in planned_batches:
+            kept = [
+                pending_by_key[key]
+                for key in (completion_record_key(job) for job in batch)
+                if key in pending_by_key
+            ]
+            if kept:
+                filtered.append(kept)
+        return filtered
+
     resolved_batch_size = positive_int(batch_size, "batch_size")
+    resolved_order = normalize_batch_order(
+        batch_order if batch_order is not None else job_list[0].get("batch_order")
+    )
+    resolved_seed = (
+        seed if seed is not None else job_list[0].get("seed", DEFAULT_REQUEST_SEED)
+    )
     if resolved_batch_size <= 1:
         return [[job] for job in job_list]
 
@@ -3546,11 +5096,42 @@ def completion_job_batches(jobs: Iterable[Mapping[str, Any]], batch_size: int) -
         grouped.setdefault(completion_batch_key(job), []).append(job)
 
     batches: list[list[dict[str, Any]]] = []
-    for group_jobs in sorted(grouped.values(), key=lambda rows: min(int(row.get("request_index", 0)) for row in rows)):
+    sorted_groups = sorted(
+        grouped.items(),
+        key=lambda entry: min(int(row.get("request_index", 0)) for row in entry[1]),
+    )
+    for group_key, group_jobs in sorted_groups:
         ordered = sorted(group_jobs, key=lambda row: int(row.get("request_index", 0)))
+        if resolved_order == BATCH_ORDER_SHUFFLED:
+            batches.extend(
+                _shuffled_group_jobs(
+                    ordered, group_key, resolved_seed, resolved_batch_size
+                )
+            )
+            continue
         for start in range(0, len(ordered), resolved_batch_size):
             batches.append(ordered[start : start + resolved_batch_size])
     return batches
+
+
+# Driver-level provenance of the single provider request behind a batch. Copied
+# onto every per-item completion built from that request so a batched raw row
+# reports the seed, payload sha, and retry count that actually produced it.
+BATCH_DRIVER_PROVENANCE_FIELDS = ("request_payload_sha", "request_seed", "retry_count")
+
+
+def batch_driver_provenance(completion: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the driver provenance fields present on a batch ``completion``.
+
+    Absent keys are omitted rather than defaulted, so build_raw_record keeps its
+    fallbacks (job seed, locally recomputed payload sha) for drivers that do not
+    report them.
+    """
+    return {
+        key: completion[key]
+        for key in BATCH_DRIVER_PROVENANCE_FIELDS
+        if key in completion
+    }
 
 
 def valid_instructor_batch_results(
@@ -3567,8 +5148,12 @@ def valid_instructor_batch_results(
         if result is None:
             fallback_jobs.append(dict(job))
             continue
-        item_result = {key: value for key, value in result.items() if key != "request_index"}
-        _, parse_status = parse_instructor_task_response(task, json.dumps(item_result, ensure_ascii=False))
+        item_result = {
+            key: value for key, value in result.items() if key != "request_index"
+        }
+        _, parse_status = parse_instructor_task_response(
+            task, json.dumps(item_result, ensure_ascii=False)
+        )
         if parse_status == "ok" and set(parsed_results).issubset(expected):
             valid[request_index] = item_result
         else:
@@ -3610,9 +5195,13 @@ def run_instructor_completion_batch(
     records_by_request_index: dict[int, dict[str, Any]] = {}
     fallback_jobs = [dict(job) for job in jobs]
     if completion.get("ok"):
-        parsed_results, batch_parse_status = parse_batch_completion_results(completion.get("raw_text", ""))
+        parsed_results, batch_parse_status = parse_batch_completion_results(
+            completion.get("raw_text", "")
+        )
         if batch_parse_status == "ok":
-            valid_results, fallback_jobs = valid_instructor_batch_results(task, parsed_results, jobs)
+            valid_results, fallback_jobs = valid_instructor_batch_results(
+                task, parsed_results, jobs
+            )
             for job in jobs:
                 request_index = int(job["request_index"])
                 result = valid_results.get(request_index)
@@ -3624,6 +5213,11 @@ def run_instructor_completion_batch(
                     "response_json": completion.get("response_json"),
                     "latency_s": completion.get("latency_s", ""),
                     "error": "",
+                    # The driver-level provenance of the one request that
+                    # produced this item; without it a batched row would fall
+                    # back to a locally recomputed single-item payload sha and
+                    # lose the batch's seed and retry count.
+                    **batch_driver_provenance(completion),
                 }
                 records_by_request_index[request_index] = _job_record(
                     job,
@@ -3637,6 +5231,7 @@ def run_instructor_completion_batch(
                     batch_prompt_hash=batch_prompt_hash,
                     output_contract_version=output_contract_version_for_job(job),
                     confidence_scale=confidence_scale_for_job(job),
+                    batch_jobs=jobs,
                 )
 
     for fallback_job in fallback_jobs:
@@ -3678,6 +5273,8 @@ def run_completion_batch(
         api_key_env=str(first.get("api_key_env", "LOCAL_OPENAI_API_KEY")),
         response_format=batch_response_format,
         extra_body=batch_extra_body,
+        seed=first.get("seed"),
+        max_retries=int(first.get("max_retries", DEFAULT_MAX_RETRIES)),
     )
     batch_id = (
         f"{first['run_id']}:{first['model']}:{first['task']}:"
@@ -3685,47 +5282,86 @@ def run_completion_batch(
         f"{min(int(job.get('request_index', 0)) for job in jobs)}-"
         f"{max(int(job.get('request_index', 0)) for job in jobs)}"
     )
-    parsed_results, batch_parse_status = parse_batch_completion_results(completion.get("raw_text", ""))
+    parsed_results, batch_parse_status = parse_batch_completion_results(
+        completion.get("raw_text", "")
+    )
     if batch_parse_status != "ok":
         parsed_results = {}
-    records: list[dict[str, Any]] = []
+    records_by_request_index: dict[int, dict[str, Any]] = {}
+    # (job, why the batch could not serve it) for every item that has to be
+    # re-sent on its own, mirroring the Instructor batch path.
+    fallback_jobs: list[tuple[Mapping[str, Any], str]] = []
     for job in jobs:
         request_index = int(job["request_index"])
         result = parsed_results.get(request_index)
-        if completion.get("ok") and result is not None:
-            item_completion = {
-                "ok": True,
-                "raw_text": json.dumps(result, ensure_ascii=False),
-                "response_json": completion.get("response_json"),
-                "latency_s": completion.get("latency_s", ""),
-                "error": "",
-            }
-        elif completion.get("ok"):
-            item_completion = {
-                "ok": True,
-                "raw_text": completion.get("raw_text", ""),
-                "response_json": completion.get("response_json"),
-                "latency_s": completion.get("latency_s", ""),
-                "error": f"batch_parse_status={batch_parse_status}; missing request_index={request_index}",
-                "parse_status_override": "missing_batch_result",
-            }
-        else:
-            item_completion = completion
+        if not completion.get("ok"):
+            fallback_jobs.append(
+                (job, str(completion.get("error", "")) or "batch_request_failed")
+            )
+            continue
+        if result is None:
+            fallback_jobs.append(
+                (
+                    job,
+                    f"batch_parse_status={batch_parse_status}; missing request_index={request_index}",
+                )
+            )
+            continue
+        item_completion = {
+            "ok": True,
+            "raw_text": json.dumps(result, ensure_ascii=False),
+            "response_json": completion.get("response_json"),
+            "latency_s": completion.get("latency_s", ""),
+            "error": "",
+            # Provenance of the single batched request that produced this item.
+            **batch_driver_provenance(completion),
+        }
+        records_by_request_index[request_index] = _job_record(
+            job,
+            completion=item_completion,
+            request_index=request_index,
+            response_format=batch_response_format,
+            request_extra_body=batch_extra_body,
+            batch_id=batch_id,
+            batch_size=len(jobs),
+            batch_item_count=len(jobs),
+            batch_prompt_hash=batch_prompt_hash,
+            batch_jobs=jobs,
+        )
 
-        records.append(
-            _job_record(
-                job,
-                completion=item_completion,
-                request_index=request_index,
-                response_format=batch_response_format,
-                request_extra_body=batch_extra_body,
-                batch_id=batch_id,
-                batch_size=len(jobs),
-                batch_item_count=len(jobs),
-                batch_prompt_hash=batch_prompt_hash,
+    for fallback_job, batch_error in fallback_jobs:
+        records_by_request_index[int(fallback_job["request_index"])] = (
+            _batch_fallback_record(
+                fallback_job,
+                completion_fn=completion_fn,
+                batch_error=batch_error,
             )
         )
-    return records
+    return [records_by_request_index[int(job["request_index"])] for job in jobs]
+
+
+def _batch_fallback_record(
+    job: Mapping[str, Any],
+    *,
+    completion_fn: Callable[..., dict[str, Any]],
+    batch_error: str,
+) -> dict[str, Any]:
+    """Re-send one job of a failed batch as a single-item request.
+
+    The record is the fallback's own record (its status, its payload sha), tagged
+    with ``batch_size = 1`` so a batched run stays auditable down to the rows that
+    were actually sent alone. Only when the fallback itself fails to parse does
+    the failure stand; the original batch error is then kept in ``error`` behind a
+    ``batch_fallback:`` prefix so the batch-level cause is not lost.
+    """
+    record = run_completion_job(job, completion_fn=completion_fn)
+    record["batch_size"] = 1
+    if str(record.get("parse_status", "")) != "ok":
+        own_error = str(record.get("error", "") or "")
+        record["error"] = f"batch_fallback:{batch_error}" + (
+            f"; {own_error}" if own_error else ""
+        )
+    return record
 
 
 def run_completion_jobs(
@@ -3733,8 +5369,24 @@ def run_completion_jobs(
     max_workers: int,
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
     batch_size: int = 1,
+    batch_order: str | None = None,
+    seed: Any = None,
+    *,
+    planned_jobs: Iterable[Mapping[str, Any]] | None = None,
 ) -> Iterable[dict[str, Any]]:
-    batches = completion_job_batches(jobs, batch_size=batch_size)
+    """Run planned jobs, batched per :func:`completion_job_batches`.
+
+    ``planned_jobs`` carries the FULL plan on a resumed run so the pending subset
+    keeps the batch composition of the first attempt instead of being re-batched
+    on its own; see :func:`completion_job_batches`.
+    """
+    batches = completion_job_batches(
+        jobs,
+        batch_size=batch_size,
+        batch_order=batch_order,
+        seed=seed,
+        planned_jobs=planned_jobs,
+    )
     if not batches:
         return
 
@@ -3777,7 +5429,9 @@ def binary_f1_score(y_true: list[int], y_pred: list[int]) -> float:
 def macro_f1_score(y_true: list[str], y_pred: list[str], labels: list[str]) -> float:
     if not y_true:
         return math.nan
-    return float(f1_score(y_true, y_pred, labels=labels, average="macro", zero_division=0))
+    return float(
+        f1_score(y_true, y_pred, labels=labels, average="macro", zero_division=0)
+    )
 
 
 def brier_score(y_true: list[int], probabilities: list[float]) -> float:
@@ -3873,20 +5527,28 @@ def label_distribution(labels: list[str], label_order: list[str]) -> dict[str, f
     return {label: counts.get(label, 0) / total for label in label_order}
 
 
-def label_distribution_from_rows(task: str, rows: list[dict[str, Any]]) -> dict[str, float]:
+def label_distribution_from_rows(
+    task: str, rows: list[dict[str, Any]]
+) -> dict[str, float]:
     labels = [label_from_parsed(task, row["parsed_json"]) for row in rows]
     return label_distribution(labels, class_order_for_task(task))
 
 
 def label_distribution_json(distribution: dict[str, float]) -> str:
-    normalized = {label: round(float(value), 12) for label, value in distribution.items()}
-    return json.dumps(normalized, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    normalized = {
+        label: round(float(value), 12) for label, value in distribution.items()
+    }
+    return json.dumps(
+        normalized, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    )
 
 
 def normalized_predictive_entropy(distribution: dict[str, float]) -> float:
     if len(distribution) < 2:
         return 0.0
-    probabilities = np.asarray([value for value in distribution.values() if value > 0.0], dtype=float)
+    probabilities = np.asarray(
+        [value for value in distribution.values() if value > 0.0], dtype=float
+    )
     if probabilities.size == 0:
         return math.nan
     entropy = -float(np.sum(probabilities * np.log(probabilities)))
@@ -3901,16 +5563,28 @@ def variation_ratio(distribution: dict[str, float]) -> float:
 
 def semantic_response_text(task: str, parsed: Mapping[str, Any]) -> str:
     if task == "task1":
-        decision = normalize_decision(parsed.get("decision")) or str(parsed.get("decision", "")).strip()
-        parts = [f"decision: {decision}" if decision else "", f"reason: {parsed.get('brief_reason', '')}"]
+        decision = (
+            normalize_decision(parsed.get("decision"))
+            or str(parsed.get("decision", "")).strip()
+        )
+        parts = [
+            f"decision: {decision}" if decision else "",
+            f"reason: {parsed.get('brief_reason', '')}",
+        ]
     elif task == "task2":
-        modality = normalize_modality(parsed.get("modality")) or str(parsed.get("modality", "")).strip()
+        modality = (
+            normalize_modality(parsed.get("modality"))
+            or str(parsed.get("modality", "")).strip()
+        )
         parts = [
             f"modality: {modality}" if modality else "",
             f"requirement: {parsed.get('requirement', '')}",
         ]
     elif task == "task3":
-        relation = normalize_relation(parsed.get("relation")) or str(parsed.get("relation", "")).strip()
+        relation = (
+            normalize_relation(parsed.get("relation"))
+            or str(parsed.get("relation", "")).strip()
+        )
         parts = [
             f"relation: {relation}" if relation else "",
             f"evidence: {parsed.get('evidence_phrase', '')}",
@@ -3942,19 +5616,23 @@ def normalize_embedding_rows(embeddings: np.ndarray) -> np.ndarray:
 def _tfidf_text_embedding_matrix(texts: list[str]) -> np.ndarray:
     vectorizer_input = [text if text else "<empty response>" for text in texts]
     try:
-        embeddings = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), lowercase=True).fit_transform(
-            vectorizer_input
-        )
+        embeddings = TfidfVectorizer(
+            analyzer="char_wb", ngram_range=(3, 5), lowercase=True
+        ).fit_transform(vectorizer_input)
         return np.asarray(embeddings.toarray(), dtype=float)
     except ValueError:
         return np.zeros((len(texts), 1), dtype=float)
 
 
-def _mlx_text_embedding_matrix(texts: list[str], model_name: str, max_length: int) -> np.ndarray:
+def _mlx_text_embedding_matrix(
+    texts: list[str], model_name: str, max_length: int
+) -> np.ndarray:
     try:
         import mlx.core as mx
         from mlx_embeddings.utils import load as mlx_embedding_load
-    except ModuleNotFoundError as exc:  # pragma: no cover - exercised only with optional MLX dependency absent
+    except (
+        ModuleNotFoundError
+    ) as exc:  # pragma: no cover - exercised only with optional MLX dependency absent
         raise RuntimeError(
             "MLX semantic embeddings require the optional `mlx-embeddings` package. "
             "Install it in the local environment before setting RE_UQ_ACSE_EMBEDDING_BACKEND=mlx."
@@ -3987,12 +5665,17 @@ def semantic_embedding_backend_label(
     embedding_backend: str | None = None,
     mlx_model_name: str | None = None,
 ) -> tuple[str, str | None]:
-    backend = str(embedding_backend or os.environ.get(ACSE_EMBEDDING_BACKEND_ENV, ACSE_PROXY_EMBEDDING_BACKEND)).strip()
+    backend = str(
+        embedding_backend
+        or os.environ.get(ACSE_EMBEDDING_BACKEND_ENV, ACSE_PROXY_EMBEDDING_BACKEND)
+    ).strip()
     backend = backend or ACSE_PROXY_EMBEDDING_BACKEND
     if backend in {"tfidf", ACSE_PROXY_EMBEDDING_BACKEND}:
         return ACSE_PROXY_EMBEDDING_BACKEND, None
     if backend == ACSE_MLX_EMBEDDING_BACKEND:
-        model_name = str(mlx_model_name or os.environ.get(ACSE_MLX_MODEL_ENV, ACSE_MLX_DEFAULT_MODEL)).strip()
+        model_name = str(
+            mlx_model_name or os.environ.get(ACSE_MLX_MODEL_ENV, ACSE_MLX_DEFAULT_MODEL)
+        ).strip()
         return f"{ACSE_MLX_EMBEDDING_BACKEND}:{model_name}", model_name
     raise ValueError(
         f"Unknown ACSE semantic embedding backend {backend!r}; "
@@ -4005,12 +5688,18 @@ def semantic_embedding_matrix(
     embedding_backend: str | None = None,
     mlx_model_name: str | None = None,
 ) -> tuple[np.ndarray, str]:
-    backend_label, model_name = semantic_embedding_backend_label(embedding_backend, mlx_model_name)
+    backend_label, model_name = semantic_embedding_backend_label(
+        embedding_backend, mlx_model_name
+    )
     if model_name is None:
-        return normalize_embedding_rows(_tfidf_text_embedding_matrix(texts)), backend_label
+        return normalize_embedding_rows(
+            _tfidf_text_embedding_matrix(texts)
+        ), backend_label
     if backend_label.startswith(f"{ACSE_MLX_EMBEDDING_BACKEND}:"):
         max_length = int(os.environ.get(ACSE_MLX_MAX_LENGTH_ENV, "512"))
-        embeddings = _mlx_text_embedding_matrix(texts, model_name, max_length=max_length)
+        embeddings = _mlx_text_embedding_matrix(
+            texts, model_name, max_length=max_length
+        )
         return normalize_embedding_rows(embeddings), backend_label
     raise AssertionError(f"Unhandled embedding backend label: {backend_label}")
 
@@ -4082,26 +5771,32 @@ def acse_semantic_diagnostics_from_embeddings(
     cluster_labels = acse_cluster_labels_for_embeddings(matrix, distance_threshold)
     counts = Counter(cluster_labels)
     ordered_counts = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
-    distribution = {
-        label: count / sample_count
-        for label, count in ordered_counts
-    }
+    distribution = {label: count / sample_count for label, count in ordered_counts}
     cluster_entropy = normalized_predictive_entropy(distribution)
     cluster_variation = variation_ratio(distribution)
     dominant_label, dominant_count = ordered_counts[0]
 
     pairwise = distance_matrix[np.triu_indices(sample_count, k=1)]
     mean_pairwise_distance = float(np.mean(pairwise)) if pairwise.size else 0.0
-    dominant_indices = [index for index, label in enumerate(cluster_labels) if label == dominant_label]
+    dominant_indices = [
+        index for index, label in enumerate(cluster_labels) if label == dominant_label
+    ]
     if len(dominant_indices) > 1:
         dominant_distances = distance_matrix[np.ix_(dominant_indices, dominant_indices)]
-        dominant_pairwise = dominant_distances[np.triu_indices(len(dominant_indices), k=1)]
-        dominant_mean_distance = float(np.mean(dominant_pairwise)) if dominant_pairwise.size else 0.0
+        dominant_pairwise = dominant_distances[
+            np.triu_indices(len(dominant_indices), k=1)
+        ]
+        dominant_mean_distance = (
+            float(np.mean(dominant_pairwise)) if dominant_pairwise.size else 0.0
+        )
     else:
         dominant_mean_distance = 0.0
 
     dispersion_denominator = max(float(distance_threshold), 1e-12)
-    dispersion_component = min(1.0, max(mean_pairwise_distance, dominant_mean_distance) / dispersion_denominator)
+    dispersion_component = min(
+        1.0,
+        max(mean_pairwise_distance, dominant_mean_distance) / dispersion_denominator,
+    )
     entropy_weight = 1.0 - ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT
     uncertainty_score = min(
         1.0,
@@ -4131,7 +5826,9 @@ def acse_semantic_proxy_diagnostics(
     mlx_model_name: str | None = None,
 ) -> dict[str, Any]:
     cleaned = [re.sub(r"\s+", " ", str(text or "").strip()) for text in texts]
-    backend_label, _ = semantic_embedding_backend_label(embedding_backend, mlx_model_name)
+    backend_label, _ = semantic_embedding_backend_label(
+        embedding_backend, mlx_model_name
+    )
     sample_count = len(cleaned)
     if sample_count == 0:
         return {
@@ -4167,7 +5864,9 @@ def acse_semantic_proxy_diagnostics(
         embedding_backend=embedding_backend,
         mlx_model_name=mlx_model_name,
     )
-    return acse_semantic_diagnostics_from_embeddings(embeddings, backend_label, distance_threshold)
+    return acse_semantic_diagnostics_from_embeddings(
+        embeddings, backend_label, distance_threshold
+    )
 
 
 def majority_label(distribution: dict[str, float], label_order: list[str]) -> str:
@@ -4187,7 +5886,9 @@ def one_hot_distribution(label: str, label_order: list[str]) -> dict[str, float]
     return {candidate: 1.0 if candidate == label else 0.0 for candidate in label_order}
 
 
-def task3_score_fields(item: dict[str, Any], pred_relation: str, evidence_phrase: Any = "") -> dict[str, Any]:
+def task3_score_fields(
+    item: dict[str, Any], pred_relation: str, evidence_phrase: Any = ""
+) -> dict[str, Any]:
     return {
         "source_item_id": item.get("source_item_id", item.get("item_id", "")),
         "gold_relation": item.get("task3_gold_relation", ""),
@@ -4195,12 +5896,16 @@ def task3_score_fields(item: dict[str, Any], pred_relation: str, evidence_phrase
         "task2_modality": item.get("task2_modality", ""),
         "task2_text_modality": item.get("task2_text_modality", ""),
         "task2_text_modality_basis": item.get("task2_text_modality_basis", ""),
-        "task2_text_modality_parse_status": item.get("task2_text_modality_parse_status", ""),
+        "task2_text_modality_parse_status": item.get(
+            "task2_text_modality_parse_status", ""
+        ),
         "task3_declared_relation": item.get("task3_declared_relation", ""),
         "task3_audit_mode": item.get("task3_audit_mode", ""),
         "task2_requirement": item.get("task2_requirement", ""),
         "evidence_phrase": str(evidence_phrase or ""),
-        "evidence_phrase_in_source": evidence_phrase_in_source(evidence_phrase, item.get("source_statement", "")),
+        "evidence_phrase_in_source": evidence_phrase_in_source(
+            evidence_phrase, item.get("source_statement", "")
+        ),
     }
 
 
@@ -4228,7 +5933,9 @@ def monotonicity_violation_diagnostics(
             "monotonicity_max_increase": math.nan,
         }
     frame[score_field] = pd.to_numeric(frame[score_field])
-    frame["_modality_sort"] = frame["source_modality"].map(lambda value: -ORDINAL_STRENGTH[str(value)])
+    frame["_modality_sort"] = frame["source_modality"].map(
+        lambda value: -ORDINAL_STRENGTH[str(value)]
+    )
     max_increases: list[float] = []
     for _, seed_frame in frame.groupby("seed_id", sort=False):
         if len(seed_frame) < len(MODALITIES):
@@ -4247,13 +5954,79 @@ def monotonicity_violation_diagnostics(
         }
     checked = len(max_increases)
     strict_violations = sum(1 for value in max_increases if value > 1e-12)
-    tolerant_violations = sum(1 for value in max_increases if value > float(tolerance) + 1e-12)
+    tolerant_violations = sum(
+        1 for value in max_increases if value > float(tolerance) + 1e-12
+    )
     return {
         "monotonicity_violations": tolerant_violations / checked,
         "monotonicity_strict_violations": strict_violations / checked,
         "monotonicity_tolerance": float(tolerance),
         "monotonicity_mean_max_increase": float(np.mean(max_increases)),
         "monotonicity_max_increase": float(np.max(max_increases)),
+    }
+
+
+def answer_length_fields(
+    raw: Mapping[str, Any], item: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Answer-length / bloat fields for one raw completion record.
+
+    ``requirement_word_count`` is read from the raw record when available;
+    legacy rows fall back to counting words in ``parsed_json.requirement``.
+    ``completion_tokens`` is populated only for single-item requests because a
+    provider's batched usage is not attributable to an individual answer.
+    ``source_word_count`` always comes from the benchmark ``source_statement``.
+    """
+    parsed = raw.get("parsed_json") if isinstance(raw, Mapping) else None
+    requirement_text = ""
+    if isinstance(parsed, Mapping):
+        requirement_text = str(parsed.get("requirement", "") or "")
+    raw_words = raw.get("requirement_word_count") if isinstance(raw, Mapping) else None
+    try:
+        requirement_words = int(raw_words) if raw_words not in {None, ""} else None
+    except (TypeError, ValueError):
+        requirement_words = None
+    if requirement_words is None:
+        requirement_words = word_count(requirement_text) if requirement_text else None
+    source_words = word_count(str(item.get("source_statement", "") or "")) or None
+    batch_id = str(raw.get("batch_id", "") or "") if isinstance(raw, Mapping) else ""
+    try:
+        batch_item_count = (
+            int(raw.get("batch_item_count", 0) or 0) if isinstance(raw, Mapping) else 0
+        )
+    except (TypeError, ValueError):
+        batch_item_count = 0
+    # Provider token usage for a multi-item response is request-level. Do not
+    # report that whole-batch total as the length of every individual answer.
+    completion_tokens = (
+        ""
+        if batch_item_count > 1 or (batch_id and batch_item_count != 1)
+        else raw.get("usage_completion_tokens", "")
+        if isinstance(raw, Mapping)
+        else ""
+    )
+    if completion_tokens is None:
+        completion_tokens = ""
+    return {
+        "requirement_word_count": requirement_words
+        if requirement_words is not None
+        else "",
+        "source_word_count": source_words if source_words is not None else "",
+        "length_ratio": (
+            requirement_words / source_words
+            if requirement_words is not None and source_words
+            else ""
+        ),
+        "completion_tokens": completion_tokens,
+    }
+
+
+def empty_answer_length_fields() -> dict[str, Any]:
+    return {
+        "requirement_word_count": "",
+        "source_word_count": "",
+        "length_ratio": "",
+        "completion_tokens": "",
     }
 
 
@@ -4402,7 +6175,9 @@ def distribution_score_rows(
         ),
     ]
     if sample_rows is not None:
-        diagnostics = acse_semantic_proxy_diagnostics(semantic_texts_from_rows(str(raw.get("task", "")), sample_rows))
+        diagnostics = acse_semantic_proxy_diagnostics(
+            semantic_texts_from_rows(str(raw.get("task", "")), sample_rows)
+        )
         acse_row = score_from_distribution(
             raw,
             item,
@@ -4442,12 +6217,16 @@ def _build_ensemble_disagreement_scores(
         return []
     deterministic_frame = raw_frame[raw_frame["sample_kind"] == "deterministic"]
     if run_group_id:
-        deterministic_frame = deterministic_frame[deterministic_frame["run_group_id"].astype(str) == str(run_group_id)]
+        deterministic_frame = deterministic_frame[
+            deterministic_frame["run_group_id"].astype(str) == str(run_group_id)
+        ]
     if deterministic_frame.empty:
         return []
 
     scores: list[dict[str, Any]] = []
-    for group_values, group_frame in deterministic_frame.groupby(group_columns, sort=False):
+    for group_values, group_frame in deterministic_frame.groupby(
+        group_columns, sort=False
+    ):
         group_id, task, item_id = group_values
         item = benchmark_by_item.get(item_id)
         if not item:
@@ -4456,7 +6235,9 @@ def _build_ensemble_disagreement_scores(
         total_members = len({member_key(row) for row in records})
         valid_by_member: dict[str, dict[str, Any]] = {}
         for row in records:
-            if row.get("parse_status") != "ok" or not isinstance(row.get("parsed_json"), dict):
+            if row.get("parse_status") != "ok" or not isinstance(
+                row.get("parsed_json"), dict
+            ):
                 continue
             valid_by_member.setdefault(member_key(row), row)
         if len(valid_by_member) < 2:
@@ -4490,7 +6271,9 @@ def build_ensemble_disagreement_scores(
         required_columns={"sample_kind", "run_id", "task", "item_id", "model"},
         member_key=lambda row: str(row.get("model", "")),
         uq_method="model_ensemble_disagreement",
-        model_name_builder=lambda group_id, n_members: f"{ENSEMBLE_MODEL_PREFIX}:{n_members}_models",
+        model_name_builder=lambda group_id, n_members: (
+            f"{ENSEMBLE_MODEL_PREFIX}:{n_members}_models"
+        ),
     )
 
 
@@ -4504,15 +6287,44 @@ def build_run_group_ensemble_disagreement_scores(
         raw_rows,
         group_columns=["run_group_id", "task", "item_id"],
         required_columns={"sample_kind", "run_group_id", "task", "item_id", "model"},
-        member_key=lambda row: f"{row.get('provider_id', '')}:{row.get('model', '')}:{row.get('run_id', '')}",
+        member_key=lambda row: (
+            f"{row.get('provider_id', '')}:{row.get('model', '')}:{row.get('run_id', '')}"
+        ),
         uq_method="model_ensemble_disagreement_run_group",
-        model_name_builder=lambda group_id, n_members: f"{ENSEMBLE_MODEL_PREFIX}:run_group:{group_id}:{n_members}_models",
+        model_name_builder=lambda group_id, n_members: (
+            f"{ENSEMBLE_MODEL_PREFIX}:run_group:{group_id}:{n_members}_models"
+        ),
         run_group_id=run_group_id,
     )
 
 
-def build_uq_scores(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_uq_scores(
+    benchmark_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+    min_valid_samples: int = 1,
+    expected_stochastic_samples: int | None = None,
+) -> list[dict[str, Any]]:
+    """Build per-item UQ score rows.
+
+    ``min_valid_samples`` drops stochastic groups with fewer than that many
+    successfully parsed samples. Every stochastic row carries
+    ``stochastic_complete`` (``valid_n == total_n``); agreement and unanimity
+    summaries must be restricted to complete rows, see
+    :func:`repeated_sample_agreement_metrics`.
+
+    ``expected_stochastic_samples`` is the number of repeated samples the run
+    PLANNED per item. Without it ``total_n`` is only the number of rows that were
+    written, so a sample the run never wrote (crash, budget stop) is invisible and
+    the group is reported as complete. When given, ``total_n`` is
+    ``max(len(group), expected_stochastic_samples)`` and a missing sample counts
+    as a parse failure, i.e. ``stochastic_complete`` is False.
+
+    Duplicate rows for one ``run_id`` + :func:`completion_record_key` (append-only
+    raw files, resumed runs) are collapsed by :func:`dedupe_raw_rows` first, so a
+    re-requested item cannot be double-counted or scored from its stale attempt.
+    """
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
+    raw_rows = dedupe_raw_rows(raw_rows)
     raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, raw_rows)
     scores: list[dict[str, Any]] = []
 
@@ -4574,23 +6386,34 @@ def build_uq_scores(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[st
         return scores
     stochastic_frame = raw_frame[raw_frame["sample_kind"] == "stochastic"]
 
-    for (_, task, item_id, _), group_frame in stochastic_frame.groupby(["model", "task", "item_id", "run_id"], sort=False):
+    for (_, task, item_id, _), group_frame in stochastic_frame.groupby(
+        ["model", "task", "item_id", "run_id"], sort=False
+    ):
         group = group_frame.to_dict(orient="records")
         item = benchmark_by_item.get(item_id)
         if not item:
             continue
-        valid = [row for row in group if row.get("parse_status") == "ok" and isinstance(row.get("parsed_json"), dict)]
-        if not valid:
+        valid = [
+            row
+            for row in group
+            if row.get("parse_status") == "ok"
+            and isinstance(row.get("parsed_json"), dict)
+        ]
+        if len(valid) < max(1, int(min_valid_samples)):
             continue
         distribution = label_distribution_from_rows(str(task), valid)
-        consistency_method = "label_self_consistency" if task == "task1" else "modality_consistency"
+        consistency_method = (
+            "label_self_consistency" if task == "task1" else "modality_consistency"
+        )
+        # A sample that was never written is missing, not absent-by-design.
+        total_n = max(len(group), int(expected_stochastic_samples or 0))
         scores.extend(
             distribution_score_rows(
                 valid[0],
                 item,
                 distribution,
                 len(valid),
-                len(group),
+                total_n,
                 consistency_method,
                 sample_rows=valid,
             )
@@ -4600,7 +6423,11 @@ def build_uq_scores(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[st
     return scores
 
 
-def build_task3_scores(task3_items: list[dict[str, Any]], raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_task3_scores(
+    task3_items: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+    min_valid_samples: int = 1,
+) -> list[dict[str, Any]]:
     item_by_id = {row["item_id"]: row for row in task3_items}
     scores: list[dict[str, Any]] = []
 
@@ -4633,24 +6460,35 @@ def build_task3_scores(task3_items: list[dict[str, Any]], raw_rows: list[dict[st
                 "gold_modality": item["source_modality"],
                 "pred_modality": item.get("task2_modality", ""),
                 **empty_text_modality_fields(),
-                **task3_score_fields(item, pred_relation, parsed.get("evidence_phrase", "")),
+                **task3_score_fields(
+                    item, pred_relation, parsed.get("evidence_phrase", "")
+                ),
             }
         )
 
     raw_frame = pd.DataFrame.from_records(raw_rows)
     if raw_frame.empty or "sample_kind" not in raw_frame.columns:
         return scores
-    stochastic_frame = raw_frame[(raw_frame["sample_kind"] == "stochastic") & (raw_frame["task"] == "task3")]
+    stochastic_frame = raw_frame[
+        (raw_frame["sample_kind"] == "stochastic") & (raw_frame["task"] == "task3")
+    ]
     if stochastic_frame.empty:
         return scores
 
-    for (_, item_id, _), group_frame in stochastic_frame.groupby(["model", "item_id", "run_id"], sort=False):
+    for (_, item_id, _), group_frame in stochastic_frame.groupby(
+        ["model", "item_id", "run_id"], sort=False
+    ):
         group = group_frame.to_dict(orient="records")
         item = item_by_id.get(str(item_id))
         if not item:
             continue
-        valid = [row for row in group if row.get("parse_status") == "ok" and isinstance(row.get("parsed_json"), dict)]
-        if not valid:
+        valid = [
+            row
+            for row in group
+            if row.get("parse_status") == "ok"
+            and isinstance(row.get("parsed_json"), dict)
+        ]
+        if len(valid) < max(1, int(min_valid_samples)):
             continue
         if item.get("task3_gold_relation", "") not in TASK3_RELATIONS:
             continue
@@ -4677,14 +6515,194 @@ def build_task3_scores(task3_items: list[dict[str, Any]], raw_rows: list[dict[st
 # progress CSV/event JSONL writers, warning event derivation, and the
 # provider preflight probe.
 
+LOGGER_NAME = "re_uq"
+logger = logging.getLogger(LOGGER_NAME)
+
+# Every parse_status the runner can emit. "ok" is the only success value; every
+# other status (including "truncated", emitted when a completion hit the token
+# limit) counts as a parse failure.
+PARSE_STATUS_OK = "ok"
+PARSE_STATUS_CATEGORIES = (
+    "invalid_json",
+    "truncated",
+    "invalid_confidence",
+    "invalid_label",
+    "missing_fields",
+    "request_error",
+    "missing_batch_result",
+)
+
+
+def configure_run_logging(
+    level: str | int = "INFO",
+    *,
+    log_path: str | Path | None = None,
+) -> logging.Logger:
+    """Configure the shared ``re_uq`` logger for a CLI run.
+
+    Always logs to stderr; when ``log_path`` is given the same records are also
+    appended to that file so a long provider run leaves a durable trace.
+    """
+    resolved_level = (
+        level
+        if isinstance(level, int)
+        else getattr(logging, str(level).upper(), logging.INFO)
+    )
+    logger.setLevel(resolved_level)
+    logger.propagate = False
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    # A process may execute several Hydra cells/models. Keep the shared stderr
+    # handler, but never retain a previous run's file handler: otherwise later
+    # records are copied into every earlier log and file descriptors accumulate.
+    for handler in list(logger.handlers):
+        target = getattr(handler, "_re_uq_target", None)
+        if target not in {None, "stream"}:
+            logger.removeHandler(handler)
+            handler.close()
+
+    existing_targets = {
+        getattr(handler, "_re_uq_target", None) for handler in logger.handlers
+    }
+    if "stream" not in existing_targets:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        stream_handler._re_uq_target = "stream"  # type: ignore[attr-defined]
+        logger.addHandler(stream_handler)
+    if log_path is not None:
+        resolved_path = Path(log_path)
+        resolved_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(resolved_path, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        file_handler._re_uq_target = str(resolved_path)  # type: ignore[attr-defined]
+        logger.addHandler(file_handler)
+    for handler in logger.handlers:
+        handler.setLevel(resolved_level)
+    return logger
+
+
+def is_parse_failure_status(status: Any) -> bool:
+    """Any status other than ``ok`` (including ``truncated``) is a parse failure."""
+    return str(status or "").strip() != PARSE_STATUS_OK
+
+
+def parse_status_histogram(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    """Categorized parse-status counts with every known category always present."""
+    histogram = {status: 0 for status in PARSE_STATUS_CATEGORIES}
+    histogram["other"] = 0
+    for row in raw_rows:
+        status = str(row.get("parse_status", "")).strip()
+        if status == PARSE_STATUS_OK:
+            continue
+        if status in histogram:
+            histogram[status] += 1
+        else:
+            histogram["other"] += 1
+    return histogram
+
+
+def _percentile(values: list[float], fraction: float) -> float | str:
+    if not values:
+        return ""
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, int(math.ceil(fraction * len(ordered))) - 1))
+    return float(ordered[index])
+
+
+def run_quality_counters(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Diagnostics shared by the registry row, the finish event, and the summary line.
+
+    Covers the categorized parse-status histogram, retry volume, truncation
+    counts, latency percentiles, and provider-reported completion tokens.
+    Request-level fields are deduplicated by ``batch_id``; parse and truncation
+    statuses remain per output record.
+    """
+    rows = list(raw_rows)
+    histogram = parse_status_histogram(rows)
+    retry_total = 0
+    truncated_records = 0
+    usage_completion_tokens = 0
+    usage_seen = False
+    latencies: list[float] = []
+    # Provider usage, retries, and latency describe requests. Batched responses
+    # copy that provenance to each item row, so select one representative per
+    # batch while retaining every unbatched row as its own request.
+    request_rows: list[Mapping[str, Any]] = []
+    seen_batch_ids: set[str] = set()
+    for row in rows:
+        batch_id = str(row.get("batch_id", "") or "")
+        if batch_id:
+            if batch_id in seen_batch_ids:
+                continue
+            seen_batch_ids.add(batch_id)
+        request_rows.append(row)
+
+    for row in request_rows:
+        try:
+            retry_total += int(row.get("retry_count", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+        usage_value = row.get("usage_completion_tokens", "")
+        if usage_value not in ("", None):
+            try:
+                usage_completion_tokens += int(usage_value)
+                usage_seen = True
+            except (TypeError, ValueError):
+                pass
+        latency = row.get("latency_s", "")
+        if latency not in ("", None):
+            try:
+                latencies.append(float(latency))
+            except (TypeError, ValueError):
+                pass
+    for row in rows:
+        if (
+            str(row.get("parse_status", "")).strip() == "truncated"
+            or str(row.get("finish_reason", "")).strip() == "length"
+        ):
+            truncated_records += 1
+    return {
+        "parse_status_histogram": histogram,
+        "retry_total": retry_total,
+        "truncated_records": truncated_records,
+        "latency_p50_s": _percentile(latencies, 0.50),
+        "latency_p95_s": _percentile(latencies, 0.95),
+        "usage_completion_tokens": usage_completion_tokens if usage_seen else "",
+    }
+
+
+def format_run_quality_line(run_id: str, quality: Mapping[str, Any]) -> str:
+    histogram = dict(quality.get("parse_status_histogram", {}) or {})
+    nonzero = {key: value for key, value in histogram.items() if value}
+    latency_p50 = quality.get("latency_p50_s", "")
+    latency_p95 = quality.get("latency_p95_s", "")
+    latency_label = (
+        f"latency_p50 {float(latency_p50):.2f}s, latency_p95 {float(latency_p95):.2f}s"
+        if latency_p50 != "" and latency_p95 != ""
+        else "latency_p50 unknown, latency_p95 unknown"
+    )
+    return (
+        f"{run_id}: parse_status {nonzero or 'all ok'}, "
+        f"retries {int(quality.get('retry_total', 0) or 0)}, "
+        f"truncated {int(quality.get('truncated_records', 0) or 0)}, "
+        f"{latency_label}, "
+        f"completion_tokens {quality.get('usage_completion_tokens', '') or 'unknown'}"
+    )
+
 
 def run_progress_summary(
     benchmark_rows: list[dict[str, Any]],
     raw_rows: list[dict[str, Any]],
     expected_stochastic_samples: int = 5,
 ) -> list[dict[str, Any]]:
+    """Per (run, model, task) coverage and parse-rate summary.
+
+    Duplicate rows for one ``run_id`` + :func:`completion_record_key` are
+    collapsed by :func:`dedupe_raw_rows` first, so a resumed run cannot report a
+    record_completion_rate above 1.0 (or hide a failed attempt behind its retry).
+    """
     if not raw_rows:
         return []
+    raw_rows = dedupe_raw_rows(raw_rows)
     frame = pd.DataFrame.from_records(raw_rows)
     required = {"run_id", "model", "task", "item_id", "sample_kind", "parse_status"}
     if frame.empty or not required.issubset(frame.columns):
@@ -4693,8 +6711,12 @@ def run_progress_summary(
     benchmark_item_count = len(benchmark_item_ids)
     expected_stochastic_samples = max(0, int(expected_stochastic_samples))
     rows: list[dict[str, Any]] = []
-    for (run_id, model, task), group_frame in frame.groupby(["run_id", "model", "task"], sort=False):
-        group_frame = group_frame[group_frame["item_id"].astype(str).isin(benchmark_item_ids)]
+    for (run_id, model, task), group_frame in frame.groupby(
+        ["run_id", "model", "task"], sort=False
+    ):
+        group_frame = group_frame[
+            group_frame["item_id"].astype(str).isin(benchmark_item_ids)
+        ]
         if group_frame.empty:
             continue
         deterministic = group_frame[group_frame["sample_kind"] == "deterministic"]
@@ -4704,7 +6726,9 @@ def run_progress_summary(
         stochastic_items = stochastic["item_id"].astype(str).nunique()
         if expected_stochastic_samples:
             stochastic_counts = stochastic.groupby("item_id", sort=False).size()
-            stochastic_complete_items = int((stochastic_counts >= expected_stochastic_samples).sum())
+            stochastic_complete_items = int(
+                (stochastic_counts >= expected_stochastic_samples).sum()
+            )
         else:
             stochastic_complete_items = benchmark_item_count
         expected_records = benchmark_item_count * (1 + expected_stochastic_samples)
@@ -4717,15 +6741,27 @@ def run_progress_summary(
                 "benchmark_items": benchmark_item_count,
                 "expected_records": expected_records,
                 "observed_records": observed_records,
-                "record_completion_rate": observed_records / expected_records if expected_records else math.nan,
-                "parse_success_rate": ok_count / observed_records if observed_records else math.nan,
+                "record_completion_rate": observed_records / expected_records
+                if expected_records
+                else math.nan,
+                "parse_success_rate": ok_count / observed_records
+                if observed_records
+                else math.nan,
                 "deterministic_records": len(deterministic),
                 "deterministic_ok": int((deterministic["parse_status"] == "ok").sum()),
-                "deterministic_item_coverage": deterministic_items / benchmark_item_count if benchmark_item_count else math.nan,
+                "deterministic_item_coverage": deterministic_items
+                / benchmark_item_count
+                if benchmark_item_count
+                else math.nan,
                 "stochastic_records": len(stochastic),
                 "stochastic_ok": int((stochastic["parse_status"] == "ok").sum()),
-                "stochastic_item_coverage": stochastic_items / benchmark_item_count if benchmark_item_count else math.nan,
-                "stochastic_complete_item_rate": stochastic_complete_items / benchmark_item_count if benchmark_item_count else math.nan,
+                "stochastic_item_coverage": stochastic_items / benchmark_item_count
+                if benchmark_item_count
+                else math.nan,
+                "stochastic_complete_item_rate": stochastic_complete_items
+                / benchmark_item_count
+                if benchmark_item_count
+                else math.nan,
             }
         )
     return rows
@@ -4746,10 +6782,18 @@ def complete_run_ids_from_progress(
     for run_id, group_frame in frame.groupby("run_id", sort=False):
         if not run_id_matches_prefix(run_id, prefix):
             continue
-        tasks = set(group_frame["task"].astype(str).tolist()) if "task" in group_frame.columns else set()
+        tasks = (
+            set(group_frame["task"].astype(str).tolist())
+            if "task" in group_frame.columns
+            else set()
+        )
         if not expected_task_set.issubset(tasks):
             continue
-        completion_columns = ["record_completion_rate", "deterministic_item_coverage", "stochastic_complete_item_rate"]
+        completion_columns = [
+            "record_completion_rate",
+            "deterministic_item_coverage",
+            "stochastic_complete_item_rate",
+        ]
         if all(
             column in group_frame.columns
             and bool((pd.to_numeric(group_frame[column], errors="coerce") >= 1.0).all())
@@ -4773,13 +6817,20 @@ def completion_record_key(row: Mapping[str, Any]) -> tuple[str, str, str, str, i
     )
 
 
-def pending_completion_jobs(jobs: Iterable[Mapping[str, Any]], raw_rows: Iterable[Mapping[str, Any]], run_id: str) -> list[dict[str, Any]]:
+def pending_completion_jobs(
+    jobs: Iterable[Mapping[str, Any]],
+    raw_rows: Iterable[Mapping[str, Any]],
+    run_id: str,
+) -> list[dict[str, Any]]:
     # Map each completed record to the job_config_sha it was produced under so
     # resume can re-run rows whose planned config has since changed. Legacy rows
     # predate the field and fall back to the old key-only match.
     completed: dict[tuple[str, str, str, str, int], str] = {}
     for row in raw_rows:
-        if str(row.get("run_id", "")) == str(run_id) and str(row.get("parse_status", "")) == "ok":
+        if (
+            str(row.get("run_id", "")) == str(run_id)
+            and str(row.get("parse_status", "")) == "ok"
+        ):
             completed[completion_record_key(row)] = str(row.get("job_config_sha", ""))
 
     pending: list[dict[str, Any]] = []
@@ -4796,10 +6847,11 @@ def pending_completion_jobs(jobs: Iterable[Mapping[str, Any]], raw_rows: Iterabl
         if existing_sha != str(job.get("job_config_sha", "")):
             pending.append(dict(job))
     if legacy_reuse_count:
-        print(
-            f"WARNING {run_id}: reused {legacy_reuse_count} cached record(s) without "
-            "job_config_sha; resuming without config comparison (legacy cache)",
-            flush=True,
+        logger.warning(
+            "%s: reused %d cached record(s) without job_config_sha; "
+            "resuming without config comparison (legacy cache)",
+            run_id,
+            legacy_reuse_count,
         )
     return pending
 
@@ -4829,6 +6881,7 @@ def run_registry_summary(
     structured_output: str = "none",
     request_extra_body: Mapping[str, Any] | None = None,
     server_model_probe: Mapping[str, Any] | str | None = None,
+    batch_order: str = DEFAULT_BATCH_ORDER,
     notes: str = "",
 ) -> dict[str, Any]:
     task_list = normalize_task_filter(tasks)
@@ -4839,10 +6892,20 @@ def run_registry_summary(
         and str(row.get("model", "")) == str(model)
         and str(row.get("task", "")) in set(task_list)
     ]
-    progress = run_progress_summary(benchmark_rows, run_rows, expected_stochastic_samples=expected_stochastic_samples)
-    task_progress = [row for row in progress if str(row.get("task", "")) in set(task_list)]
+    progress = run_progress_summary(
+        benchmark_rows,
+        run_rows,
+        expected_stochastic_samples=expected_stochastic_samples,
+    )
+    task_progress = [
+        row for row in progress if str(row.get("task", "")) in set(task_list)
+    ]
     benchmark_item_count = len({str(row["item_id"]) for row in benchmark_rows})
-    expected_records = benchmark_item_count * len(task_list) * (1 + max(0, int(expected_stochastic_samples)))
+    expected_records = (
+        benchmark_item_count
+        * len(task_list)
+        * (1 + max(0, int(expected_stochastic_samples)))
+    )
     resolved_batch_size = positive_int(batch_size, "batch_size")
     expected_api_calls = (
         len(task_list)
@@ -4859,8 +6922,12 @@ def run_registry_summary(
         }
     )
     ok_records = sum(1 for row in run_rows if str(row.get("parse_status", "")) == "ok")
-    deterministic_coverages = [float(row.get("deterministic_item_coverage", 0) or 0) for row in task_progress]
-    stochastic_coverages = [float(row.get("stochastic_complete_item_rate", 0) or 0) for row in task_progress]
+    deterministic_coverages = [
+        float(row.get("deterministic_item_coverage", 0) or 0) for row in task_progress
+    ]
+    stochastic_coverages = [
+        float(row.get("stochastic_complete_item_rate", 0) or 0) for row in task_progress
+    ]
     complete = (
         observed_records >= expected_records
         and len(task_progress) >= len(task_list)
@@ -4872,8 +6939,15 @@ def run_registry_summary(
         (row for row in run_rows if str(row.get("sample_kind", "")) == "deterministic"),
         run_rows[0] if run_rows else {},
     )
-    run_config_shas = sorted({str(row.get("job_config_sha", "")) for row in run_rows if row.get("job_config_sha")})
+    run_config_shas = sorted(
+        {
+            str(row.get("job_config_sha", ""))
+            for row in run_rows
+            if row.get("job_config_sha")
+        }
+    )
     config_sha = sha256_text("\n".join(run_config_shas)) if run_config_shas else ""
+    quality = run_quality_counters(run_rows)
     return {
         "run_id": run_id,
         "run_group_id": run_group_id,
@@ -4891,8 +6965,12 @@ def run_registry_summary(
         "expected_records": expected_records,
         "observed_records": observed_records,
         "parse_success_rate": ok_records / observed_records if observed_records else "",
-        "deterministic_item_coverage": min(deterministic_coverages) if deterministic_coverages else "",
-        "stochastic_complete_item_rate": min(stochastic_coverages) if stochastic_coverages else "",
+        "deterministic_item_coverage": min(deterministic_coverages)
+        if deterministic_coverages
+        else "",
+        "stochastic_complete_item_rate": min(stochastic_coverages)
+        if stochastic_coverages
+        else "",
         "started_at_utc": started_at_utc,
         "finished_at_utc": finished_at_utc,
         "base_url": base_url,
@@ -4903,37 +6981,200 @@ def run_registry_summary(
         "observed_api_calls": observed_api_calls,
         "timeout_s": timeout_s,
         "json_mode": "yes" if json_mode else "no",
-        "structured_output": normalize_structured_output_mode(structured_output, json_mode=json_mode),
+        "structured_output": normalize_structured_output_mode(
+            structured_output, json_mode=json_mode
+        ),
         "request_extra_body": compact_json(request_extra_body),
         "server_model_probe": compact_json(server_model_probe),
+        "batch_order": normalize_batch_order(batch_order),
+        "parse_status_histogram": compact_json(
+            {
+                key: value
+                for key, value in quality["parse_status_histogram"].items()
+                if value
+            }
+        ),
+        "retry_total": quality["retry_total"],
+        "truncated_records": quality["truncated_records"],
+        "latency_p50_s": quality["latency_p50_s"],
+        "latency_p95_s": quality["latency_p95_s"],
+        "usage_completion_tokens": quality["usage_completion_tokens"],
         "notes": notes,
     }
 
 
-def upsert_run_registry_row(path: str | Path, row: Mapping[str, Any]) -> None:
+def upsert_run_registry_row(
+    path: str | Path,
+    row: Mapping[str, Any],
+    fieldnames: list[str] | None = None,
+) -> None:
+    """Insert-or-replace one registry row under an advisory lock, atomically.
+
+    Concurrent runners share one registry CSV per dataset/variant, so the
+    read-modify-write cycle is serialized with ``file_lock`` and published with
+    a temp file + ``os.replace`` so readers never observe a half-written CSV.
+    """
     path = Path(path)
-    rows = read_csv_rows(path) if path.exists() else []
     key_fields = ["run_id", "profile_id", "model", "dataset_id", "benchmark_variant"]
     row_key = tuple(str(row.get(field, "")) for field in key_fields)
-    updated = False
-    output_rows: list[dict[str, Any]] = []
-    for existing in rows:
-        if tuple(str(existing.get(field, "")) for field in key_fields) == row_key:
+    with file_lock(path):
+        rows = read_csv_rows(path) if path.exists() else []
+        updated = False
+        output_rows: list[dict[str, Any]] = []
+        for existing in rows:
+            if tuple(str(existing.get(field, "")) for field in key_fields) == row_key:
+                output_rows.append(dict(row))
+                updated = True
+            else:
+                output_rows.append(existing)
+        if not updated:
             output_rows.append(dict(row))
-            updated = True
-        else:
-            output_rows.append(existing)
-    if not updated:
-        output_rows.append(dict(row))
-    write_csv_rows(path, output_rows, fieldnames=RUN_REGISTRY_FIELDS)
+        text = _csv_frame(
+            output_rows, fieldnames=fieldnames or RUN_REGISTRY_FIELDS
+        ).to_csv(index=False)
+        atomic_write_text(path, text)
 
 
-def run_events_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
-    return artifact_path(Path(root) / "data/processed/run_events.jsonl", dataset_id, variant)
+# Task 3 writes into its own registry file but shares the row contract and the
+# same concurrency guarantees.
+upsert_task3_registry_row = upsert_run_registry_row
 
 
-def run_progress_live_path(root: str | Path, dataset_id: str | None = None, variant: str | None = None) -> Path:
-    return artifact_path(Path(root) / "data/processed/run_progress_live.csv", dataset_id, variant)
+def registry_row_compatibility_issues(
+    row: Mapping[str, Any],
+    *,
+    run_group_id: str,
+    benchmark_item_count: int,
+    expected_stochastic_samples: int,
+    required_tasks: Iterable[str] = ("task2",),
+    exact_tasks: Iterable[str] | None = None,
+    expected_batch_order: str | None = None,
+    expected_batch_size: int | None = None,
+    allow_partial_benchmark: bool = False,
+    allow_missing_batch_order: bool = False,
+) -> list[str]:
+    """Explain why a registry row does not match an evaluation plan.
+
+    ``expected_records`` encodes both the number of planned benchmark items and
+    stochastic samples. Validating it prevents deterministic-only or partial
+    ablations from being selected merely because they are newer and marked
+    complete.
+    """
+    issues: list[str] = []
+    if str(row.get("status", "")) != "complete":
+        issues.append("status is not complete")
+    if str(row.get("run_group_id", "")) != str(run_group_id):
+        issues.append(f"run_group_id is not {run_group_id!r}")
+
+    tasks = [
+        value.strip() for value in str(row.get("tasks", "")).split(",") if value.strip()
+    ]
+    task_set = set(tasks)
+    missing_tasks = set(required_tasks) - task_set
+    if missing_tasks:
+        issues.append(f"missing tasks: {','.join(sorted(missing_tasks))}")
+    if exact_tasks is not None and task_set != set(exact_tasks):
+        issues.append(f"tasks are {','.join(tasks) or 'empty'}")
+
+    samples_per_item = 1 + max(0, int(expected_stochastic_samples))
+    records_per_item = len(tasks) * samples_per_item
+    try:
+        expected_records = int(row.get("expected_records", 0) or 0)
+    except (TypeError, ValueError):
+        expected_records = 0
+    if (
+        not records_per_item
+        or expected_records <= 0
+        or expected_records % records_per_item
+    ):
+        issues.append(
+            "expected_records is incompatible with tasks and stochastic samples"
+        )
+    else:
+        planned_items = expected_records // records_per_item
+        if allow_partial_benchmark:
+            if not 0 < planned_items <= int(benchmark_item_count):
+                issues.append(
+                    "planned benchmark size is outside the available benchmark"
+                )
+        elif planned_items != int(benchmark_item_count):
+            issues.append(
+                f"planned benchmark size is {planned_items}, expected {int(benchmark_item_count)}"
+            )
+
+    try:
+        observed_records = int(row.get("observed_records", 0) or 0)
+    except (TypeError, ValueError):
+        observed_records = 0
+    if expected_records > 0 and observed_records < expected_records:
+        issues.append("observed_records is below expected_records")
+
+    def coverage_at_least_one(field: str) -> bool:
+        try:
+            return float(row.get(field, 0) or 0) >= 1.0
+        except (TypeError, ValueError):
+            return False
+
+    if not coverage_at_least_one("deterministic_item_coverage"):
+        issues.append("deterministic coverage is incomplete")
+    if expected_stochastic_samples > 0 and not coverage_at_least_one(
+        "stochastic_complete_item_rate"
+    ):
+        issues.append("stochastic coverage is incomplete")
+
+    if expected_batch_order is not None:
+        recorded_order = str(row.get("batch_order", "") or "")
+        if not recorded_order:
+            if not allow_missing_batch_order:
+                issues.append("batch_order is missing")
+        elif normalize_batch_order(recorded_order) != normalize_batch_order(
+            expected_batch_order
+        ):
+            issues.append(f"batch_order is {recorded_order!r}")
+    if expected_batch_size is not None:
+        try:
+            recorded_batch_size = int(row.get("batch_size", 0) or 0)
+        except (TypeError, ValueError):
+            recorded_batch_size = 0
+        if recorded_batch_size != int(expected_batch_size):
+            issues.append(
+                f"batch_size is {recorded_batch_size}, expected {int(expected_batch_size)}"
+            )
+    return issues
+
+
+def run_events_path(
+    root: str | Path,
+    dataset_id: str | None = None,
+    variant: str | None = None,
+    *,
+    run_id: Any = None,
+    smoke: bool | None = None,
+) -> Path:
+    return resolve_run_artifact_path(
+        artifact_path(
+            Path(root) / "data/processed/run_events.jsonl", dataset_id, variant
+        ),
+        run_id=run_id,
+        smoke=smoke,
+    )
+
+
+def run_progress_live_path(
+    root: str | Path,
+    dataset_id: str | None = None,
+    variant: str | None = None,
+    *,
+    run_id: Any = None,
+    smoke: bool | None = None,
+) -> Path:
+    return resolve_run_artifact_path(
+        artifact_path(
+            Path(root) / "data/processed/run_progress_live.csv", dataset_id, variant
+        ),
+        run_id=run_id,
+        smoke=smoke,
+    )
 
 
 def live_run_counters(
@@ -4946,7 +7187,9 @@ def live_run_counters(
 ) -> dict[str, Any]:
     observed_records = len(raw_rows)
     ok_records = sum(1 for row in raw_rows if str(row.get("parse_status", "")) == "ok")
-    request_error_records = sum(1 for row in raw_rows if str(row.get("parse_status", "")) == "request_error")
+    request_error_records = sum(
+        1 for row in raw_rows if str(row.get("parse_status", "")) == "request_error"
+    )
     observed_api_calls = len(
         {
             str(row.get("batch_id") or f"single:{row.get('request_index', index)}")
@@ -4955,24 +7198,43 @@ def live_run_counters(
     )
     elapsed_s = 0.0
     if started_monotonic is not None:
-        elapsed_s = max(0.0, float(now_monotonic if now_monotonic is not None else time.monotonic()) - float(started_monotonic))
+        elapsed_s = max(
+            0.0,
+            float(now_monotonic if now_monotonic is not None else time.monotonic())
+            - float(started_monotonic),
+        )
     records_per_s = observed_records / elapsed_s if elapsed_s > 0 else 0.0
     remaining_records = max(0, int(expected_records) - observed_records)
-    eta_s = remaining_records / records_per_s if records_per_s > 0 else ""
+    if remaining_records == 0:
+        # A finished run has no ETA to guess at; report 0 instead of "unknown".
+        eta_s: float | str = 0.0
+    else:
+        eta_s = remaining_records / records_per_s if records_per_s > 0 else ""
     parse_failure_records = observed_records - ok_records
     return {
+        **run_quality_counters(raw_rows),
         "expected_records": int(expected_records),
         "observed_records": observed_records,
-        "record_completion_rate": observed_records / expected_records if expected_records else math.nan,
+        "record_completion_rate": observed_records / expected_records
+        if expected_records
+        else math.nan,
         "ok_records": ok_records,
         "parse_failure_records": parse_failure_records,
-        "parse_success_rate": ok_records / observed_records if observed_records else math.nan,
-        "parse_failure_rate": parse_failure_records / observed_records if observed_records else 0.0,
+        "parse_success_rate": ok_records / observed_records
+        if observed_records
+        else math.nan,
+        "parse_failure_rate": parse_failure_records / observed_records
+        if observed_records
+        else 0.0,
         "request_error_records": request_error_records,
-        "request_error_rate": request_error_records / observed_records if observed_records else 0.0,
+        "request_error_rate": request_error_records / observed_records
+        if observed_records
+        else 0.0,
         "expected_api_calls": int(expected_api_calls),
         "observed_api_calls": observed_api_calls,
-        "api_call_completion_rate": observed_api_calls / expected_api_calls if expected_api_calls else math.nan,
+        "api_call_completion_rate": observed_api_calls / expected_api_calls
+        if expected_api_calls
+        else math.nan,
         "elapsed_s": elapsed_s,
         "records_per_s": records_per_s,
         "eta_s": eta_s,
@@ -4980,7 +7242,11 @@ def live_run_counters(
 
 
 def _duration_label(seconds: Any) -> str:
-    if seconds == "" or seconds is None or (isinstance(seconds, float) and math.isnan(seconds)):
+    if (
+        seconds == ""
+        or seconds is None
+        or (isinstance(seconds, float) and math.isnan(seconds))
+    ):
         return "unknown"
     total = int(max(0, float(seconds)))
     hours, remainder = divmod(total, 3600)
@@ -5032,14 +7298,25 @@ def warning_events_for_counters(
 ) -> list[dict[str, Any]]:
     emitted_warning_types = emitted_warning_types or set()
     observed_records = int(counters.get("observed_records", 0) or 0)
-    warn_after = int(logging_config.get("warn_after_records", DEFAULT_RUN_LOGGING["warn_after_records"]))
+    warn_after = int(
+        logging_config.get(
+            "warn_after_records", DEFAULT_RUN_LOGGING["warn_after_records"]
+        )
+    )
     if observed_records < warn_after:
         return []
 
     events: list[dict[str, Any]] = []
     parse_failure_rate = float(counters.get("parse_failure_rate", 0.0) or 0.0)
-    parse_threshold = float(logging_config.get("warn_parse_failure_rate", DEFAULT_RUN_LOGGING["warn_parse_failure_rate"]))
-    if "parse_failure_rate" not in emitted_warning_types and parse_failure_rate > parse_threshold:
+    parse_threshold = float(
+        logging_config.get(
+            "warn_parse_failure_rate", DEFAULT_RUN_LOGGING["warn_parse_failure_rate"]
+        )
+    )
+    if (
+        "parse_failure_rate" not in emitted_warning_types
+        and parse_failure_rate > parse_threshold
+    ):
         events.append(
             {
                 "event_type": "warning",
@@ -5052,8 +7329,15 @@ def warning_events_for_counters(
         )
 
     request_error_rate = float(counters.get("request_error_rate", 0.0) or 0.0)
-    request_threshold = float(logging_config.get("warn_request_error_rate", DEFAULT_RUN_LOGGING["warn_request_error_rate"]))
-    if "request_error_rate" not in emitted_warning_types and request_error_rate > request_threshold:
+    request_threshold = float(
+        logging_config.get(
+            "warn_request_error_rate", DEFAULT_RUN_LOGGING["warn_request_error_rate"]
+        )
+    )
+    if (
+        "request_error_rate" not in emitted_warning_types
+        and request_error_rate > request_threshold
+    ):
         events.append(
             {
                 "event_type": "warning",
@@ -5090,8 +7374,14 @@ def provider_preflight(
         extra_body=extra_body,
         batched=False,
     )
-    if resolved_response_format is None and json_mode and structured_output == "none" and not (
-        isinstance(resolved_extra_body, Mapping) and "response_format" in resolved_extra_body
+    if (
+        resolved_response_format is None
+        and json_mode
+        and structured_output == "none"
+        and not (
+            isinstance(resolved_extra_body, Mapping)
+            and "response_format" in resolved_extra_body
+        )
     ):
         resolved_response_format = {"type": "json_object"}
     preflight_job = {
@@ -5117,10 +7407,17 @@ def provider_preflight(
             batched=False,
         )
     )
-    if normalize_structured_output_mode(structured_output, json_mode=json_mode) == "instructor":
-        _, parse_status = parse_instructor_task_response("task1", completion.get("raw_text", ""))
+    if (
+        normalize_structured_output_mode(structured_output, json_mode=json_mode)
+        == "instructor"
+    ):
+        _, parse_status = parse_instructor_task_response(
+            "task1", completion.get("raw_text", "")
+        )
     else:
-        confidence_scale = confidence_scale_for_record({"prompt_version": prompt_version})
+        confidence_scale = confidence_scale_for_record(
+            {"prompt_version": prompt_version}
+        )
         _, parse_status = parse_task_response(
             "task1",
             completion.get("raw_text", ""),
@@ -5170,7 +7467,9 @@ def preflight_profile(
         completion_fn=completion_fn,
     )
     if not preflight["ok"]:
-        raise RuntimeError(f"Provider preflight failed for {profile['profile_id']} / {model}: {preflight}")
+        raise RuntimeError(
+            f"Provider preflight failed for {profile['profile_id']} / {model}: {preflight}"
+        )
     return preflight
 
 
@@ -5183,12 +7482,14 @@ def emit_warning_events(
     events_path: str | Path,
 ) -> None:
     run_id = str(context.get("run_id", ""))
-    for warning_event in warning_events_for_counters(counters, logging_config, emitted_warning_types):
+    for warning_event in warning_events_for_counters(
+        counters, logging_config, emitted_warning_types
+    ):
         emitted_warning_types.add(str(warning_event["warning_type"]))
         warning_event.update(context)
         if logging_config["write_event_jsonl"]:
             append_run_event(events_path, warning_event)
-        print(f"WARNING {run_id}: {warning_event['message']}", flush=True)
+        logger.warning("%s: %s", run_id, warning_event["message"])
 
 
 # =============================================================================
@@ -5200,13 +7501,23 @@ def emit_warning_events(
 # extraction, the UQ method inventory, and figure rendering.
 
 
-def preliminary_result_paths(root: str | Path, variant: str | None = None, dataset_id: str | None = None) -> dict[str, Path]:
+def preliminary_result_paths(
+    root: str | Path, variant: str | None = None, dataset_id: str | None = None
+) -> dict[str, Path]:
     root = Path(root)
     return {
-        "scores": artifact_path(root / "data/processed/uq_scores_preliminary.csv", dataset_id, variant),
-        "summary": artifact_path(root / "data/processed/metrics_summary_preliminary.csv", dataset_id, variant),
-        "progress": artifact_path(root / "data/processed/run_progress_preliminary.csv", dataset_id, variant),
-        "table": artifact_path(root / "outputs/preliminary_results_table.md", dataset_id, variant),
+        "scores": artifact_path(
+            root / "data/processed/uq_scores_preliminary.csv", dataset_id, variant
+        ),
+        "summary": artifact_path(
+            root / "data/processed/metrics_summary_preliminary.csv", dataset_id, variant
+        ),
+        "progress": artifact_path(
+            root / "data/processed/run_progress_preliminary.csv", dataset_id, variant
+        ),
+        "table": artifact_path(
+            root / "outputs/preliminary_results_table.md", dataset_id, variant
+        ),
     }
 
 
@@ -5220,7 +7531,9 @@ def write_preliminary_result_snapshot(
     include_baseline: bool = True,
 ) -> dict[str, Any]:
     paths = preliminary_result_paths(root, variant, dataset_id=dataset_id)
-    scored_benchmark_rows = benchmark_rows_with_current_raw_outputs(benchmark_rows, raw_rows)
+    scored_benchmark_rows = benchmark_rows_with_current_raw_outputs(
+        benchmark_rows, raw_rows
+    )
     scores = build_uq_scores(scored_benchmark_rows, raw_rows)
     if include_baseline:
         scores.extend(build_rule_baseline_scores(scored_benchmark_rows))
@@ -5243,6 +7556,11 @@ def write_preliminary_result_snapshot(
         "valid_n",
         "total_n",
         "parse_failures",
+        "stochastic_complete",
+        "requirement_word_count",
+        "source_word_count",
+        "length_ratio",
+        "completion_tokens",
         "y_true",
         "y_pred",
         "p_yes",
@@ -5264,6 +7582,8 @@ def write_preliminary_result_snapshot(
         "pred_modality",
         "text_modality",
         "text_modality_basis",
+        "text_modality_multi_modal",
+        "text_modality_modals_found",
         "text_modality_parse_status",
         "text_modality_correct",
         "label_text_consistent",
@@ -5314,12 +7634,31 @@ def write_preliminary_result_snapshot(
         "heuristic_text_modality_rate",
         "label_text_consistency",
         "text_over_commitment",
+        "text_over_commitment_n_numerator",
+        "text_over_commitment_n_denominator",
+        "text_over_commitment_n_unknown_excluded",
+        "text_over_commitment_lower_bound",
+        "text_over_commitment_upper_bound",
         "strict_text_over_commitment",
+        "strict_text_over_commitment_n_numerator",
+        "strict_text_over_commitment_n_denominator",
+        "strict_text_over_commitment_n_unknown_excluded",
+        "strict_text_over_commitment_lower_bound",
+        "strict_text_over_commitment_upper_bound",
+        "text_modality_negated_rate",
+        "text_modality_multi_modal_rate",
         "text_under_commitment",
         "text_high_conf_overcommit_80",
         "text_high_conf_overcommit_90",
         "label_correct_text_overcommit_80",
         "label_correct_text_overcommit_90",
+        "mean_requirement_word_count",
+        "mean_length_ratio",
+        "strengthening_rate_by_length_tercile",
+        "mean_requirement_word_count_by_source_modality",
+        "repeated_sample_unanimity",
+        "agreement_n_complete",
+        "agreement_n_incomplete_excluded",
         "parse_failure_rate",
     ]
     write_csv_rows(paths["scores"], scores, fieldnames=score_fields)
@@ -5348,7 +7687,13 @@ def write_preliminary_result_snapshot(
     }
 
 
-def score_base(raw: dict[str, Any], item: dict[str, Any], uq_method: str, valid_n: int, total_n: int) -> dict[str, Any]:
+def score_base(
+    raw: dict[str, Any],
+    item: dict[str, Any],
+    uq_method: str,
+    valid_n: int,
+    total_n: int,
+) -> dict[str, Any]:
     return {
         "run_id": raw.get("run_id", ""),
         "run_group_id": raw.get("run_group_id", ""),
@@ -5365,6 +7710,10 @@ def score_base(raw: dict[str, Any], item: dict[str, Any], uq_method: str, valid_
         "valid_n": valid_n,
         "total_n": total_n,
         "parse_failures": total_n - valid_n,
+        # True when every requested repeated sample parsed. Published
+        # agreement / unanimity metrics are restricted to these rows.
+        "stochastic_complete": bool(total_n > 0 and valid_n == total_n),
+        **answer_length_fields(raw, item),
     }
 
 
@@ -5382,18 +7731,26 @@ def baseline_score_base(item: dict[str, Any], task: str) -> dict[str, Any]:
         "valid_n": 1,
         "total_n": 1,
         "parse_failures": 0,
+        "stochastic_complete": True,
+        **empty_answer_length_fields(),
     }
 
 
-def build_rule_baseline_scores(benchmark_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_rule_baseline_scores(
+    benchmark_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     scores: list[dict[str, Any]] = []
     for item in benchmark_rows:
         predicted_modality = rule_based_source_modality(item["source_statement"])
         if predicted_modality is None:
-            raise ValueError(f"Could not parse source modality for {item.get('item_id')}: {item.get('source_statement')}")
+            raise ValueError(
+                f"Could not parse source modality for {item.get('item_id')}: {item.get('source_statement')}"
+            )
 
         pred_yes = 1 if predicted_modality == "mandatory" else 0
-        task1_distribution = one_hot_distribution("yes" if pred_yes else "no", class_order_for_task("task1"))
+        task1_distribution = one_hot_distribution(
+            "yes" if pred_yes else "no", class_order_for_task("task1")
+        )
         scores.append(
             {
                 **baseline_score_base(item, "task1"),
@@ -5411,7 +7768,9 @@ def build_rule_baseline_scores(benchmark_rows: list[dict[str, Any]]) -> list[dic
         )
 
         correct = 1 if predicted_modality == item["task2_gold_modality"] else 0
-        task2_distribution = one_hot_distribution(predicted_modality, class_order_for_task("task2"))
+        task2_distribution = one_hot_distribution(
+            predicted_modality, class_order_for_task("task2")
+        )
         scores.append(
             {
                 **baseline_score_base(item, "task2"),
@@ -5430,7 +7789,9 @@ def build_rule_baseline_scores(benchmark_rows: list[dict[str, Any]]) -> list[dic
     return scores
 
 
-def prompt_sensitivity_summary(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def prompt_sensitivity_summary(
+    benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     scores = build_uq_scores(benchmark_rows, raw_rows)
     frame = pd.DataFrame.from_records(scores)
     if frame.empty:
@@ -5445,16 +7806,29 @@ def prompt_sensitivity_summary(benchmark_rows: list[dict[str, Any]], raw_rows: l
                 "model": model,
                 "prompt_run_id": run_id,
                 "n": len(task1),
-                "accuracy": accuracy_score(task1["y_true"].astype(int).tolist(), task1["y_pred"].astype(int).tolist()) if not task1.empty else math.nan,
-                "weak_source_high_p_yes_80": high_confidence_overcommitment_rate(group_rows, "task1", 0.80),
-                "weak_source_high_p_yes_90": high_confidence_overcommitment_rate(group_rows, "task1", 0.90),
-                "mean_weak_p_yes": float(pd.to_numeric(weak["p_yes"]).mean()) if not weak.empty else math.nan,
+                "accuracy": accuracy_score(
+                    task1["y_true"].astype(int).tolist(),
+                    task1["y_pred"].astype(int).tolist(),
+                )
+                if not task1.empty
+                else math.nan,
+                "weak_source_high_p_yes_80": high_confidence_overcommitment_rate(
+                    group_rows, "task1", 0.80
+                ),
+                "weak_source_high_p_yes_90": high_confidence_overcommitment_rate(
+                    group_rows, "task1", 0.90
+                ),
+                "mean_weak_p_yes": float(pd.to_numeric(weak["p_yes"]).mean())
+                if not weak.empty
+                else math.nan,
             }
         )
     return rows
 
 
-def task2_prompt_sensitivity_summary(benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def task2_prompt_sensitivity_summary(
+    benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     if not raw_rows:
         return []
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
@@ -5472,7 +7846,12 @@ def task2_prompt_sensitivity_summary(benchmark_rows: list[dict[str, Any]], raw_r
         for raw in group_frame.to_dict(orient="records"):
             item = benchmark_by_item.get(raw.get("item_id"))
             parsed = raw.get("parsed_json")
-            if raw.get("task") != "task2" or not item or raw.get("parse_status") != "ok" or not isinstance(parsed, dict):
+            if (
+                raw.get("task") != "task2"
+                or not item
+                or raw.get("parse_status") != "ok"
+                or not isinstance(parsed, dict)
+            ):
                 continue
             pred_modality = normalize_modality(parsed.get("modality"))
             if pred_modality is None:
@@ -5495,15 +7874,21 @@ def task2_prompt_sensitivity_summary(benchmark_rows: list[dict[str, Any]], raw_r
                     "pred_modality": pred_modality,
                 }
             )
-        nice_rows = [row for row in score_rows if row["gold_modality"] == "nice_to_have"]
-        nice_to_recommended = [row for row in nice_rows if row["pred_modality"] == "recommended"]
+        nice_rows = [
+            row for row in score_rows if row["gold_modality"] == "nice_to_have"
+        ]
+        nice_to_recommended = [
+            row for row in nice_rows if row["pred_modality"] == "recommended"
+        ]
         rows.append(
             {
                 "model": model,
                 "prompt_run_id": run_id,
                 "n": len(group_frame),
                 "valid_n": len(score_rows),
-                "parse_success_rate": len(score_rows) / len(group_frame) if len(group_frame) else math.nan,
+                "parse_success_rate": len(score_rows) / len(group_frame)
+                if len(group_frame)
+                else math.nan,
                 "accuracy": accuracy_score(
                     [row["gold_modality"] for row in score_rows],
                     [row["pred_modality"] for row in score_rows],
@@ -5517,16 +7902,29 @@ def task2_prompt_sensitivity_summary(benchmark_rows: list[dict[str, Any]], raw_r
                 )
                 if nice_rows
                 else math.nan,
-                "nice_to_have_to_recommended_rate": len(nice_to_recommended) / len(nice_rows) if nice_rows else math.nan,
-                "over_commitment": overcommitment_summary_metrics(score_rows)["over_commitment"] if score_rows else math.nan,
-                "high_conf_overcommit_80": high_confidence_overcommitment_rate(score_rows, "task2", 0.80),
-                "high_conf_overcommit_90": high_confidence_overcommitment_rate(score_rows, "task2", 0.90),
+                "nice_to_have_to_recommended_rate": len(nice_to_recommended)
+                / len(nice_rows)
+                if nice_rows
+                else math.nan,
+                "over_commitment": overcommitment_summary_metrics(score_rows)[
+                    "over_commitment"
+                ]
+                if score_rows
+                else math.nan,
+                "high_conf_overcommit_80": high_confidence_overcommitment_rate(
+                    score_rows, "task2", 0.80
+                ),
+                "high_conf_overcommit_90": high_confidence_overcommitment_rate(
+                    score_rows, "task2", 0.90
+                ),
             }
         )
     return rows
 
 
-def weak_modality_probe_summary(probe_items: list[dict[str, Any]], raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def weak_modality_probe_summary(
+    probe_items: list[dict[str, Any]], raw_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     if not raw_rows:
         return []
     item_by_id = {row["item_id"]: row for row in probe_items}
@@ -5551,7 +7949,12 @@ def weak_modality_probe_summary(probe_items: list[dict[str, Any]], raw_rows: lis
         for raw in group_frame.to_dict(orient="records"):
             item = item_by_id.get(str(raw.get("item_id", "")))
             parsed = raw.get("parsed_json")
-            if raw.get("task") != "task2" or not item or raw.get("parse_status") != "ok" or not isinstance(parsed, dict):
+            if (
+                raw.get("task") != "task2"
+                or not item
+                or raw.get("parse_status") != "ok"
+                or not isinstance(parsed, dict)
+            ):
                 continue
             pred_modality = normalize_modality(parsed.get("modality"))
             if pred_modality is None:
@@ -5571,7 +7974,8 @@ def weak_modality_probe_summary(probe_items: list[dict[str, Any]], raw_rows: lis
         over = [
             row
             for row in valid_predictions
-            if ORDINAL_STRENGTH[row["pred_modality"]] > ORDINAL_STRENGTH[row["gold_modality"]]
+            if ORDINAL_STRENGTH[row["pred_modality"]]
+            > ORDINAL_STRENGTH[row["gold_modality"]]
         ]
         row = {
             "model": model,
@@ -5580,37 +7984,76 @@ def weak_modality_probe_summary(probe_items: list[dict[str, Any]], raw_rows: lis
             "sample_kind": sample_kind,
             "n": len(group_frame),
             "valid_n": valid_n,
-            "parse_success_rate": valid_n / len(group_frame) if len(group_frame) else math.nan,
-            "accuracy": (pred_counts.get("nice_to_have", 0) / valid_n) if valid_n else math.nan,
-            "to_recommended_rate": (pred_counts.get("recommended", 0) / valid_n) if valid_n else math.nan,
+            "parse_success_rate": valid_n / len(group_frame)
+            if len(group_frame)
+            else math.nan,
+            "accuracy": (pred_counts.get("nice_to_have", 0) / valid_n)
+            if valid_n
+            else math.nan,
+            "to_recommended_rate": (pred_counts.get("recommended", 0) / valid_n)
+            if valid_n
+            else math.nan,
             "over_commitment": len(over) / valid_n if valid_n else math.nan,
             "high_conf_overcommit_80": (
-                len([row for row in over if row["confidence"] >= 0.80]) / valid_n if valid_n else math.nan
+                len([row for row in over if row["confidence"] >= 0.80]) / valid_n
+                if valid_n
+                else math.nan
             ),
             "high_conf_overcommit_90": (
-                len([row for row in over if row["confidence"] >= 0.90]) / valid_n if valid_n else math.nan
+                len([row for row in over if row["confidence"] >= 0.90]) / valid_n
+                if valid_n
+                else math.nan
             ),
-            "pred_mandatory_rate": pred_counts.get("mandatory", 0) / valid_n if valid_n else math.nan,
-            "pred_recommended_rate": pred_counts.get("recommended", 0) / valid_n if valid_n else math.nan,
-            "pred_optional_rate": pred_counts.get("optional", 0) / valid_n if valid_n else math.nan,
-            "pred_nice_to_have_rate": pred_counts.get("nice_to_have", 0) / valid_n if valid_n else math.nan,
-            "mean_confidence": float(np.mean([row["confidence"] for row in valid_predictions])) if valid_predictions else math.nan,
+            "pred_mandatory_rate": pred_counts.get("mandatory", 0) / valid_n
+            if valid_n
+            else math.nan,
+            "pred_recommended_rate": pred_counts.get("recommended", 0) / valid_n
+            if valid_n
+            else math.nan,
+            "pred_optional_rate": pred_counts.get("optional", 0) / valid_n
+            if valid_n
+            else math.nan,
+            "pred_nice_to_have_rate": pred_counts.get("nice_to_have", 0) / valid_n
+            if valid_n
+            else math.nan,
+            "mean_confidence": float(
+                np.mean([row["confidence"] for row in valid_predictions])
+            )
+            if valid_predictions
+            else math.nan,
         }
         rows.append(row)
-    return sorted(rows, key=lambda row: (str(row["model"]), str(row["run_id"]), str(row["sample_kind"]), str(row["template_id"])))
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row["model"]),
+            str(row["run_id"]),
+            str(row["sample_kind"]),
+            str(row["template_id"]),
+        ),
+    )
 
 
-def write_weak_modality_probe_summary(summary_rows: list[dict[str, Any]], output_dir: str | Path, suffix: str = "") -> dict[str, Path]:
+def write_weak_modality_probe_summary(
+    summary_rows: list[dict[str, Any]], output_dir: str | Path, suffix: str = ""
+) -> dict[str, Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / f"weak_modality_probe_summary{suffix}.csv"
     markdown_path = output_dir / f"weak_modality_probe_summary{suffix}.md"
-    write_csv_rows(csv_path, summary_rows, fieldnames=WEAK_MODALITY_PROBE_SUMMARY_FIELDS)
-    markdown_path.write_text(markdown_table(summary_rows, WEAK_MODALITY_PROBE_SUMMARY_FIELDS) + "\n", encoding="utf-8")
+    write_csv_rows(
+        csv_path, summary_rows, fieldnames=WEAK_MODALITY_PROBE_SUMMARY_FIELDS
+    )
+    markdown_path.write_text(
+        markdown_table(summary_rows, WEAK_MODALITY_PROBE_SUMMARY_FIELDS) + "\n",
+        encoding="utf-8",
+    )
     return {"csv": csv_path, "markdown": markdown_path}
 
 
-def grouped(rows: Iterable[dict[str, Any]], keys: list[str]) -> dict[tuple[Any, ...], list[dict[str, Any]]]:
+def grouped(
+    rows: Iterable[dict[str, Any]], keys: list[str]
+) -> dict[tuple[Any, ...], list[dict[str, Any]]]:
     frame = pd.DataFrame.from_records(list(rows))
     if frame.empty:
         return {}
@@ -5649,15 +8092,27 @@ def overcommitment_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, floa
         "over_commitment": over / total,
         "under_commitment": under / total,
         "over_commitment_severity_all": severity_sum / total,
-        "over_commitment_severity_given_overcommitment": (severity_sum / over) if over else math.nan,
+        "over_commitment_severity_given_overcommitment": (severity_sum / over)
+        if over
+        else math.nan,
     }
 
 
-def unsupported_mandatory_acceptance_rate(rows: list[dict[str, Any]], threshold: float) -> float:
-    weak_rows = [row for row in rows if str(row.get("task", "")) == "task1" and int(row["y_true"]) == 0]
+def unsupported_mandatory_acceptance_rate(
+    rows: list[dict[str, Any]], threshold: float
+) -> float:
+    weak_rows = [
+        row
+        for row in rows
+        if str(row.get("task", "")) == "task1" and int(row["y_true"]) == 0
+    ]
     if not weak_rows:
         return math.nan
-    accepted = [row for row in weak_rows if row.get("p_yes") != "" and float(row["p_yes"]) >= threshold]
+    accepted = [
+        row
+        for row in weak_rows
+        if row.get("p_yes") != "" and float(row["p_yes"]) >= threshold
+    ]
     return len(accepted) / len(weak_rows)
 
 
@@ -5671,7 +8126,8 @@ def task2_high_confidence_overcommitment_rate(
         task_rows = [
             row
             for row in task_rows
-            if ORDINAL_STRENGTH[str(row["gold_modality"])] < max(ORDINAL_STRENGTH.values())
+            if ORDINAL_STRENGTH[str(row["gold_modality"])]
+            < max(ORDINAL_STRENGTH.values())
         ]
     elif denominator != "all":
         raise ValueError(f"Unknown Task 2 high-confidence denominator: {denominator}")
@@ -5686,11 +8142,14 @@ def task2_high_confidence_overcommitment_rate(
     return len(over) / len(task_rows)
 
 
-def weak_strengthening_rate(rows: list[dict[str, Any]], threshold: float | None = None) -> float:
+def weak_strengthening_rate(
+    rows: list[dict[str, Any]], threshold: float | None = None
+) -> float:
     weak_rows = [
         row
         for row in rows
-        if str(row.get("task", "")) == "task2" and str(row.get("gold_modality", "")) == "nice_to_have"
+        if str(row.get("task", "")) == "task2"
+        and str(row.get("gold_modality", "")) == "nice_to_have"
     ]
     if not weak_rows:
         return math.nan
@@ -5705,7 +8164,9 @@ def weak_strengthening_rate(rows: list[dict[str, Any]], threshold: float | None 
     return len(strengthened) / len(weak_rows)
 
 
-def label_correct_text_overcommit_rate(rows: list[dict[str, Any]], threshold: float | None = None) -> float:
+def label_correct_text_overcommit_rate(
+    rows: list[dict[str, Any]], threshold: float | None = None
+) -> float:
     label_correct_rows = [
         row
         for row in rows
@@ -5727,22 +8188,29 @@ def weak_modality_recall(rows: list[dict[str, Any]]) -> float:
     weak_rows = [
         row
         for row in rows
-        if str(row.get("task", "")) == "task2" and str(row.get("gold_modality", "")) == "nice_to_have"
+        if str(row.get("task", "")) == "task2"
+        and str(row.get("gold_modality", "")) == "nice_to_have"
     ]
     if not weak_rows:
         return math.nan
-    preserved = [row for row in weak_rows if str(row.get("pred_modality", "")) == "nice_to_have"]
+    preserved = [
+        row for row in weak_rows if str(row.get("pred_modality", "")) == "nice_to_have"
+    ]
     return len(preserved) / len(weak_rows)
 
 
-def high_confidence_overcommitment_rate(rows: list[dict[str, Any]], task: str, threshold: float) -> float:
+def high_confidence_overcommitment_rate(
+    rows: list[dict[str, Any]], task: str, threshold: float
+) -> float:
     task_rows = [row for row in rows if str(row.get("task", "")) == task]
     if not task_rows:
         return math.nan
     if task == "task1":
         return unsupported_mandatory_acceptance_rate(task_rows, threshold)
     if task == "task2":
-        return task2_high_confidence_overcommitment_rate(task_rows, threshold, denominator="all")
+        return task2_high_confidence_overcommitment_rate(
+            task_rows, threshold, denominator="all"
+        )
     if task == "task3":
         return math.nan
     return math.nan
@@ -5758,66 +8226,379 @@ def is_truthy_strict(value: Any) -> bool:
 _truthy = is_truthy_strict
 
 
+TEXT_MODALITY_COVERAGE_METRICS = ("text_over_commitment", "strict_text_over_commitment")
+TEXT_MODALITY_COVERAGE_SUFFIXES = (
+    "_n_numerator",
+    "_n_denominator",
+    "_n_unknown_excluded",
+    "_lower_bound",
+    "_upper_bound",
+)
+LENGTH_TERCILE_COUNT = 3
+
+
+def empty_text_modality_summary_metrics() -> dict[str, float | str]:
+    keys = [
+        "text_modality_accuracy",
+        "text_modality_accuracy_all",
+        "text_modality_parse_coverage",
+        "heuristic_text_modality_rate",
+        "label_text_consistency",
+        "text_over_commitment",
+        "strict_text_over_commitment",
+        "text_under_commitment",
+        "text_high_conf_overcommit_80",
+        "text_high_conf_overcommit_90",
+        "label_correct_text_overcommit_80",
+        "label_correct_text_overcommit_90",
+        "text_modality_multi_modal_rate",
+        "text_modality_negated_rate",
+    ]
+    keys += [
+        f"{metric}{suffix}"
+        for metric in TEXT_MODALITY_COVERAGE_METRICS
+        for suffix in TEXT_MODALITY_COVERAGE_SUFFIXES
+    ]
+    return {key: "" for key in keys}
+
+
+def _coverage_adjusted_bounds(
+    metric: str,
+    numerator: int,
+    denominator: int,
+    unknown_excluded: int,
+) -> dict[str, float | str]:
+    """Worst/best-case bounds for a rate whose denominator drops unknown text.
+
+    The published rate uses ``denominator`` (rows whose text modality parsed).
+    ``*_lower_bound`` charges every unknown row as non-strengthening and
+    ``*_upper_bound`` charges every unknown row as strengthening, both over the
+    coverage-complete denominator ``denominator + unknown_excluded``.
+    """
+    full = denominator + unknown_excluded
+    return {
+        f"{metric}_n_numerator": numerator,
+        f"{metric}_n_denominator": denominator,
+        f"{metric}_n_unknown_excluded": unknown_excluded,
+        f"{metric}_lower_bound": (numerator / full) if full else "",
+        f"{metric}_upper_bound": ((numerator + unknown_excluded) / full)
+        if full
+        else "",
+    }
+
+
 def text_modality_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, float | str]:
+    """Text-modality drift metrics with coverage-adjusted bounds.
+
+    The headline ``text_over_commitment`` / ``strict_text_over_commitment``
+    rates are computed over rows whose generated text yielded a modality
+    (``text_modality_parse_status == "ok"``). Rows whose text modality is
+    ``unknown`` or ``negated`` are excluded from that denominator, so each
+    metric is also reported with its numerator, denominator, the number of
+    excluded unknown rows, and the worst/best-case bounds that put every
+    excluded row on one side.
+    """
     diagnostic_rows = [
         row
         for row in rows
         if str(row.get("text_modality_parse_status", "")) in {"ok", "unknown"}
     ]
     if not diagnostic_rows:
-        return {
-            "text_modality_accuracy": "",
-            "text_modality_accuracy_all": "",
-            "text_modality_parse_coverage": "",
-            "heuristic_text_modality_rate": "",
-            "label_text_consistency": "",
-            "text_over_commitment": "",
-            "strict_text_over_commitment": "",
-            "text_under_commitment": "",
-            "text_high_conf_overcommit_80": "",
-            "text_high_conf_overcommit_90": "",
-            "label_correct_text_overcommit_80": "",
-            "label_correct_text_overcommit_90": "",
-        }
+        return empty_text_modality_summary_metrics()
     total_rows = len(diagnostic_rows)
-    text_rows = [row for row in diagnostic_rows if str(row.get("text_modality_parse_status", "")) == "ok"]
+    text_rows = [
+        row
+        for row in diagnostic_rows
+        if str(row.get("text_modality_parse_status", "")) == "ok"
+    ]
+    unknown_excluded = total_rows - len(text_rows)
     coverage = len(text_rows) / total_rows
     correct_over_all = (
-        sum(1 for row in diagnostic_rows if _truthy(row.get("text_modality_correct"))) / total_rows
+        sum(1 for row in diagnostic_rows if _truthy(row.get("text_modality_correct")))
+        / total_rows
+    )
+    negated_rate = (
+        sum(
+            1
+            for row in diagnostic_rows
+            if str(row.get("text_modality", "")) == "negated"
+        )
+        / total_rows
+    )
+    multi_modal_rate = (
+        sum(
+            1
+            for row in diagnostic_rows
+            if _truthy(row.get("text_modality_multi_modal"))
+        )
+        / total_rows
     )
     if not text_rows:
         return {
-            "text_modality_accuracy": "",
+            **empty_text_modality_summary_metrics(),
             "text_modality_accuracy_all": correct_over_all,
             "text_modality_parse_coverage": coverage,
-            "heuristic_text_modality_rate": "",
-            "label_text_consistency": "",
-            "text_over_commitment": "",
-            "strict_text_over_commitment": "",
-            "text_under_commitment": "",
-            "text_high_conf_overcommit_80": "",
-            "text_high_conf_overcommit_90": "",
-            "label_correct_text_overcommit_80": label_correct_text_overcommit_rate(diagnostic_rows, 0.80),
-            "label_correct_text_overcommit_90": label_correct_text_overcommit_rate(diagnostic_rows, 0.90),
+            "text_modality_negated_rate": negated_rate,
+            "text_modality_multi_modal_rate": multi_modal_rate,
+            "label_correct_text_overcommit_80": label_correct_text_overcommit_rate(
+                diagnostic_rows, 0.80
+            ),
+            "label_correct_text_overcommit_90": label_correct_text_overcommit_rate(
+                diagnostic_rows, 0.90
+            ),
+            **_coverage_adjusted_bounds("text_over_commitment", 0, 0, unknown_excluded),
+            **_coverage_adjusted_bounds(
+                "strict_text_over_commitment", 0, 0, unknown_excluded
+            ),
         }
     total = len(text_rows)
+    broad_numerator = sum(1 for row in text_rows if _truthy(row.get("text_overcommit")))
+    strict_numerator = sum(
+        1 for row in text_rows if _truthy(row.get("strict_text_overcommit"))
+    )
     return {
-        "text_modality_accuracy": sum(1 for row in text_rows if _truthy(row.get("text_modality_correct"))) / total,
+        "text_modality_accuracy": sum(
+            1 for row in text_rows if _truthy(row.get("text_modality_correct"))
+        )
+        / total,
         "text_modality_accuracy_all": correct_over_all,
         "text_modality_parse_coverage": coverage,
         "heuristic_text_modality_rate": sum(
-            1 for row in text_rows if str(row.get("text_modality_basis", "")) == "heuristic_system_verb"
+            1
+            for row in text_rows
+            if str(row.get("text_modality_basis", "")) == "heuristic_system_verb"
         )
         / total,
-        "label_text_consistency": sum(1 for row in text_rows if _truthy(row.get("label_text_consistent"))) / total,
-        "text_over_commitment": sum(1 for row in text_rows if _truthy(row.get("text_overcommit"))) / total,
-        "strict_text_over_commitment": sum(1 for row in text_rows if _truthy(row.get("strict_text_overcommit"))) / total,
-        "text_under_commitment": sum(1 for row in text_rows if _truthy(row.get("text_undercommit"))) / total,
-        "text_high_conf_overcommit_80": sum(1 for row in text_rows if _truthy(row.get("text_high_conf_overcommit_80"))) / total,
-        "text_high_conf_overcommit_90": sum(1 for row in text_rows if _truthy(row.get("text_high_conf_overcommit_90"))) / total,
-        "label_correct_text_overcommit_80": label_correct_text_overcommit_rate(diagnostic_rows, 0.80),
-        "label_correct_text_overcommit_90": label_correct_text_overcommit_rate(diagnostic_rows, 0.90),
+        "label_text_consistency": sum(
+            1 for row in text_rows if _truthy(row.get("label_text_consistent"))
+        )
+        / total,
+        "text_over_commitment": broad_numerator / total,
+        "strict_text_over_commitment": strict_numerator / total,
+        "text_under_commitment": sum(
+            1 for row in text_rows if _truthy(row.get("text_undercommit"))
+        )
+        / total,
+        "text_high_conf_overcommit_80": sum(
+            1 for row in text_rows if _truthy(row.get("text_high_conf_overcommit_80"))
+        )
+        / total,
+        "text_high_conf_overcommit_90": sum(
+            1 for row in text_rows if _truthy(row.get("text_high_conf_overcommit_90"))
+        )
+        / total,
+        "label_correct_text_overcommit_80": label_correct_text_overcommit_rate(
+            diagnostic_rows, 0.80
+        ),
+        "label_correct_text_overcommit_90": label_correct_text_overcommit_rate(
+            diagnostic_rows, 0.90
+        ),
+        "text_modality_negated_rate": negated_rate,
+        "text_modality_multi_modal_rate": multi_modal_rate,
+        **_coverage_adjusted_bounds(
+            "text_over_commitment", broad_numerator, total, unknown_excluded
+        ),
+        **_coverage_adjusted_bounds(
+            "strict_text_over_commitment", strict_numerator, total, unknown_excluded
+        ),
     }
+
+
+def _row_variation_ratio(row: Mapping[str, Any]) -> float | None:
+    """Variation ratio (1 - p_majority) for one repeated-sample score row."""
+    if str(row.get("uncertainty_measure", "")) == "variation_ratio":
+        try:
+            return float(row["uncertainty_score"])
+        except (KeyError, TypeError, ValueError):
+            pass
+    raw_distribution = row.get("label_distribution", "")
+    if not raw_distribution:
+        return None
+    try:
+        distribution = (
+            json.loads(raw_distribution)
+            if isinstance(raw_distribution, str)
+            else dict(raw_distribution)
+        )
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    values = [float(value) for value in distribution.values()] if distribution else []
+    return 1.0 - max(values) if values else None
+
+
+AGREEMENT_CONSISTENCY_METHODS = {
+    "label_self_consistency",
+    "modality_consistency",
+    "relation_consistency",
+}
+
+
+def repeated_sample_agreement_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Repeated-sample agreement restricted to coverage-complete rows.
+
+    A published agreement / unanimity number may only be computed over items
+    where every requested stochastic sample parsed (``stochastic_complete``).
+    Items with ``valid_n < total_n`` are excluded and counted in
+    ``agreement_n_incomplete_excluded`` so the reported share is auditable.
+    """
+    repeated: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            total_n = int(float(row.get("total_n", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+        if total_n <= 1:
+            continue
+        repeated.append(row)
+    consistency_rows = [
+        row
+        for row in repeated
+        if str(row.get("uq_method", "")) in AGREEMENT_CONSISTENCY_METHODS
+    ]
+    if consistency_rows:
+        repeated = consistency_rows
+    complete = [
+        row for row in repeated if is_truthy_strict(row.get("stochastic_complete"))
+    ]
+    excluded = len(repeated) - len(complete)
+    if not complete:
+        return {
+            "repeated_sample_unanimity": "",
+            "mean_repeated_sample_agreement": "",
+            "agreement_n_complete": 0,
+            "agreement_n_incomplete_excluded": excluded,
+        }
+    variation_ratios = [_row_variation_ratio(row) for row in complete]
+    usable = [value for value in variation_ratios if value is not None]
+    if not usable:
+        return {
+            "repeated_sample_unanimity": "",
+            "mean_repeated_sample_agreement": "",
+            "agreement_n_complete": len(complete),
+            "agreement_n_incomplete_excluded": excluded,
+        }
+    return {
+        "repeated_sample_unanimity": sum(1 for value in usable if value <= 1e-12)
+        / len(usable),
+        "mean_repeated_sample_agreement": sum(1.0 - value for value in usable)
+        / len(usable),
+        "agreement_n_complete": len(complete),
+        "agreement_n_incomplete_excluded": excluded,
+    }
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in {"", None}:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(number) else number
+
+
+def empty_length_bloat_metrics() -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "mean_requirement_word_count": "",
+        "mean_source_word_count": "",
+        "mean_length_ratio": "",
+        "mean_completion_tokens": "",
+        "length_tercile_bounds": "",
+        "strengthening_rate_by_length_tercile": "",
+    }
+    for index in range(1, LENGTH_TERCILE_COUNT + 1):
+        metrics[f"length_tercile_{index}_n"] = ""
+        metrics[f"length_tercile_{index}_mean_length_ratio"] = ""
+        metrics[f"length_tercile_{index}_text_over_commitment"] = ""
+        metrics[f"length_tercile_{index}_strict_text_over_commitment"] = ""
+    for modality in MODALITIES:
+        metrics[f"mean_requirement_word_count_{modality}"] = ""
+    metrics["mean_requirement_word_count_by_source_modality"] = ""
+    return metrics
+
+
+def length_bloat_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Answer-length / bloat metrics and the length-vs-strengthening breakdown.
+
+    Rows are bucketed into ``LENGTH_TERCILE_COUNT`` equal-count terciles of
+    ``length_ratio`` (generated requirement words / source statement words) and
+    the broad and strict text-strengthening rates are reported per bucket, so a
+    bloat/strengthening interaction is visible rather than pooled away.
+    """
+    metrics = empty_length_bloat_metrics()
+    word_counts = [_float_or_none(row.get("requirement_word_count")) for row in rows]
+    word_counts = [value for value in word_counts if value is not None]
+    source_counts = [_float_or_none(row.get("source_word_count")) for row in rows]
+    source_counts = [value for value in source_counts if value is not None]
+    completion_tokens = [_float_or_none(row.get("completion_tokens")) for row in rows]
+    completion_tokens = [value for value in completion_tokens if value is not None]
+    if word_counts:
+        metrics["mean_requirement_word_count"] = sum(word_counts) / len(word_counts)
+    if source_counts:
+        metrics["mean_source_word_count"] = sum(source_counts) / len(source_counts)
+    if completion_tokens:
+        metrics["mean_completion_tokens"] = sum(completion_tokens) / len(
+            completion_tokens
+        )
+
+    by_modality: dict[str, list[float]] = {modality: [] for modality in MODALITIES}
+    for row in rows:
+        value = _float_or_none(row.get("requirement_word_count"))
+        modality = str(row.get("source_modality", ""))
+        if value is not None and modality in by_modality:
+            by_modality[modality].append(value)
+    parts = []
+    for modality, values in by_modality.items():
+        if values:
+            mean_value = sum(values) / len(values)
+            metrics[f"mean_requirement_word_count_{modality}"] = mean_value
+            parts.append(f"{modality}={mean_value:.2f}")
+    metrics["mean_requirement_word_count_by_source_modality"] = "|".join(parts)
+
+    ratio_rows = [(row, _float_or_none(row.get("length_ratio"))) for row in rows]
+    ratio_rows = [(row, ratio) for row, ratio in ratio_rows if ratio is not None]
+    if not ratio_rows:
+        return metrics
+    ratios = [ratio for _, ratio in ratio_rows]
+    metrics["mean_length_ratio"] = sum(ratios) / len(ratios)
+    ratio_rows.sort(key=lambda pair: pair[1])
+    size = len(ratio_rows)
+    bucket_parts = []
+    bounds = []
+    for index in range(LENGTH_TERCILE_COUNT):
+        low = index * size // LENGTH_TERCILE_COUNT
+        high = (index + 1) * size // LENGTH_TERCILE_COUNT
+        bucket = ratio_rows[low:high]
+        label = f"t{index + 1}"
+        if not bucket:
+            bucket_parts.append(f"{label}:n=0")
+            continue
+        bucket_ratios = [ratio for _, ratio in bucket]
+        bounds.append(f"{label}:[{min(bucket_ratios):.3f},{max(bucket_ratios):.3f}]")
+        parsed = [
+            row
+            for row, _ in bucket
+            if str(row.get("text_modality_parse_status", "")) == "ok"
+        ]
+        denominator = len(parsed)
+        broad = sum(1 for row in parsed if _truthy(row.get("text_overcommit")))
+        strict = sum(1 for row in parsed if _truthy(row.get("strict_text_overcommit")))
+        metrics[f"length_tercile_{index + 1}_n"] = denominator
+        metrics[f"length_tercile_{index + 1}_mean_length_ratio"] = sum(
+            bucket_ratios
+        ) / len(bucket_ratios)
+        broad_rate = (broad / denominator) if denominator else ""
+        strict_rate = (strict / denominator) if denominator else ""
+        metrics[f"length_tercile_{index + 1}_text_over_commitment"] = broad_rate
+        metrics[f"length_tercile_{index + 1}_strict_text_over_commitment"] = strict_rate
+        broad_text = f"{broad_rate:.4f}" if broad_rate != "" else ""
+        strict_text = f"{strict_rate:.4f}" if strict_rate != "" else ""
+        bucket_parts.append(
+            f"{label}:n={denominator},broad={broad_text},strict={strict_text}"
+        )
+    metrics["length_tercile_bounds"] = "|".join(bounds)
+    metrics["strengthening_rate_by_length_tercile"] = "|".join(bucket_parts)
+    return metrics
 
 
 def qualitative_overcommitment_examples(
@@ -5880,7 +8661,10 @@ def qualitative_overcommitment_examples(
                     "why_it_matters": "extracted modality is stronger than source",
                 }
             )
-    return sorted(examples, key=lambda row: (-float(row["risk_score"]), row["model"], row["seed_id"]))[:limit]
+    return sorted(
+        examples,
+        key=lambda row: (-float(row["risk_score"]), row["model"], row["seed_id"]),
+    )[:limit]
 
 
 def write_qualitative_overcommitment_examples(
@@ -5891,7 +8675,9 @@ def write_qualitative_overcommitment_examples(
     limit: int = 5,
     threshold: float = 0.80,
 ) -> dict[str, Path]:
-    examples = qualitative_overcommitment_examples(scores, benchmark_rows, limit=limit, threshold=threshold)
+    examples = qualitative_overcommitment_examples(
+        scores, benchmark_rows, limit=limit, threshold=threshold
+    )
     columns = [
         "risk_score",
         "model",
@@ -5912,7 +8698,12 @@ def write_qualitative_overcommitment_examples(
     csv_path = output_dir / f"qualitative_overcommitment_examples{suffix}.csv"
     markdown_path = output_dir / f"qualitative_overcommitment_examples{suffix}.md"
     frame.to_csv(csv_path, index=False)
-    markdown_path.write_text(frame.to_markdown(index=False) + "\n" if not frame.empty else "_No high-confidence over-commitment examples._\n", encoding="utf-8")
+    markdown_path.write_text(
+        frame.to_markdown(index=False) + "\n"
+        if not frame.empty
+        else "_No high-confidence over-commitment examples._\n",
+        encoding="utf-8",
+    )
     return {"csv": csv_path, "markdown": markdown_path}
 
 
@@ -5975,7 +8766,9 @@ def _error_label_for_score_row(row: Mapping[str, Any]) -> int:
     return _error_label(task, int(row.get("y_true", 0)), 0)
 
 
-def _seed_split(seed_ids: Iterable[Any], calibration_fraction: float = ACSE_CALIBRATION_FRACTION) -> set[str]:
+def _seed_split(
+    seed_ids: Iterable[Any], calibration_fraction: float = ACSE_CALIBRATION_FRACTION
+) -> set[str]:
     unique = sorted({str(seed_id) for seed_id in seed_ids if str(seed_id)})
     if not unique:
         return set()
@@ -5984,7 +8777,13 @@ def _seed_split(seed_ids: Iterable[Any], calibration_fraction: float = ACSE_CALI
     rng.shuffle(shuffled)
     if len(shuffled) == 1:
         return {shuffled[0]}
-    calibration_n = max(1, min(len(shuffled) - 1, int(math.ceil(len(shuffled) * float(calibration_fraction)))))
+    calibration_n = max(
+        1,
+        min(
+            len(shuffled) - 1,
+            int(math.ceil(len(shuffled) * float(calibration_fraction))),
+        ),
+    )
     return set(shuffled[:calibration_n])
 
 
@@ -6001,7 +8800,9 @@ def acse_normalized_score_rows(
     normalized_rows: list[dict[str, Any]] = []
     group_keys = ["run_id", "model", "task", "semantic_embedding_backend"]
     for key, group_rows in grouped(acse_rows, group_keys).items():
-        raw_scores = [_float_or_nan(row.get("uncertainty_score", "")) for row in group_rows]
+        raw_scores = [
+            _float_or_nan(row.get("uncertainty_score", "")) for row in group_rows
+        ]
         valid_scores = [score for score in raw_scores if not math.isnan(score)]
         if not valid_scores:
             continue
@@ -6014,8 +8815,16 @@ def acse_normalized_score_rows(
         )
         for row in group_rows:
             raw_score = _float_or_nan(row.get("uncertainty_score", ""))
-            normalized = 0.0 if span <= 1e-12 else min(1.0, max(0.0, (raw_score - raw_min) / span))
-            split = "calibration" if str(row.get("seed_id", "")) in calibration_seed_ids else "evaluation"
+            normalized = (
+                0.0
+                if span <= 1e-12
+                else min(1.0, max(0.0, (raw_score - raw_min) / span))
+            )
+            split = (
+                "calibration"
+                if str(row.get("seed_id", "")) in calibration_seed_ids
+                else "evaluation"
+            )
             if not calibration_seed_ids:
                 split = "calibration"
             normalized_rows.append(
@@ -6041,10 +8850,18 @@ def acse_normalized_score_rows(
                     "acse_calibration_split": split,
                     "semantic_cluster_count": row.get("semantic_cluster_count", ""),
                     "semantic_cluster_entropy": row.get("semantic_cluster_entropy", ""),
-                    "semantic_cluster_variation_ratio": row.get("semantic_cluster_variation_ratio", ""),
-                    "semantic_dominant_cluster_share": row.get("semantic_dominant_cluster_share", ""),
-                    "semantic_mean_pairwise_distance": row.get("semantic_mean_pairwise_distance", ""),
-                    "semantic_dominant_cluster_mean_distance": row.get("semantic_dominant_cluster_mean_distance", ""),
+                    "semantic_cluster_variation_ratio": row.get(
+                        "semantic_cluster_variation_ratio", ""
+                    ),
+                    "semantic_dominant_cluster_share": row.get(
+                        "semantic_dominant_cluster_share", ""
+                    ),
+                    "semantic_mean_pairwise_distance": row.get(
+                        "semantic_mean_pairwise_distance", ""
+                    ),
+                    "semantic_dominant_cluster_mean_distance": row.get(
+                        "semantic_dominant_cluster_mean_distance", ""
+                    ),
                 }
             )
     return sorted(
@@ -6058,7 +8875,9 @@ def acse_normalized_score_rows(
     )
 
 
-def _accepted_error_rate(rows: list[dict[str, Any]], threshold: float) -> tuple[int, float, float]:
+def _accepted_error_rate(
+    rows: list[dict[str, Any]], threshold: float
+) -> tuple[int, float, float]:
     accepted = [
         row
         for row in rows
@@ -6094,13 +8913,19 @@ def _select_threshold_for_error_target(
         {
             _float_or_nan(row.get("acse_normalized_uncertainty_score", ""))
             for row in rows
-            if not math.isnan(_float_or_nan(row.get("acse_normalized_uncertainty_score", "")))
+            if not math.isnan(
+                _float_or_nan(row.get("acse_normalized_uncertainty_score", ""))
+            )
         }
     )
     selected: float | None = None
     for threshold in candidates:
         accepted_n, _, error_rate = _accepted_error_rate(rows, threshold)
-        if accepted_n and not math.isnan(error_rate) and error_rate <= float(target_error_rate) + 1e-12:
+        if (
+            accepted_n
+            and not math.isnan(error_rate)
+            and error_rate <= float(target_error_rate) + 1e-12
+        ):
             selected = threshold
     return selected
 
@@ -6112,9 +8937,19 @@ def acse_calibration_diagnostic_rows(
     rows: list[dict[str, Any]] = []
     group_keys = ["run_id", "model", "task", "semantic_embedding_backend"]
     for key, group_rows in grouped(normalized_rows, group_keys).items():
-        calibration_rows = [row for row in group_rows if str(row.get("acse_calibration_split", "")) == "calibration"]
-        evaluation_rows = [row for row in group_rows if str(row.get("acse_calibration_split", "")) == "evaluation"]
-        evaluation_mode = "heldout_seed_split" if evaluation_rows else "resubstitution_no_heldout"
+        calibration_rows = [
+            row
+            for row in group_rows
+            if str(row.get("acse_calibration_split", "")) == "calibration"
+        ]
+        evaluation_rows = [
+            row
+            for row in group_rows
+            if str(row.get("acse_calibration_split", "")) == "evaluation"
+        ]
+        evaluation_mode = (
+            "heldout_seed_split" if evaluation_rows else "resubstitution_no_heldout"
+        )
         evaluation_source_rows = evaluation_rows or calibration_rows
         all_errors = [int(row["prediction_error"]) for row in group_rows]
         all_scores = [
@@ -6123,21 +8958,37 @@ def acse_calibration_diagnostic_rows(
         ]
         error_detection = auroc_score(all_errors, all_scores)
         for target in target_error_rates:
-            threshold = _select_threshold_for_error_target(calibration_rows, float(target))
+            threshold = _select_threshold_for_error_target(
+                calibration_rows, float(target)
+            )
             if threshold is None:
-                calibration_accepted_n, calibration_coverage, calibration_error_rate = 0, 0.0, math.nan
-                evaluation_accepted_n, evaluation_coverage, evaluation_error_rate = 0, 0.0, math.nan
+                calibration_accepted_n, calibration_coverage, calibration_error_rate = (
+                    0,
+                    0.0,
+                    math.nan,
+                )
+                evaluation_accepted_n, evaluation_coverage, evaluation_error_rate = (
+                    0,
+                    0.0,
+                    math.nan,
+                )
                 evaluation_deferred_error_rate = math.nan
             else:
-                calibration_accepted_n, calibration_coverage, calibration_error_rate = _accepted_error_rate(
-                    calibration_rows,
-                    threshold,
+                calibration_accepted_n, calibration_coverage, calibration_error_rate = (
+                    _accepted_error_rate(
+                        calibration_rows,
+                        threshold,
+                    )
                 )
-                evaluation_accepted_n, evaluation_coverage, evaluation_error_rate = _accepted_error_rate(
-                    evaluation_source_rows,
-                    threshold,
+                evaluation_accepted_n, evaluation_coverage, evaluation_error_rate = (
+                    _accepted_error_rate(
+                        evaluation_source_rows,
+                        threshold,
+                    )
                 )
-                evaluation_deferred_error_rate = _deferred_error_rate(evaluation_source_rows, threshold)
+                evaluation_deferred_error_rate = _deferred_error_rate(
+                    evaluation_source_rows, threshold
+                )
             rows.append(
                 {
                     "run_id": key[0],
@@ -6145,7 +8996,9 @@ def acse_calibration_diagnostic_rows(
                     "task": key[2],
                     "semantic_embedding_backend": key[3],
                     "target_accepted_error_rate": float(target),
-                    "selected_normalized_threshold": "" if threshold is None else threshold,
+                    "selected_normalized_threshold": ""
+                    if threshold is None
+                    else threshold,
                     "calibration_n": len(calibration_rows),
                     "calibration_accepted_n": calibration_accepted_n,
                     "calibration_coverage": calibration_coverage,
@@ -6157,7 +9010,9 @@ def acse_calibration_diagnostic_rows(
                     "evaluation_accepted_error_rate": evaluation_error_rate,
                     "evaluation_deferred_error_rate": evaluation_deferred_error_rate,
                     "all_n": len(group_rows),
-                    "all_error_rate": sum(all_errors) / len(all_errors) if all_errors else math.nan,
+                    "all_error_rate": sum(all_errors) / len(all_errors)
+                    if all_errors
+                    else math.nan,
                     "all_error_detection_auroc": error_detection,
                 }
             )
@@ -6203,7 +9058,9 @@ def selective_deferral_metrics(
         retained = pairs[defer_n:]
         metrics[f"selective_coverage_defer_{suffix}"] = len(retained) / total
         metrics[f"selective_error_defer_{suffix}"] = (
-            sum(error for _, error in retained) / len(retained) if retained else math.nan
+            sum(error for _, error in retained) / len(retained)
+            if retained
+            else math.nan
         )
     return metrics
 
@@ -6228,42 +9085,117 @@ def headline_risk_ci_fields(
         elif task == "task2":
             metric_specs = {
                 f"high_conf_overcommit_overcommittable_{suffix}": (
-                    lambda sample_rows, threshold=threshold: task2_high_confidence_overcommitment_rate(
-                        sample_rows,
-                        threshold,
-                        denominator="overcommittable",
+                    lambda sample_rows, threshold=threshold: (
+                        task2_high_confidence_overcommitment_rate(
+                            sample_rows,
+                            threshold,
+                            denominator="overcommittable",
+                        )
                     )
                 ),
                 f"weak_strengthening_{suffix}": (
-                    lambda sample_rows, threshold=threshold: weak_strengthening_rate(sample_rows, threshold)
+                    lambda sample_rows, threshold=threshold: weak_strengthening_rate(
+                        sample_rows, threshold
+                    )
                 ),
                 f"label_correct_text_overcommit_{suffix}": (
-                    lambda sample_rows, threshold=threshold: label_correct_text_overcommit_rate(
-                        sample_rows,
-                        threshold,
+                    lambda sample_rows, threshold=threshold: (
+                        label_correct_text_overcommit_rate(
+                            sample_rows,
+                            threshold,
+                        )
                     )
                 ),
             }
             for metric_name, metric in metric_specs.items():
-                _, low, high = bootstrap_seed_metric(rows, metric, iterations=iterations)
+                _, low, high = bootstrap_seed_metric(
+                    rows, metric, iterations=iterations
+                )
                 fields[f"{metric_name}_ci_low"] = low
                 fields[f"{metric_name}_ci_high"] = high
     return fields
 
 
+def text_strengthening_rate(rows: list[dict[str, Any]], strict: bool = False) -> float:
+    """Broad (or strict) generated-text strengthening rate over parsed rows."""
+    text_rows = [
+        row for row in rows if str(row.get("text_modality_parse_status", "")) == "ok"
+    ]
+    if not text_rows:
+        return math.nan
+    key = "strict_text_overcommit" if strict else "text_overcommit"
+    return sum(1 for row in text_rows if _truthy(row.get(key))) / len(text_rows)
+
+
+def text_over_commitment_ci_fields(
+    rows: list[dict[str, Any]],
+    iterations: int = 1000,
+    seed: int = 20260518,
+) -> dict[str, float | str]:
+    """Point estimate, counts, and seed-clustered bootstrap CI for text drift.
+
+    The bootstrap resamples benchmark *seeds* with replacement (via
+    :func:`bootstrap_seed_metric`) because the four source-modality variants of
+    one seed share a capability and are not independent.
+    """
+    fields: dict[str, float | str] = {}
+    task2_rows = [row for row in rows if str(row.get("task", "")) == "task2"]
+    text_rows = [
+        row
+        for row in task2_rows
+        if str(row.get("text_modality_parse_status", "")) == "ok"
+    ]
+    for metric_name, strict in (
+        ("text_over_commitment", False),
+        ("strict_text_over_commitment", True),
+    ):
+        key = "strict_text_overcommit" if strict else "text_overcommit"
+        numerator = sum(1 for row in text_rows if _truthy(row.get(key)))
+        fields[f"{metric_name}_n_numerator"] = numerator
+        fields[f"{metric_name}_n_denominator"] = len(text_rows)
+        if not task2_rows or iterations <= 0:
+            fields[metric_name] = (
+                text_strengthening_rate(task2_rows, strict=strict) if task2_rows else ""
+            )
+            fields[f"{metric_name}_ci_low"] = ""
+            fields[f"{metric_name}_ci_high"] = ""
+            continue
+
+        def metric(sample_rows, strict=strict):
+            return text_strengthening_rate(sample_rows, strict=strict)
+
+        point, low, high = bootstrap_seed_metric(
+            task2_rows, metric, iterations=iterations, seed=seed
+        )
+        fields[metric_name] = point
+        fields[f"{metric_name}_ci_low"] = low
+        fields[f"{metric_name}_ci_high"] = high
+    return fields
+
+
 def task3_strengthening_recall(rows: list[dict[str, Any]]) -> float:
-    strengthened = [row for row in rows if str(row.get("gold_relation", "")) == "strengthens"]
+    strengthened = [
+        row for row in rows if str(row.get("gold_relation", "")) == "strengthens"
+    ]
     if not strengthened:
         return math.nan
-    detected = [row for row in strengthened if str(row.get("pred_relation", "")) == "strengthens"]
+    detected = [
+        row
+        for row in strengthened
+        if str(row.get("pred_relation", "")) == "strengthens"
+    ]
     return len(detected) / len(strengthened)
 
 
 def task3_false_preserve_rate(rows: list[dict[str, Any]]) -> float:
-    strengthened = [row for row in rows if str(row.get("gold_relation", "")) == "strengthens"]
+    strengthened = [
+        row for row in rows if str(row.get("gold_relation", "")) == "strengthens"
+    ]
     if not strengthened:
         return math.nan
-    false_preserve = [row for row in strengthened if str(row.get("pred_relation", "")) == "preserves"]
+    false_preserve = [
+        row for row in strengthened if str(row.get("pred_relation", "")) == "preserves"
+    ]
     return len(false_preserve) / len(strengthened)
 
 
@@ -6271,7 +9203,9 @@ def task3_evidence_phrase_source_rate(rows: list[dict[str, Any]]) -> float | str
     evidence_rows = [row for row in rows if str(row.get("evidence_phrase", "")).strip()]
     if not evidence_rows:
         return ""
-    return sum(1 for row in evidence_rows if _truthy(row.get("evidence_phrase_in_source"))) / len(evidence_rows)
+    return sum(
+        1 for row in evidence_rows if _truthy(row.get("evidence_phrase_in_source"))
+    ) / len(evidence_rows)
 
 
 def task_accuracy(rows: list[dict[str, Any]], task: str) -> float:
@@ -6293,18 +9227,24 @@ def task_accuracy(rows: list[dict[str, Any]], task: str) -> float:
     )
 
 
-def labels_present_in_rows(rows: list[dict[str, Any]], field: str, label_order: list[str]) -> list[str]:
+def labels_present_in_rows(
+    rows: list[dict[str, Any]], field: str, label_order: list[str]
+) -> list[str]:
     present = {str(row.get(field, "")) for row in rows}
     labels = [label for label in label_order if label in present]
     return labels or list(label_order)
 
 
-def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def metric_summary_by_model_task_method(
+    scores: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     if not scores:
         return []
     frame = pd.DataFrame.from_records(scores)
     summaries: list[dict[str, Any]] = []
-    for (model, task, uq_method), group_frame in frame.groupby(["model", "task", "uq_method"], sort=False):
+    for (model, task, uq_method), group_frame in frame.groupby(
+        ["model", "task", "uq_method"], sort=False
+    ):
         rows = group_frame.to_dict(orient="records")
         y_true = group_frame["y_true"].astype(int).tolist()
         y_pred = group_frame["y_pred"].astype(int).tolist()
@@ -6323,18 +9263,9 @@ def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[di
                 group_frame["parse_failures"].astype(int).sum()
                 / max(1, int(group_frame["total_n"].astype(int).sum()))
             ),
-            "text_modality_accuracy": "",
-            "text_modality_accuracy_all": "",
-            "text_modality_parse_coverage": "",
-            "heuristic_text_modality_rate": "",
-            "label_text_consistency": "",
-            "text_over_commitment": "",
-            "strict_text_over_commitment": "",
-            "text_under_commitment": "",
-            "text_high_conf_overcommit_80": "",
-            "text_high_conf_overcommit_90": "",
-            "label_correct_text_overcommit_80": "",
-            "label_correct_text_overcommit_90": "",
+            **empty_text_modality_summary_metrics(),
+            **empty_length_bloat_metrics(),
+            **repeated_sample_agreement_metrics(rows),
             "strengthening_recall": "",
             "false_preserve_rate": "",
             "evidence_phrase_source_rate": "",
@@ -6356,21 +9287,31 @@ def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[di
         }
         for threshold in HIGH_CONFIDENCE_THRESHOLDS:
             suffix = f"{int(threshold * 100):02d}"
-            summary[f"high_conf_overcommit_{suffix}"] = high_confidence_overcommitment_rate(rows, str(task), threshold)
+            summary[f"high_conf_overcommit_{suffix}"] = (
+                high_confidence_overcommitment_rate(rows, str(task), threshold)
+            )
             if task == "task1":
-                summary[f"unsupported_mandatory_acceptance_{suffix}"] = unsupported_mandatory_acceptance_rate(rows, threshold)
+                summary[f"unsupported_mandatory_acceptance_{suffix}"] = (
+                    unsupported_mandatory_acceptance_rate(rows, threshold)
+                )
             elif task == "task2":
-                summary[f"high_conf_overcommit_all_{suffix}"] = task2_high_confidence_overcommitment_rate(
-                    rows,
-                    threshold,
-                    denominator="all",
+                summary[f"high_conf_overcommit_all_{suffix}"] = (
+                    task2_high_confidence_overcommitment_rate(
+                        rows,
+                        threshold,
+                        denominator="all",
+                    )
                 )
-                summary[f"high_conf_overcommit_overcommittable_{suffix}"] = task2_high_confidence_overcommitment_rate(
-                    rows,
-                    threshold,
-                    denominator="overcommittable",
+                summary[f"high_conf_overcommit_overcommittable_{suffix}"] = (
+                    task2_high_confidence_overcommitment_rate(
+                        rows,
+                        threshold,
+                        denominator="overcommittable",
+                    )
                 )
-                summary[f"weak_strengthening_{suffix}"] = weak_strengthening_rate(rows, threshold)
+                summary[f"weak_strengthening_{suffix}"] = weak_strengthening_rate(
+                    rows, threshold
+                )
         if task == "task1":
             p_yes = group_frame["p_yes"].astype(float).tolist()
             monotonicity_metrics = monotonicity_violation_diagnostics(rows, "p_yes")
@@ -6378,8 +9319,12 @@ def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[di
                 {
                     "f1_or_macro_f1": binary_f1_score(y_true, y_pred),
                     "auroc": auroc_score(y_true, p_yes),
-                    "spearman_modality_p_yes": spearman_corr(group_frame["numeric_strength"].astype(float).tolist(), p_yes),
-                    "pearson_modality_p_yes": pearson_corr(group_frame["numeric_strength"].astype(float).tolist(), p_yes),
+                    "spearman_modality_p_yes": spearman_corr(
+                        group_frame["numeric_strength"].astype(float).tolist(), p_yes
+                    ),
+                    "pearson_modality_p_yes": pearson_corr(
+                        group_frame["numeric_strength"].astype(float).tolist(), p_yes
+                    ),
                     **monotonicity_metrics,
                     "over_commitment": "",
                     "under_commitment": "",
@@ -6401,13 +9346,18 @@ def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[di
                     "over_commitment": over_metrics["over_commitment"],
                     "under_commitment": over_metrics["under_commitment"],
                     # Backward-compatible alias: this is severity averaged over all valid outputs.
-                    "over_commitment_severity": over_metrics["over_commitment_severity_all"],
-                    "over_commitment_severity_all": over_metrics["over_commitment_severity_all"],
+                    "over_commitment_severity": over_metrics[
+                        "over_commitment_severity_all"
+                    ],
+                    "over_commitment_severity_all": over_metrics[
+                        "over_commitment_severity_all"
+                    ],
                     "over_commitment_severity_given_overcommitment": over_metrics[
                         "over_commitment_severity_given_overcommitment"
                     ],
                     "weak_recall": weak_modality_recall(rows),
                     **text_metrics,
+                    **length_bloat_metrics(rows),
                 }
             )
         elif task == "task3":
@@ -6426,11 +9376,15 @@ def metric_summary_by_model_task_method(scores: list[dict[str, Any]]) -> list[di
                     "over_commitment_severity": "",
                     "strengthening_recall": task3_strengthening_recall(rows),
                     "false_preserve_rate": task3_false_preserve_rate(rows),
-                    "evidence_phrase_source_rate": task3_evidence_phrase_source_rate(rows),
+                    "evidence_phrase_source_rate": task3_evidence_phrase_source_rate(
+                        rows
+                    ),
                 }
             )
         summaries.append(summary)
-    return sorted(summaries, key=lambda row: (row["model"], row["task"], row["uq_method"]))
+    return sorted(
+        summaries, key=lambda row: (row["model"], row["task"], row["uq_method"])
+    )
 
 
 def format_metric(value: Any, digits: int = 3) -> str:
@@ -6543,7 +9497,9 @@ def uq_method_inventory_rows() -> list[dict[str, Any]]:
     ]
 
 
-def write_uq_method_inventory(output_dir: str | Path, suffix: str = "") -> dict[str, Path]:
+def write_uq_method_inventory(
+    output_dir: str | Path, suffix: str = ""
+) -> dict[str, Path]:
     rows = uq_method_inventory_rows()
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -6578,14 +9534,26 @@ def write_task1_modality_svg(scores: list[dict[str, Any]], path: str | Path) -> 
         else:
             task1["p_yes"] = pd.to_numeric(task1["p_yes"])
             summary = (
-                task1.groupby(["model", "uq_method", "source_modality"], sort=False)["p_yes"]
+                task1.groupby(["model", "uq_method", "source_modality"], sort=False)[
+                    "p_yes"
+                ]
                 .mean()
                 .reset_index()
             )
             x_positions = np.arange(len(MODALITIES))
-            for (model, uq_method), group_frame in summary.groupby(["model", "uq_method"], sort=False):
-                series = group_frame.set_index("source_modality").reindex(MODALITIES)["p_yes"]
-                ax.plot(x_positions, series.to_numpy(dtype=float), marker="o", linewidth=2, label=f"{model} / {uq_method}")
+            for (model, uq_method), group_frame in summary.groupby(
+                ["model", "uq_method"], sort=False
+            ):
+                series = group_frame.set_index("source_modality").reindex(MODALITIES)[
+                    "p_yes"
+                ]
+                ax.plot(
+                    x_positions,
+                    series.to_numpy(dtype=float),
+                    marker="o",
+                    linewidth=2,
+                    label=f"{model} / {uq_method}",
+                )
             ax.set_title("Task 1 p_yes by source modality")
             ax.set_xlabel("Source modality")
             ax.set_ylabel("Mean p_yes")

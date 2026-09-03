@@ -4,7 +4,7 @@ This project is a research-engineering artifact: Git should preserve code, promp
 
 ## Git workflow
 
-- Work on a branch for every coherent change. Use `codex/<topic>` for Codex-driven branches.
+- Work on a branch for every coherent change. Branch names are free-form; use a short topic slug.
 - Keep commits narrow enough to review: separate code/notebook behavior, artifact policy, and infrastructure changes.
 - Stage intentionally. Prefer path-specific `git add` and inspect `git diff --cached --stat` before committing.
 - Do not commit local secrets or machine-specific settings. Use `config.example.json` as the tracked template and keep `config.json` local.
@@ -42,7 +42,8 @@ The first command should be empty except for intentional tracked edits. The igno
 
 Before tagging or archiving a publication artifact:
 
-- Confirm `README.md`, `docs/evaluation.md`, `docs/reproduction.md`, and `docs/results_mapping.md` agree on Task 1/2 as the primary experiment and Task 3 as a diagnostic.
+- Confirm `README.md`, `docs/experimental_setup.md`, `docs/evaluation.md`, `docs/reproduction.md`, and `docs/results_mapping.md` agree on Task 1/2 as the primary experiment and Task 3 as a diagnostic, and on the canonical example cell.
+- Confirm `docs/experimental_setup.md` still matches the code it describes: templates, batch size and order, request parameters, and recorded raw fields.
 - Run the command-first reproduction path in `docs/reproduction.md` or document exactly which provider cells could not be rerun.
 - Complete `docs/weak_modality_construct_review.csv` before making weak-intent paper claims.
 - Generate final analysis with `scripts/generate_evaluation_analysis.py` and inspect the exported table, figure, qualitative examples, and provenance manifest.

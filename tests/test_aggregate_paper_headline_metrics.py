@@ -17,24 +17,119 @@ from scripts import aggregate_paper_headline_metrics as agg
 
 # Synthetic fixtures mirroring the shipped per-cell snapshot columns and values.
 TASK2_ROWS = [
-    {"dataset": "mlm_tapt", "variant": "must", "text_over_commitment": "0.2088235294117647", "strict_text_over_commitment": "0.10686274509803921"},
-    {"dataset": "mlm_tapt", "variant": "shall", "text_over_commitment": "0.09302325581395349", "strict_text_over_commitment": "0.07267441860465117"},
-    {"dataset": "nice", "variant": "must", "text_over_commitment": "0.17162698412698413", "strict_text_over_commitment": "0.09424603174603174"},
-    {"dataset": "nice", "variant": "shall", "text_over_commitment": "0.08079847908745247", "strict_text_over_commitment": "0.07034220532319392"},
+    {
+        "dataset": "mlm_tapt",
+        "variant": "must",
+        "text_over_commitment": "0.2088235294117647",
+        "strict_text_over_commitment": "0.10686274509803921",
+    },
+    {
+        "dataset": "mlm_tapt",
+        "variant": "shall",
+        "text_over_commitment": "0.09302325581395349",
+        "strict_text_over_commitment": "0.07267441860465117",
+    },
+    {
+        "dataset": "nice",
+        "variant": "must",
+        "text_over_commitment": "0.17162698412698413",
+        "strict_text_over_commitment": "0.09424603174603174",
+    },
+    {
+        "dataset": "nice",
+        "variant": "shall",
+        "text_over_commitment": "0.08079847908745247",
+        "strict_text_over_commitment": "0.07034220532319392",
+    },
 ]
 
 CONFIDENCE_ROWS = [
-    {"dataset": "mlm_tapt", "variant": "must", "n": "4080", "broad_text_oc_n": "852", "strict_text_oc_n": "436", "strict_text_oc_conf_ge_90": "1.0", "strict_text_oc_unanimous_modality_samples": "1.0"},
-    {"dataset": "mlm_tapt", "variant": "shall", "n": "4128", "broad_text_oc_n": "384", "strict_text_oc_n": "300", "strict_text_oc_conf_ge_90": "0.9733333333333334", "strict_text_oc_unanimous_modality_samples": "1.0"},
-    {"dataset": "nice", "variant": "must", "n": "4032", "broad_text_oc_n": "692", "strict_text_oc_n": "380", "strict_text_oc_conf_ge_90": "0.9894736842105263", "strict_text_oc_unanimous_modality_samples": "1.0"},
-    {"dataset": "nice", "variant": "shall", "n": "4208", "broad_text_oc_n": "340", "strict_text_oc_n": "296", "strict_text_oc_conf_ge_90": "0.972972972972973", "strict_text_oc_unanimous_modality_samples": "1.0"},
+    {
+        "dataset": "mlm_tapt",
+        "variant": "must",
+        "n": "4080",
+        "broad_text_oc_n": "852",
+        "strict_text_oc_n": "436",
+        "strict_text_oc_conf_ge_90": "1.0",
+        "strict_text_oc_unanimous_modality_samples": "1.0",
+        "agreement_n_complete": "436",
+        "agreement_n_incomplete_excluded": "0",
+    },
+    {
+        "dataset": "mlm_tapt",
+        "variant": "shall",
+        "n": "4128",
+        "broad_text_oc_n": "384",
+        "strict_text_oc_n": "300",
+        "strict_text_oc_conf_ge_90": "0.9733333333333334",
+        "strict_text_oc_unanimous_modality_samples": "1.0",
+        "agreement_n_complete": "300",
+        "agreement_n_incomplete_excluded": "0",
+    },
+    {
+        "dataset": "nice",
+        "variant": "must",
+        "n": "4032",
+        "broad_text_oc_n": "692",
+        "strict_text_oc_n": "380",
+        "strict_text_oc_conf_ge_90": "0.9894736842105263",
+        "strict_text_oc_unanimous_modality_samples": "1.0",
+        "agreement_n_complete": "380",
+        "agreement_n_incomplete_excluded": "0",
+    },
+    {
+        "dataset": "nice",
+        "variant": "shall",
+        "n": "4208",
+        "broad_text_oc_n": "340",
+        "strict_text_oc_n": "296",
+        "strict_text_oc_conf_ge_90": "0.972972972972973",
+        "strict_text_oc_unanimous_modality_samples": "1.0",
+        "agreement_n_complete": "296",
+        "agreement_n_incomplete_excluded": "0",
+    },
 ]
 
 BLIND_ROWS = [
-    {"dataset": "mlm_tapt", "variant": "must", "weak_strict_text_strengthening_90": "29.8%"},
-    {"dataset": "mlm_tapt", "variant": "shall", "weak_strict_text_strengthening_90": "28.3%"},
-    {"dataset": "nice", "variant": "must", "weak_strict_text_strengthening_90": "31.7%"},
-    {"dataset": "nice", "variant": "shall", "weak_strict_text_strengthening_90": "27.4%"},
+    {
+        "dataset": "mlm_tapt",
+        "variant": "must",
+        "weak_strict_text_strengthening_90": "29.8%",
+    },
+    {
+        "dataset": "mlm_tapt",
+        "variant": "shall",
+        "weak_strict_text_strengthening_90": "28.3%",
+    },
+    {
+        "dataset": "nice",
+        "variant": "must",
+        "weak_strict_text_strengthening_90": "31.7%",
+    },
+    {
+        "dataset": "nice",
+        "variant": "shall",
+        "weak_strict_text_strengthening_90": "27.4%",
+    },
+]
+
+# scripts/export_paper_tables.py now recomputes the weak-intent headline into the
+# Task 2 snapshot; the mlm_tapt/must cell is the README's 29.8% = 304/1020.
+WEAK_COUNTS = [
+    ("mlm_tapt", "must", 304, 1020),
+    ("mlm_tapt", "shall", 283, 1000),
+    ("nice", "must", 317, 1000),
+    ("nice", "shall", 274, 1000),
+]
+TASK2_ROWS_WITH_WEAK = [
+    {
+        **row,
+        "weak_n": str(readable + 5),
+        "weak_n_readable": str(readable),
+        "weak_strict_text_strengthening_90": str(numerator / readable),
+        "weak_strict_text_strengthening_90_all_weak": str(numerator / (readable + 5)),
+    }
+    for row, (_, _, numerator, readable) in zip(TASK2_ROWS, WEAK_COUNTS)
 ]
 
 
@@ -71,6 +166,32 @@ class AggregatePaperHeadlineMetricsTest(unittest.TestCase):
         self.assertAlmostEqual(max(per_cell), 0.317, places=4)
         self.assertAlmostEqual(float(row["value_macro_over_cells"]), 0.2930, places=4)
 
+    def test_weak_headline_falls_back_to_the_blind_csv(self):
+        """Without the exporter column the blind Task 3 summary is still read."""
+        row = self.rows["weak_strict_text_strengthening_90"]
+        self.assertEqual(row["source_csv"], "blind_task3_analysis_summary.csv")
+        self.assertEqual(row["cell_n"], "")
+
+    def test_weak_headline_prefers_the_regenerated_task2_snapshot(self):
+        """When the exporter wrote the column, the derived value wins."""
+        rows = {
+            row["headline_key"]: row
+            for row in agg.build_headline_rows(
+                TASK2_ROWS_WITH_WEAK, CONFIDENCE_ROWS, BLIND_ROWS
+            )
+        }
+        row = rows["weak_strict_text_strengthening_90"]
+        self.assertEqual(row["source_csv"], "paper_task2_text_drift_metrics.csv")
+        per_cell = [float(v) for v in row["per_cell_values"].split("|")]
+        # Same README 29.8% = 304/1020, now computed rather than transcribed.
+        self.assertEqual(round(per_cell[0], 3), 0.298)
+        # per_cell_values are formatted to 4 decimals by the aggregator.
+        self.assertEqual(per_cell[0], round(304 / 1020, 4))
+        # cell_n is now populated with the readable weak denominator.
+        self.assertEqual(
+            [int(v) for v in row["cell_n"].split("|")], [1020, 1000, 1000, 1000]
+        )
+
     def test_high_confidence_share_macro(self):
         row = self.rows["strict_text_oc_high_conf_90"]
         # README 98.4% is the unweighted macro; pooled is 98.6%.
@@ -90,15 +211,56 @@ class AggregatePaperHeadlineMetricsTest(unittest.TestCase):
         per_cell = [float(v) for v in row["per_cell_values"].split("|")]
         self.assertTrue(all(v == 1.0 for v in per_cell))
 
+    def test_repeated_sample_agreement_is_weighted_by_complete_groups(self):
+        task2_rows = [TASK2_ROWS_WITH_WEAK[0], TASK2_ROWS_WITH_WEAK[2]]
+        confidence_rows = [
+            {
+                **CONFIDENCE_ROWS[0],
+                "strict_text_oc_unanimous_modality_samples": "1.0",
+                "agreement_n_complete": "1",
+            },
+            {
+                **CONFIDENCE_ROWS[2],
+                "strict_text_oc_unanimous_modality_samples": "0.0",
+                "agreement_n_complete": "9",
+            },
+        ]
+        blind_rows = [BLIND_ROWS[0], BLIND_ROWS[2]]
+        rows = {
+            row["headline_key"]: row
+            for row in agg.build_headline_rows(task2_rows, confidence_rows, blind_rows)
+        }
+        agreement = rows["strict_text_oc_repeated_sample_agreement"]
+        self.assertAlmostEqual(agreement["value_pooled"], 0.1)
+        self.assertEqual(agreement["cell_n"], "1|9")
+
+    def test_subset_without_reference_cell_has_a_valid_description(self):
+        rows = {
+            row["headline_key"]: row
+            for row in agg.build_headline_rows(
+                [TASK2_ROWS_WITH_WEAK[2]],
+                [CONFIDENCE_ROWS[2]],
+                [BLIND_ROWS[2]],
+            )
+        }
+        weak = rows["weak_strict_text_strengthening_90"]
+        self.assertIn("mlm_tapt/must was not requested", weak["readme_aggregation"])
+        self.assertEqual(float(weak["per_cell_values"]), round(317 / 1000, 4))
+
     def test_stdout_comparison_reports_all_matches(self):
-        rows = agg.build_headline_rows(TASK2_ROWS, CONFIDENCE_ROWS, BLIND_ROWS)
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            agg.print_readme_comparison(rows)
-        output = buffer.getvalue()
-        self.assertNotIn("MISMATCH", output)
-        for key in agg.README_VALUES:
-            self.assertIn(key, output)
+        for label, task2_rows in (
+            ("blind", TASK2_ROWS),
+            ("task2_snapshot", TASK2_ROWS_WITH_WEAK),
+        ):
+            with self.subTest(weak_source=label):
+                rows = agg.build_headline_rows(task2_rows, CONFIDENCE_ROWS, BLIND_ROWS)
+                buffer = io.StringIO()
+                with redirect_stdout(buffer):
+                    agg.print_readme_comparison(rows)
+                output = buffer.getvalue()
+                self.assertNotIn("MISMATCH", output)
+                for key in agg.README_VALUES:
+                    self.assertIn(key, output)
 
 
 if __name__ == "__main__":

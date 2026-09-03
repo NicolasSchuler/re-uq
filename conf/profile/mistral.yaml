@@ -1,0 +1,23 @@
+# Provider profile: mistral
+# Mirrors the `mistral` entry of run_configs/full_matrix.example.json.
+# Secrets are never stored here: `api_key_env` holds the *name* of the
+# environment variable that carries the key.
+profile_id: "mistral"
+provider_id: "mistral"
+base_url: "https://api.mistral.ai/v1"
+api_key_env: ${oc.env:RE_UQ_MISTRAL_API_KEY_ENV,MISTRAL_API_KEY}
+models:
+  - "mistral-large-latest"
+  - "mistral-small-latest"
+concurrency: 2
+batch_size: 8
+timeout_s: 180
+max_tokens: 256
+seed: 20260518
+send_seed: true
+max_retries: 3
+batch_order: "grouped"
+json_mode: true
+structured_output: "json_object"
+requires_manual_server: false
+notes: "Mistral OpenAI-compatible endpoint. Supports response_format json_object; json_schema support varies by model, so json_object is the conservative choice."

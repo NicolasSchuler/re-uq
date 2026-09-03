@@ -1,0 +1,21 @@
+{
+  "id": "b395339a8",
+  "name": "Retry sandbox smoke",
+  "command": "\"$HOME/.pi/devcontainer/bin/pi-sandbox\" smoke",
+  "description": "Build and verify the re-uq sandbox after moving dependency synchronization to the persistent environment volume.",
+  "status": "failed",
+  "outputPath": ".pi/tasks/session-23915-23915/b395339a8.output",
+  "cwd": "/Users/nicolas/re-uq",
+  "startTime": 1788435130877,
+  "endTime": 1788435459835,
+  "exitCode": 1,
+  "signal": null,
+  "pid": 59746,
+  "bytesWritten": 11147,
+  "isAgent": false,
+  "error": "Exited with code 1",
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 1800
+}

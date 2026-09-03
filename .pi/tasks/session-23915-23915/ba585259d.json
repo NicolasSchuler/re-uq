@@ -1,0 +1,20 @@
+{
+  "id": "ba585259d",
+  "name": "Start Podman machine",
+  "command": "podman machine start",
+  "description": "Start the existing Podman VM required by the pi sandbox before doctor and smoke tests.",
+  "status": "completed",
+  "outputPath": ".pi/tasks/session-23915-23915/ba585259d.output",
+  "cwd": "/Users/nicolas/re-uq",
+  "startTime": 1788434389775,
+  "endTime": 1788434399911,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 37657,
+  "bytesWritten": 554,
+  "isAgent": false,
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 300
+}

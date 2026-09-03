@@ -1,0 +1,31 @@
+# Provider profile: zai
+# Mirrors the `zai` entry of run_configs/full_matrix.example.json.
+# Secrets are never stored here: `api_key_env` holds the *name* of the
+# environment variable that carries the key.
+profile_id: "zai"
+provider_id: "zai"
+base_url: "https://api.z.ai/api/coding/paas/v4"
+api_key_env: ${oc.env:RE_UQ_ZAI_API_KEY_ENV,ZAI_API_KEY}
+models:
+  - "glm-4.5-air"
+  - "glm-4.7"
+  - "glm-5"
+  - "glm-5-turbo"
+  - "glm-5.1"
+concurrency: 2
+batch_size: 16
+timeout_s: 180
+max_tokens: 256
+seed: 20260518
+send_seed: true
+max_retries: 3
+batch_order: "grouped"
+json_mode: true
+structured_output: "json_object"
+extra_body:
+  thinking:
+    type: "disabled"
+  response_format:
+    type: "json_object"
+requires_manual_server: false
+notes: "GLM Coding Plan endpoint. Standard paid API users should switch this to https://api.z.ai/api/paas/v4."
