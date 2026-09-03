@@ -206,6 +206,7 @@ def run_from_config(run_config: dict[str, Any], args: Any) -> None:
     `scripts/run.py`, which composes the same dictionary from `conf/`.
     """
     eu.configure_run_logging(args.log_level)
+    eu.apply_acse_embedding_env(run_config)
     audit_mode = eu.normalize_task3_audit_mode(args.audit_mode)
     dry_run = bool(getattr(args, "dry_run", False))
 

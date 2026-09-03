@@ -14,14 +14,17 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import numpy as np
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
+from scripts import compute_acse_semantic_artifacts as semantic_cache
 from scripts import eval_utils as eu
+from scripts import generate_evaluation_analysis as analysis_cli
 from scripts import hydra_bridge as hb
 from scripts import run_provenance as rp
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONF_DIR = REPO_ROOT / "conf"
@@ -32,7 +35,6 @@ EXAMPLE_PROFILE_IDS = [
     "kit_toolbox",
     "zai",
     "openai",
-    "anthropic",
     "mistral",
     "google_gemini",
     "ollama_local",
@@ -221,6 +223,65 @@ class HydraCompositionTest(unittest.TestCase):
         self.assertEqual(str(sweep["dataset"]), "nice,mlm_tapt")
         self.assertEqual(str(sweep["variant"]), "must,shall")
 
+    def test_default_embedding_selection_flows_into_the_run_config(self):
+        cfg = compose_config()
+        run_config = eu.normalize_run_config(hb.hydra_config_to_run_config(cfg))
+        self.assertEqual(run_config["acse_embedding_backend"], "mlx")
+        self.assertEqual(
+            run_config["acse_embedding_mlx_model"], eu.ACSE_MLX_DEFAULT_MODEL
+        )
+
+    def test_embedding_group_override_selects_the_ablation_model(self):
+        cfg = compose_config(overrides=["embedding=qwen3_4b"])
+        run_config = eu.normalize_run_config(hb.hydra_config_to_run_config(cfg))
+        self.assertEqual(run_config["acse_embedding_backend"], "mlx")
+        self.assertEqual(
+            run_config["acse_embedding_mlx_model"],
+            "mlx-community/Qwen3-Embedding-4B-4bit-DWQ",
+        )
+
+    def test_every_embedding_option_has_a_valid_backend_label(self):
+        options = sorted(p.stem for p in (CONF_DIR / "embedding").glob("*.yaml"))
+        self.assertIn("qwen3_06b", options)
+        for option in options:
+            cfg = compose_config(overrides=[f"embedding={option}"])
+            run_config = eu.normalize_run_config(hb.hydra_config_to_run_config(cfg))
+            label, model = eu.semantic_embedding_backend_label(
+                run_config["acse_embedding_backend"],
+                run_config["acse_embedding_mlx_model"],
+            )
+            self.assertTrue(label)
+            if run_config["acse_embedding_backend"] == "mlx":
+                self.assertEqual(label, f"mlx:{model}")
+
+    def test_apply_acse_embedding_env_sets_variables_without_clobbering(self):
+        env = {eu.ACSE_EMBEDDING_BACKEND_ENV, eu.ACSE_MLX_MODEL_ENV}
+        saved = {name: os.environ.get(name) for name in env}
+        try:
+            os.environ.pop(eu.ACSE_EMBEDDING_BACKEND_ENV, None)
+            os.environ.pop(eu.ACSE_MLX_MODEL_ENV, None)
+            eu.apply_acse_embedding_env(
+                {
+                    "acse_embedding_backend": "mlx",
+                    "acse_embedding_mlx_model": "mlx-community/bge-m3-mlx-8bit",
+                }
+            )
+            self.assertEqual(
+                os.environ[eu.ACSE_MLX_MODEL_ENV], "mlx-community/bge-m3-mlx-8bit"
+            )
+            # An explicitly exported value wins over the composed one.
+            os.environ[eu.ACSE_MLX_MODEL_ENV] = "manual/override"
+            eu.apply_acse_embedding_env(
+                {"acse_embedding_mlx_model": "mlx-community/bge-m3-mlx-8bit"}
+            )
+            self.assertEqual(os.environ[eu.ACSE_MLX_MODEL_ENV], "manual/override")
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
 
 class ResolvedConfigProvenanceTest(unittest.TestCase):
     def test_resolved_yaml_records_env_variable_names_not_secrets(self):
@@ -321,6 +382,8 @@ class RunConfigExportTest(unittest.TestCase):
                         "prompt_version",
                         "seed",
                         "batch_order",
+                        "acse_embedding_backend",
+                        "acse_embedding_mlx_model",
                     ):
                         self.assertEqual(composed[key], json_config[key], key)
                     self.assertEqual(
@@ -328,6 +391,37 @@ class RunConfigExportTest(unittest.TestCase):
                     )
                     self.assertEqual(composed["stochastic"], json_config["stochastic"])
                     self.assertEqual(composed["logging"], json_config["logging"])
+
+    def test_json_embedding_selection_round_trips_through_exported_experiment(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source = tmp / "run_config.json"
+            payload = json.loads(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+            payload["acse_embedding_backend"] = "mlx"
+            payload["acse_embedding_mlx_model"] = (
+                "mlx-community/Qwen3-Embedding-4B-4bit-DWQ"
+            )
+            source.write_text(json.dumps(payload), encoding="utf-8")
+            out = tmp / "conf"
+            shutil.copytree(CONF_DIR, out)
+            hb.run_config_to_hydra_yaml(
+                source, out, name="exported_embedding", overwrite=True
+            )
+
+            cfg = compose_config(
+                out,
+                [
+                    "+experiment=exported_embedding",
+                    "profile=zai",
+                    "dataset=nice",
+                ],
+            )
+            composed = eu.normalize_run_config(hb.hydra_config_to_run_config(cfg))
+            self.assertEqual(composed["acse_embedding_backend"], "mlx")
+            self.assertEqual(
+                composed["acse_embedding_mlx_model"],
+                "mlx-community/Qwen3-Embedding-4B-4bit-DWQ",
+            )
 
     def test_export_refuses_to_clobber_a_different_file_without_overwrite(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -395,6 +489,7 @@ class HydraMultirunSmokeTest(unittest.TestCase):
                 f"model={','.join(self.MODELS)}",
                 f"dataset={','.join(self.DATASETS)}",
                 "variant=must",
+                "embedding=qwen3_4b",
                 "mode=smoke",
                 "fake_completion=true",
                 "smoke_items=1",
@@ -419,6 +514,10 @@ class HydraMultirunSmokeTest(unittest.TestCase):
                 self.assertTrue(
                     all(str(row["run_id"]).startswith("smoke-") for row in rows)
                 )
+                self.assertEqual(
+                    {row["semantic_embedding_backend"] for row in rows},
+                    {"mlx:mlx-community/Qwen3-Embedding-4B-4bit-DWQ"},
+                )
             self.assertEqual(
                 observed, {dataset_id: set(self.MODELS) for dataset_id in self.DATASETS}
             )
@@ -439,6 +538,89 @@ class HydraMultirunSmokeTest(unittest.TestCase):
                 self.assertEqual(rp.sha256_text(text), digest)
                 self.assertIn("api_key_env: LOCAL_OPENAI_API_KEY", text)
                 self.assertNotIn(hb.MASK_VALUE, text)
+
+            # The independently invoked analysis consumes the raw run's
+            # persisted selection and writes the same label to every ACSE row.
+            selected_registry_row = registry[0]
+            selected_run_id = selected_registry_row["run_id"]
+            selected_model = selected_registry_row["model"]
+            expected_backend = "mlx:mlx-community/Qwen3-Embedding-4B-4bit-DWQ"
+            analysis_dir = root / "outputs/evaluation_embedding_round_trip"
+            analysis_argv = [
+                "generate_evaluation_analysis.py",
+                "--dataset",
+                "nice",
+                "--variant",
+                "must",
+                "--run-id",
+                selected_run_id,
+                "--model",
+                selected_model,
+                "--profile",
+                "local_llama_cpp",
+                "--output-dir",
+                str(analysis_dir),
+                "--bootstrap-iterations",
+                "1",
+                "--allow-partial",
+                "--skip-construct-review-check",
+                "--skip-manifest-check",
+            ]
+
+            observed_embedding_args = []
+
+            def fake_embedding_matrix(
+                texts, embedding_backend=None, mlx_model_name=None
+            ):
+                observed_embedding_args.append(
+                    (embedding_backend, mlx_model_name)
+                )
+                return np.ones((len(texts), 2), dtype=float), expected_backend
+
+            with (
+                mock.patch.object(sys, "argv", analysis_argv),
+                mock.patch.object(analysis_cli.eu, "project_root", return_value=root),
+                mock.patch.object(
+                    analysis_cli.eu,
+                    "semantic_embedding_matrix",
+                    side_effect=fake_embedding_matrix,
+                ),
+            ):
+                analysis_cli.main()
+
+            acse_rows = [
+                row
+                for row in eu.read_csv_rows(analysis_dir / "uq_scores.csv")
+                if row["uq_method"] == eu.ACSE_PROXY_METHOD
+            ]
+            self.assertTrue(acse_rows)
+            self.assertEqual(
+                {row["semantic_embedding_backend"] for row in acse_rows},
+                {expected_backend},
+            )
+            self.assertEqual(
+                set(observed_embedding_args),
+                {("mlx", "mlx-community/Qwen3-Embedding-4B-4bit-DWQ")},
+            )
+            analysis_provenance = json.loads(
+                (analysis_dir / "provenance_manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                analysis_provenance["semantic_embedding_backend"], expected_backend
+            )
+
+            completed_runs = semantic_cache.completed_runs_from_analysis_dirs(
+                root, root / "outputs"
+            )
+            cached_run = next(
+                run for run in completed_runs if run.analysis_dir == analysis_dir
+            )
+            self.assertEqual(
+                semantic_cache.backend_specs_for_run(cached_run, None, None),
+                [("mlx", "mlx-community/Qwen3-Embedding-4B-4bit-DWQ")],
+            )
 
             # Hydra keeps its own sweep artifacts out of the data tree and does
             # not change the working directory of the job.

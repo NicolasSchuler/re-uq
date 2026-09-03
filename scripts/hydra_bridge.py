@@ -124,6 +124,8 @@ def hydra_config_to_run_config(cfg: DictConfig | Mapping[str, Any]) -> dict[str,
         "stochastic": dict(sampling.get("stochastic", {})),
         "logging": dict(raw.get("logging") or {}),
         "profiles": [profile],
+        "acse_embedding_backend": raw.get("acse_embedding_backend"),
+        "acse_embedding_mlx_model": raw.get("acse_embedding_mlx_model"),
     }
     return run_config
 
@@ -273,6 +275,10 @@ def run_config_to_hydra_yaml(
         "prompt_version": config["prompt_version"],
         "seed": config["seed"],
         "batch_order": config["batch_order"],
+        # Override the global embedding group with the JSON config's exact
+        # values, including null for legacy configs that did not select one.
+        "acse_embedding_backend": config["acse_embedding_backend"],
+        "acse_embedding_mlx_model": config["acse_embedding_mlx_model"],
         "task": "both" if config["tasks"] == ["task1", "task2"] else config["tasks"][0],
         "mode": "full",
         # Each swept profile owns its model list. Leaving model unset runs those

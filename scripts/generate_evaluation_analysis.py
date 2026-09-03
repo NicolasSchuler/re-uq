@@ -338,6 +338,12 @@ def main() -> None:
         raw_rows = [row for row in raw_rows if str(row.get("profile_id", "")) == args.profile]
     if not raw_rows:
         raise ValueError("No raw rows remain after applying model/profile filters.")
+    semantic_embedding_backend = eu.recorded_semantic_embedding_backend(raw_rows)
+    for row in raw_rows:
+        # Mixed legacy/resumed files may contain older rows without the field.
+        # Once one run-level choice is resolved, score every row consistently.
+        if not str(row.get("semantic_embedding_backend", "")).strip():
+            row["semantic_embedding_backend"] = semantic_embedding_backend
 
     if not args.skip_registry_check:
         require_registry_complete(registry_path, args.run_id, model=args.model, profile_id=args.profile)
@@ -392,6 +398,19 @@ def main() -> None:
         require_probability_confidence("Task 3 run", task3_rows)
 
     scores = eu.build_uq_scores(result_benchmark, raw_rows)
+    score_embedding_backends = {
+        str(row.get("semantic_embedding_backend", ""))
+        for row in scores
+        if str(row.get("uq_method", "")) == eu.ACSE_PROXY_METHOD
+    }
+    if score_embedding_backends and score_embedding_backends != {
+        semantic_embedding_backend
+    }:
+        raise AssertionError(
+            "ACSE scores do not match the run's persisted semantic embedding "
+            f"backend: expected {semantic_embedding_backend!r}, "
+            f"observed {sorted(score_embedding_backends)!r}."
+        )
     task3_scores = eu.build_task3_scores(task3_items, task3_rows) if task3_items and task3_rows else []
     baseline_scores = eu.build_rule_baseline_scores(result_benchmark)
     scores.extend(task3_scores)
@@ -457,6 +476,7 @@ def main() -> None:
         "dataset_id": dataset_id,
         "benchmark_variant": variant,
         "run_id": args.run_id,
+        "semantic_embedding_backend": semantic_embedding_backend,
         "task3_run_id": args.task3_run_id or "",
         "task3_audit_mode": task3_audit_mode if args.task3_run_id else "",
         "task3_audit_modes_observed": sorted(task3_audit_modes_in_rows(task3_rows)) if task3_rows else [],

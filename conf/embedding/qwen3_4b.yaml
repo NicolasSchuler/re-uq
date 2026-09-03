@@ -1,0 +1,6 @@
+# @package _global_
+# Same-family scale-up ablation: Qwen3-Embedding-4B (4-bit MLX conversion).
+# Tests whether the ACSE semantic-dispersion scores depend on embedding-model
+# capacity within the Qwen3-Embedding family.
+acse_embedding_backend: mlx
+acse_embedding_mlx_model: "mlx-community/Qwen3-Embedding-4B-4bit-DWQ"

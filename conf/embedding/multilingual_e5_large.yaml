@@ -1,0 +1,5 @@
+# @package _global_
+# Cross-family ablation: multilingual-e5-large (instruct-tuned E5 family),
+# an independently developed general-purpose multilingual embedding model.
+acse_embedding_backend: mlx
+acse_embedding_mlx_model: "mlx-community/multilingual-e5-large"

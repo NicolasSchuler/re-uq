@@ -1,0 +1,5 @@
+# @package _global_
+# Cross-family ablation: BGE-M3 (8-bit MLX conversion), a widely used
+# general-purpose multilingual retrieval embedding model.
+acse_embedding_backend: mlx
+acse_embedding_mlx_model: "mlx-community/bge-m3-mlx-8bit"

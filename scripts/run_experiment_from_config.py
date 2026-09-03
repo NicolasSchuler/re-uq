@@ -135,6 +135,10 @@ def run_from_config(run_config: dict[str, Any], args: Any) -> None:
     `scripts/run.py`, which composes the same dictionary from `conf/`.
     """
     eu.configure_run_logging(args.log_level)
+    semantic_embedding_backend, _ = eu.semantic_embedding_backend_label(
+        run_config.get("acse_embedding_backend"),
+        run_config.get("acse_embedding_mlx_model"),
+    )
     root = eu.project_root()
     model_filter = None if args.all_models else args.model
     profiles = eu.filter_run_profiles(run_config, profile_id=args.profile, model=model_filter)
@@ -403,6 +407,9 @@ def run_from_config(run_config: dict[str, Any], args: Any) -> None:
                         ),
                         start=1,
                     ):
+                        # Persist the resolved choice on the run artifact. The
+                        # analysis process cannot inherit this process's env.
+                        record["semantic_embedding_backend"] = semantic_embedding_backend
                         eu.append_jsonl(output_path, record)
                         current_rows.append(record)
                         now_monotonic = time.monotonic()

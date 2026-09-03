@@ -159,28 +159,6 @@
       "notes": "Native OpenAI endpoint. json_schema structured output is available but json_object is the conservative default that all listed models accept."
     },
     {
-      "profile_id": "anthropic",
-      "provider_id": "anthropic",
-      "base_url": "https://api.anthropic.com/v1/",
-      "api_key_env": "ANTHROPIC_API_KEY",
-      "models": [
-        "claude-sonnet-5",
-        "claude-haiku-4-5-20251001"
-      ],
-      "concurrency": 2,
-      "batch_size": 4,
-      "timeout_s": 180,
-      "max_tokens": 512,
-      "seed": 20260518,
-      "send_seed": false,
-      "max_retries": 3,
-      "batch_order": "grouped",
-      "json_mode": false,
-      "structured_output": "none",
-      "requires_manual_server": false,
-      "notes": "Anthropic OpenAI-compatible chat endpoint (POST /v1/chat/completions). The compatibility layer ignores response_format and seed, so structured output stays off and the parser relies on the prompt JSON contract."
-    },
-    {
       "profile_id": "mistral",
       "provider_id": "mistral",
       "base_url": "https://api.mistral.ai/v1",

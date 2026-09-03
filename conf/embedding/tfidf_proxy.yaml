@@ -1,0 +1,6 @@
+# @package _global_
+# Non-neural reference backend: TF-IDF character n-gram embeddings computed
+# in-process (no model download). Used as the conservative proxy baseline for
+# the ACSE semantic-dispersion scores.
+acse_embedding_backend: tfidf_char_wb_3_5
+acse_embedding_mlx_model: null

@@ -15,6 +15,9 @@ defaults:
   - variant: must
   - sampling: default
   - logging: default
+  # ACSE semantic embedding backend (embedding=qwen3_06b is the default;
+  # qwen3_4b / bge_m3 / ... are the ablation options).
+  - embedding: qwen3_06b
   # Experiment presets are opt-in and applied last:
   #   .venv/bin/python scripts/run.py --multirun +experiment=paper_cohort
 
@@ -25,6 +28,12 @@ run_group_id: provider-matrix-v2-2026-05
 prompt_version: v2-conf01
 seed: 20260518
 batch_order: grouped
+
+# ACSE semantic embedding backend selection (conf/embedding/ group). Task 1/2
+# runs persist the resolved label on every raw row; later analysis and cache
+# commands consume that provenance without relying on process-local state.
+acse_embedding_backend: mlx
+acse_embedding_mlx_model: "mlx-community/Qwen3-Embedding-0.6B-8bit"
 
 # ---------------------------------------------------------------------------
 # Execution knobs (mirror the runner CLI flags)

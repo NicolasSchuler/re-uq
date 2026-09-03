@@ -1191,5 +1191,87 @@ class ExportPaperTablesTest(unittest.TestCase):
         self.assertEqual(rows["broad_text_strengthening"]["value_ci_low"], "")
 
 
+class BenchmarkGroundTruthDocTest(unittest.TestCase):
+    """The generated ground-truth document must render the shipped tables."""
+
+    def test_document_renders_every_template_and_worked_example(self):
+        from scripts import export_benchmark_ground_truth as ground_truth
+
+        root = Path(__file__).resolve().parents[1]
+        document = ground_truth.build_document(root, nice_seed="S0001", mlm_seed=None)
+        self.assertIn("# Benchmark Ground Truth", document)
+        # All four fixed templates, verbatim, in both dataset sections.
+        for template, occurrences in (
+            ("The system MUST {capability}.", 2),
+            ("The system SHOULD {capability}.", 2),
+            ("The system MAY {capability}.", 2),
+            # The weak template appears twice per section: once as the
+            # main condition and once as the `probe_useful_if` variant, which
+            # is identical to it by design.
+            ("It would be useful if the system could {capability}.", 4),
+        ):
+            self.assertEqual(document.count(template), occurrences)
+        # The worked example carries the structural gold labels.
+        self.assertIn("`S0001_mandatory`", document)
+        self.assertIn("`nice_to_have`", document)
+        # The SHALL robustness variant is labelled distinctly, and the
+        # weak phrasing probes and the validation trail are present.
+        self.assertIn("(SHALL cell)", document)
+        self.assertIn("probe_future_enhancement", document)
+        self.assertIn("Validation trail", document)
+
+    def test_cli_writes_the_document_to_a_custom_path(self):
+        from scripts import export_benchmark_ground_truth as ground_truth
+
+        with TemporaryDirectory() as tmp:
+            output = ground_truth.main(["--output", str(Path(tmp) / "doc.md")])
+            self.assertTrue(output.exists())
+            self.assertIn("# Benchmark Ground Truth", output.read_text(encoding="utf-8"))
+
+    def test_non_first_worked_seed_uses_the_matching_shall_row(self):
+        from scripts import export_benchmark_ground_truth as ground_truth
+
+        root = Path(__file__).resolve().parents[1]
+        nice_seed = eu.read_csv_rows(
+            root / "data/processed/seeds_selected.csv"
+        )[1]["seed_id"]
+        mlm_seed = eu.read_csv_rows(
+            root / "data/processed/seeds_selected_mlm_tapt.csv"
+        )[1]["seed_id"]
+        document = ground_truth.build_document(root, nice_seed, mlm_seed)
+
+        for seed_id in (nice_seed, mlm_seed):
+            self.assertIn(f"`{seed_id}_mandatory (SHALL cell)`", document)
+
+    def test_validation_trail_enumerates_every_benchmark_cell(self):
+        from scripts import export_benchmark_ground_truth as ground_truth
+
+        root = Path(__file__).resolve().parents[1]
+        document = ground_truth.build_document(root, nice_seed="S0001", mlm_seed=None)
+        for artifact in (
+            "data/processed/seeds_review.csv",
+            "data/processed/seeds_review_mlm_tapt.csv",
+            "outputs/benchmark_statements_review.csv",
+            "outputs/benchmark_statements_review_shall.csv",
+            "outputs/benchmark_statements_review_mlm_tapt.csv",
+            "outputs/benchmark_statements_review_mlm_tapt_shall.csv",
+            "outputs/benchmark_manifest.json",
+            "outputs/benchmark_manifest_mlm_tapt.json",
+        ):
+            self.assertIn(f"`{artifact}`", document)
+        for artifact in (
+            "outputs/benchmark_statements_review.csv",
+            "outputs/benchmark_statements_review_shall.csv",
+            "outputs/benchmark_statements_review_mlm_tapt.csv",
+            "outputs/benchmark_statements_review_mlm_tapt_shall.csv",
+        ):
+            self.assertIn(f"[`{artifact}`](../{artifact}) | 180 |", document)
+        for artifact in (
+            "outputs/benchmark_manifest.json",
+            "outputs/benchmark_manifest_mlm_tapt.json",
+        ):
+            self.assertIn(f"[`{artifact}`](../{artifact}) | 10 |", document)
+
+
 if __name__ == "__main__":
     unittest.main()

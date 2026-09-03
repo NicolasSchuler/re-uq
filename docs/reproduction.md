@@ -252,11 +252,22 @@ See `docs/results_mapping.md` for how each artifact backs a specific paper figur
 
 `uq_scores.csv` includes the diagnostic `acse_semantic_entropy` method when stochastic samples are available. This row clusters the five generated answer texts and should be interpreted as a semantic-diversity ranking signal unless a held-out calibration split is used to set an accept/abstain threshold.
 The analysis also writes `acse_semantic_normalized_scores.csv` and `acse_semantic_calibration.*`, which min-max normalize ACSE scores within each run/model/task/backend group and select empirical accept thresholds on a deterministic seed-level calibration split. Treat those thresholds as post hoc triage diagnostics unless the split and target risk level are declared before running the final analysis.
-By default, this diagnostic uses the dependency-free TF-IDF fallback. To use a local MLX embedding model on Apple Silicon, install `mlx-embeddings` in the environment and run with:
+The Task 1/2 runner records the resolved embedding backend on every raw row.
+`generate_evaluation_analysis.py` consumes that value and writes it to its
+provenance manifest; `compute_acse_semantic_artifacts.py` then uses the manifest
+value by default. Hydra runs select Qwen3-Embedding-0.6B unless `embedding=` is
+overridden. Legacy JSON configs without embedding fields use the dependency-free
+TF-IDF backend unless the environment selects MLX at run launch. For example:
 
 ```bash
-RE_UQ_ACSE_EMBEDDING_BACKEND=mlx \
-RE_UQ_ACSE_MLX_MODEL=mlx-community/Qwen3-Embedding-0.6B-8bit \
+.venv/bin/python scripts/run.py \
+  embedding=qwen3_4b \
+  profile=local_llama_cpp \
+  model=qwen/qwen3.5-9b \
+  dataset=mlm_tapt \
+  variant=must \
+  mode=full
+
 .venv/bin/python scripts/generate_evaluation_analysis.py \
   --dataset mlm_tapt \
   --variant must \
@@ -264,6 +275,11 @@ RE_UQ_ACSE_MLX_MODEL=mlx-community/Qwen3-Embedding-0.6B-8bit \
   --task3-run-id TASK3_RUN_ID \
   --task3-audit-mode blind
 ```
+
+Install `mlx-embeddings` before analyzing an MLX-configured run. Pass
+`--backend` and `--mlx-model` to `compute_acse_semantic_artifacts.py` only when
+intentionally computing an additional cache ablation instead of the run's
+persisted selection.
 
 Use diagnostic flags such as `--allow-partial`, `--skip-registry-check`, `--skip-construct-review-check`, `--skip-manifest-check`, `--max-parse-failure-rate`, `--bootstrap-iterations`, or `--expected-stochastic-samples` only for local investigation, not for paper-ready results. (`--skip-manifest-check` bypasses the SHA-256 integrity check against `outputs/benchmark_manifest*.json`.)
 
@@ -310,10 +326,9 @@ Environment variables recognised by the runners and the wrapper:
 | `institutional_llm` | yes | `json_schema` | yes |
 | `local_llama_cpp`, `ollama_local` | no | `none` | yes / n.a. |
 | `openai`, `mistral` | yes | `json_object` | yes |
-| `anthropic` | no | `none` | `send_seed: false` — the OpenAI-compatible layer ignores `seed`. |
 | `google_gemini` | yes | `json_object` | `send_seed: false` — same reason. |
 
-`ollama_local` gives a fully offline replication path. Running the new families is [`TODO.md`](../TODO.md) section C.
+Every profile targets an OpenAI-compatible chat-completions endpoint; that is the only provider integration the pipeline supports, and new families are added as profile files (see `docs/configuration.md`). `ollama_local` gives a fully offline replication path. Running the new families is [`TODO.md`](../TODO.md) section C.
 
 ### Registry Columns
 

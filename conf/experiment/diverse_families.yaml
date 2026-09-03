@@ -1,7 +1,9 @@
 # @package _global_
-# TODO.md section C: widen the cohort beyond GLM using the new example provider
-# profiles. `model: null` means "every model listed by the selected profile",
-# run sequentially (the --all-models behaviour of the JSON runner).
+# TODO.md section C: widen the cohort beyond GLM. Policy: providers are only
+# ever run through OpenAI-compatible chat-completions endpoints (base_url +
+# api_key_env); providers without such an endpoint are out of scope.
+# `model: null` means "every model listed by the selected profile", run
+# sequentially (the --all-models behaviour of the JSON runner).
 #
 # Run:
 #   .venv/bin/python scripts/run.py --multirun +experiment=diverse_families
@@ -20,5 +22,5 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      profile: openai,anthropic,mistral,google_gemini,ollama_local
+      profile: openai,mistral,google_gemini,ollama_local
       dataset: nice,mlm_tapt

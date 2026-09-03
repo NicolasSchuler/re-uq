@@ -80,7 +80,8 @@ an owner, and neighbours.
   requests) instead of template output, annotate their intended strength, and
   measure strengthening without the template scaffold. This trades control for
   ecological validity and should be reported separately, not pooled with the
-  controlled benchmark.
+  controlled benchmark. Candidate public corpora are surveyed in
+  [`docs/external_validity_datasets.md`](docs/external_validity_datasets.md).
 - Reuse: `main_modality_template_rows()` generalises to
   `(context_envelope, modality_template)` pairs; the detector, metrics, and
   aggregation need no change.
@@ -92,8 +93,10 @@ cross-family claim.
 
 **Do.**
 
-1. Run the new example provider profiles: `openai`, `anthropic`, `mistral`,
-   `google_gemini`, `ollama_local`.
+1. Run the new example provider profiles: `openai`, `mistral`,
+   `google_gemini`, `ollama_local`. Scope rule: OpenAI-compatible
+   chat-completions endpoints only — a provider is in scope as soon as it
+   exposes one; providers without such an endpoint are out of scope.
 2. Same cells as the official cohort (`nice` and `mlm_tapt`, `must`; `shall` if
    budget allows).
 3. Export per-model tables with `scripts/export_paper_tables.py` →

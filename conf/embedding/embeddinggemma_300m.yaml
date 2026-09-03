@@ -1,0 +1,5 @@
+# @package _global_
+# Cross-family small-model ablation: EmbeddingGemma-300M (8-bit MLX
+# conversion), an independently developed 300M-parameter embedding model.
+acse_embedding_backend: mlx
+acse_embedding_mlx_model: "mlx-community/embeddinggemma-300m-8bit"

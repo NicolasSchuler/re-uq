@@ -1,0 +1,8 @@
+# @package _global_
+# Default ACSE semantic embedding backend (see docs/experimental_setup.md,
+# "Semantic embedding backend"). Qwen3-Embedding-0.6B is a small,
+# general-purpose, multilingual instruction-tuned embedding model; the 8-bit
+# MLX conversion is the same model the paper runs used. Ablation alternatives
+# live in this group (embedding=qwen3_4b, embedding=bge_m3, ...).
+acse_embedding_backend: mlx
+acse_embedding_mlx_model: "mlx-community/Qwen3-Embedding-0.6B-8bit"

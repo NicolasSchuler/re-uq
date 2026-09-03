@@ -52,7 +52,7 @@ Because it is a convention, not evidence. 11.5% of successful Task 2 outputs con
 
 ## Why is the model cohort mostly one family?
 
-Five of the six official models are GLM variants on the z.ai endpoint; `kit.gemma4-31b-it` on the KIT institutional endpoint is the only outside model. That is a real limitation and is stated as one. New example profiles for OpenAI, Anthropic, Mistral, Gemini, and Ollama exist so the cohort can be widened; running them is [`TODO.md`](../TODO.md) section C.
+Five of the six official models are GLM variants on the z.ai endpoint; `kit.gemma4-31b-it` on the KIT institutional endpoint is the only outside model. That is a real limitation and is stated as one. New example profiles for OpenAI, Mistral, Gemini, and Ollama exist so the cohort can be widened; provider support is deliberately limited to OpenAI-compatible chat-completions endpoints, so any provider exposing one is a profile file away. Running them is [`TODO.md`](../TODO.md) section C.
 
 ## Can I reproduce the exact requests of the reported runs?
 

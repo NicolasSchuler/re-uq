@@ -304,10 +304,13 @@ fast on 400/401/403/404/422 and every other 4xx. `retry_count` and
 Going forward these are explicit profile knobs: `seed`, `send_seed`,
 `max_retries`, and `batch_order`; `seed` and `batch_order` can also be set
 run-wide. `send_seed` exists because some OpenAI-compatible layers accept and
-silently ignore `seed` — the `anthropic` and `google_gemini` example profiles
-set `send_seed: false` for exactly that reason, so the raw records do not claim
-a seed that never took effect. The `anthropic` and `ollama_local` profiles run
-with `json_mode: false` and `structured_output: none`.
+silently ignore `seed` — the `google_gemini` example profile sets
+`send_seed: false` for exactly that reason, so the raw records do not claim a
+seed that never took effect. The `ollama_local` profile runs with
+`json_mode: false` and `structured_output: none`. Provider selection is
+restricted to OpenAI-compatible chat-completions endpoints: every profile is
+a `base_url` + API-key pair against that one client, and providers without
+such an endpoint are out of scope.
 
 The z.ai profile additionally sends
 `extra_body: {"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}}`.
@@ -458,17 +461,25 @@ naming its scope.
 | Property | Value |
 | --- | --- |
 | Model | `mlx-community/Qwen3-Embedding-0.6B-8bit` |
-| Backend | MLX (`RE_UQ_ACSE_EMBEDDING_BACKEND=mlx`, requires `mlx-embeddings`) |
-| Override | `RE_UQ_ACSE_MLX_MODEL` or `--mlx-model` |
-| Provenance | Recorded in the ACSE artifact manifest (`outputs/acse_semantic_artifact_manifest.json`). |
-| Fallback | Dependency-free TF-IDF character n-gram proxy (the default when MLX is unavailable). |
+| Backend | MLX (requires `mlx-embeddings`) |
+| Override | Hydra group `embedding=` for a run; `--backend` / `--mlx-model` for an explicit post-analysis cache ablation |
+| Ablation options | `embedding=qwen3_4b`, `embedding=multilingual_e5_large`, `embedding=bge_m3`, `embedding=embeddinggemma_300m`, `embedding=tfidf_proxy` |
+| Provenance | Resolved label on raw run rows, the analysis manifest, and the ACSE artifact manifest. |
+| Legacy default | Dependency-free TF-IDF character n-gram proxy when a JSON run has no embedding selection. |
 
 Rationale: the analysis had to run locally on Apple Silicon without shipping
 text to a third party, so the choice was restricted to MLX-executable
-embedders. Within that set, Qwen3-Embedding-0.6B is a compact, recent
-multilingual model with strong MTEB retrieval and STS scores at 0.6B
-parameters, which keeps the semantic-dispersion signal meaningful without a GPU
-budget. The 8-bit quantization was chosen for memory headroom.
+embedders. Within that set, Qwen3-Embedding-0.6B is a commonly used,
+general-purpose, multilingual embedding model — a current-generation family
+with strong MTEB retrieval and STS scores at 0.6B parameters — which keeps
+the semantic-dispersion signal meaningful without a GPU budget; the 8-bit
+quantization was chosen for memory headroom. The backend is a first-class
+configuration choice (`embedding=` in Hydra) that is persisted with the raw
+run and consumed by later analysis, so a reviewer-requested ablation is a run
+flag, not a code change:
+same-family scale-up (`qwen3_4b`), independent families (`multilingual_e5_large`,
+`bge_m3`, `embeddinggemma_300m`), and the non-neural TF-IDF proxy are all
+ready in `conf/embedding/`.
 
 Caveats: the quantization was **not ablated** against the 4-bit or full-precision
 variants, and no other embedding family was benchmarked on this data. The

@@ -1025,7 +1025,16 @@ def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
     run_batch_order = normalize_batch_order(
         config.get("batch_order", llm_config.get("batch_order")), "batch_order"
     )
+    def _acse_setting(value: Any) -> str | None:
+        # A missing key must stay None, not become the string "None".
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
     return {
+        "acse_embedding_backend": _acse_setting(config.get("acse_embedding_backend")),
+        "acse_embedding_mlx_model": _acse_setting(config.get("acse_embedding_mlx_model")),
         "run_group_id": run_group_id,
         "seed": run_seed,
         "batch_order": run_batch_order,
@@ -5661,6 +5670,20 @@ def _mlx_text_embedding_matrix(
     return np.asarray(text_embeds.tolist(), dtype=float)
 
 
+def apply_acse_embedding_env(config: Mapping[str, Any]) -> None:
+    """Export the run config's ACSE embedding choice as environment variables.
+
+    Uses ``setdefault``, so explicitly exported environment variables still
+    take precedence (for example a manual ``RE_UQ_ACSE_MLX_MODEL`` override).
+    """
+    backend = str(config.get("acse_embedding_backend") or "").strip()
+    model_name = str(config.get("acse_embedding_mlx_model") or "").strip()
+    if backend:
+        os.environ.setdefault(ACSE_EMBEDDING_BACKEND_ENV, backend)
+    if model_name:
+        os.environ.setdefault(ACSE_MLX_MODEL_ENV, model_name)
+
+
 def semantic_embedding_backend_label(
     embedding_backend: str | None = None,
     mlx_model_name: str | None = None,
@@ -5681,6 +5704,49 @@ def semantic_embedding_backend_label(
         f"Unknown ACSE semantic embedding backend {backend!r}; "
         f"use {ACSE_PROXY_EMBEDDING_BACKEND!r} or {ACSE_MLX_EMBEDDING_BACKEND!r}."
     )
+
+
+def semantic_embedding_backend_args(
+    backend_label: str | None,
+) -> tuple[str | None, str | None]:
+    """Recover backend arguments from a persisted backend label.
+
+    Raw run rows and analysis manifests store the resolved label so a later
+    process can reproduce the run's embedding choice without inheriting the
+    runner's environment. An empty label retains the legacy environment/default
+    lookup used by runs created before this provenance field existed.
+    """
+    label = str(backend_label or "").strip()
+    if not label:
+        return None, None
+    if label in {"tfidf", ACSE_PROXY_EMBEDDING_BACKEND}:
+        return ACSE_PROXY_EMBEDDING_BACKEND, None
+    prefix = f"{ACSE_MLX_EMBEDDING_BACKEND}:"
+    if label.startswith(prefix) and label[len(prefix) :].strip():
+        return ACSE_MLX_EMBEDDING_BACKEND, label[len(prefix) :].strip()
+    raise ValueError(f"Invalid persisted ACSE semantic embedding backend label: {label!r}.")
+
+
+def recorded_semantic_embedding_backend(rows: Iterable[Mapping[str, Any]]) -> str:
+    """Return the one resolved embedding backend recorded for a run.
+
+    Missing values are allowed for legacy rows, but conflicting non-empty
+    values indicate that rows from incompatible embedding configurations were
+    mixed under one analysis request and therefore fail closed.
+    """
+    labels = {
+        str(row.get("semantic_embedding_backend", "")).strip()
+        for row in rows
+        if str(row.get("semantic_embedding_backend", "")).strip()
+    }
+    if len(labels) > 1:
+        raise ValueError(
+            "Raw rows contain multiple semantic embedding backends: "
+            f"{sorted(labels)!r}. Analyze each configured run separately."
+        )
+    if labels:
+        return next(iter(labels))
+    return semantic_embedding_backend_label()[0]
 
 
 def semantic_embedding_matrix(
@@ -6175,8 +6241,13 @@ def distribution_score_rows(
         ),
     ]
     if sample_rows is not None:
+        embedding_backend, mlx_model_name = semantic_embedding_backend_args(
+            raw.get("semantic_embedding_backend")
+        )
         diagnostics = acse_semantic_proxy_diagnostics(
-            semantic_texts_from_rows(str(raw.get("task", "")), sample_rows)
+            semantic_texts_from_rows(str(raw.get("task", "")), sample_rows),
+            embedding_backend=embedding_backend,
+            mlx_model_name=mlx_model_name,
         )
         acse_row = score_from_distribution(
             raw,

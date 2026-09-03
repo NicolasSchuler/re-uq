@@ -135,6 +135,7 @@ class CompletedRun:
     run_id: str
     model: str
     profile: str
+    semantic_embedding_backend: str
 
 
 def completed_runs_from_analysis_dirs(root: Path, output_root: Path) -> list[CompletedRun]:
@@ -158,6 +159,9 @@ def completed_runs_from_analysis_dirs(root: Path, output_root: Path) -> list[Com
                 run_id=run_id,
                 model=model,
                 profile=str(provenance.get("profile_filter", "")).strip(),
+                semantic_embedding_backend=str(
+                    provenance.get("semantic_embedding_backend", "")
+                ).strip(),
             )
         )
     return runs
@@ -192,6 +196,33 @@ def backend_values(raw_values: list[str] | None) -> list[str]:
         if value not in result:
             result.append(value)
     return result
+
+
+def backend_specs_for_run(
+    run: CompletedRun,
+    raw_values: list[str] | None,
+    mlx_model_name: str | None,
+) -> list[tuple[str, str | None]]:
+    """Resolve cache backends, defaulting to the analysis run's provenance."""
+    recorded_backend, recorded_model = eu.semantic_embedding_backend_args(
+        run.semantic_embedding_backend
+    )
+    if raw_values is None:
+        return [
+            (
+                recorded_backend or eu.ACSE_PROXY_EMBEDDING_BACKEND,
+                recorded_model,
+            )
+        ]
+    return [
+        (
+            backend,
+            (mlx_model_name or recorded_model)
+            if backend == eu.ACSE_MLX_EMBEDDING_BACKEND
+            else None,
+        )
+        for backend in backend_values(raw_values)
+    ]
 
 
 def existing_backend_manifests(output_root: Path) -> list[dict[str, Any]]:
@@ -520,7 +551,13 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, default=Path("outputs"))
     parser.add_argument("--analysis-dir", type=Path, action="append", help="Limit to one or more evaluation output dirs.")
     parser.add_argument("--backend", action="append", choices=["tfidf", eu.ACSE_PROXY_EMBEDDING_BACKEND, "mlx", "all"])
-    parser.add_argument("--mlx-model", default=eu.ACSE_MLX_DEFAULT_MODEL)
+    parser.add_argument(
+        "--mlx-model",
+        default=None,
+        help="MLX embedding model id; overrides the analysis run's persisted model. "
+        "For legacy runs without embedding provenance, defaults to "
+        f"RE_UQ_ACSE_MLX_MODEL or {eu.ACSE_MLX_DEFAULT_MODEL!r}.",
+    )
     parser.add_argument("--distance-threshold", type=float, default=eu.ACSE_PROXY_DISTANCE_THRESHOLD)
     parser.add_argument("--embedding-batch-size", type=int, default=64)
     parser.add_argument("--force", action="store_true", help="Recompute existing backend caches.")
@@ -538,17 +575,18 @@ def main() -> None:
     if not runs:
         raise ValueError("No completed evaluation output dirs with provenance_manifest.json and uq_scores.csv were found.")
 
-    backends = backend_values(args.backend)
     manifests: list[dict[str, Any]] = []
     for run in runs:
         if not args.allow_registry_mismatch and not registry_confirms_complete(root, run):
             raise ValueError(f"Registry does not confirm complete run: {run.run_id} / {run.model}")
-        for backend in backends:
+        for backend, mlx_model_name in backend_specs_for_run(
+            run, args.backend, args.mlx_model
+        ):
             manifest = compute_run_backend(
                 root,
                 run,
                 backend,
-                args.mlx_model if backend == "mlx" else None,
+                mlx_model_name,
                 args.distance_threshold,
                 args.embedding_batch_size,
                 args.force,

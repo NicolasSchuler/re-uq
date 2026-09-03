@@ -46,17 +46,23 @@ conf/
   config.yaml              defaults list + run-level and execution fields
   profile/                 one file per provider profile (the paper's provider matrix)
     local_llama_cpp.yaml  institutional_llm.yaml  zai.yaml  openai.yaml
-    anthropic.yaml        mistral.yaml            google_gemini.yaml  ollama_local.yaml
+    mistral.yaml          google_gemini.yaml      ollama_local.yaml
     kit_toolbox.yaml
   dataset/                 nice.yaml  mlm_tapt.yaml
   variant/                 must.yaml  shall.yaml
   sampling/                default.yaml  deterministic_only.yaml
   logging/                 default.yaml
+  embedding/               qwen3_06b.yaml (default), qwen3_4b.yaml, bge_m3.yaml,
+                           multilingual_e5_large.yaml, embeddinggemma_300m.yaml,
+                           tfidf_proxy.yaml
   experiment/              paper_cohort.yaml  batching_ablation.yaml  diverse_families.yaml
 ```
 
-The nine `conf/profile/*.yaml` files mirror
-`run_configs/full_matrix.example.json` entry for entry, including the
+The eight `conf/profile/*.yaml` files mirror
+`run_configs/full_matrix.example.json` entry for entry. Every profile is an
+OpenAI-compatible chat-completions endpoint (`base_url` + `api_key_env`);
+that compatibility layer is the only provider integration the pipeline has,
+so a new family is a new profile file, nothing more. Each carries the
 per-profile knobs `seed`, `send_seed`, `max_retries`, `batch_order`,
 `batch_size`, `concurrency`, `timeout_s`, `max_tokens`, `json_mode`,
 `structured_output`, `extra_body`, `requires_manual_server` and `notes`. A test
@@ -68,6 +74,7 @@ Top-level fields in `conf/config.yaml`:
 | Field | Meaning |
 | --- | --- |
 | `run_group_id`, `prompt_version`, `seed`, `batch_order` | Run-level provenance and defaults, same keys as the JSON config |
+| `acse_embedding_backend`, `acse_embedding_mlx_model` | Resolved `embedding=` selection, persisted on raw run rows for later analysis and cache generation |
 | `model` | Model id to run. `null` runs every model of the selected profile sequentially (the `--all-models` behaviour) |
 | `task` | `task1` \| `task2` \| `both` \| `task3`; `task3` dispatches to the Task 3 runner |
 | `mode` | `smoke` \| `full` \| `resume` (`resume` requires `run_id`) |
@@ -93,7 +100,7 @@ RE_UQ_ZAI_API_KEY_ENV=MY_TEAM_ZAI_KEY .venv/bin/python scripts/run.py profile=za
 
 ```bash
 # select a config group
-profile=anthropic  dataset=mlm_tapt  variant=shall  sampling=deterministic_only
+profile=openai  dataset=mlm_tapt  variant=shall  sampling=deterministic_only
 # override a single value inside a group (dotted path)
 profile.batch_order=shuffled  profile.batch_size=1  profile.concurrency=1
 # override a top-level field
@@ -160,7 +167,7 @@ applied last and opted into with a leading `+`:
 | --- | --- |
 | `paper_cohort` | Official cohort: `profile=zai`, all five GLM models (`glm-4.5-air,glm-4.7,glm-5,glm-5-turbo,glm-5.1`), datasets `nice,mlm_tapt`, both variants `must,shall`, Task 1 + Task 2, `mode=full`. The one non-GLM official model lives on `profile=kit_toolbox` and runs as a separate invocation (see the file header). |
 | `batching_ablation` | [`TODO.md`](../TODO.md) section A: `mlm_tapt`/`must`, Task 2, deterministic pass only, sweeping `profile.batch_order=grouped,shuffled` with `profile.batch_size` pinned to 16 so the two arms differ only in batch membership. The `batch_size=1` arm and the `kit.gemma4-31b-it` half of the cohort are one extra override each, spelled out in the file header. |
-| `diverse_families` | [`TODO.md`](../TODO.md) section C: `openai`, `anthropic`, `mistral`, `google_gemini`, `ollama_local`, every model of each profile, both datasets, variant `must`. |
+| `diverse_families` | [`TODO.md`](../TODO.md) section C: `openai`, `mistral`, `google_gemini`, `ollama_local`, every model of each profile, both datasets, variant `must`. All OpenAI-compatible endpoints; adding a family without one is out of scope. |
 
 Presets compose with further overrides, e.g.
 `+experiment=batching_ablation profile.batch_size=1`.

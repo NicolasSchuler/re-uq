@@ -1,0 +1,22 @@
+{
+  "coreVersion": 2,
+  "name": "re-uq",
+  "toolchains": {
+    "python": {
+      "enabled": true,
+      "version": "3.13",
+      "syncDeps": false
+    }
+  },
+  "omp": {
+    "enabled": true,
+    "broker": true,
+    "updatePlugins": false
+  },
+  "herdr": {
+    "enabled": false
+  },
+  "codex": {
+    "enabled": true
+  }
+}
