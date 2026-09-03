@@ -72,11 +72,15 @@ def manifest_rows(path: Path, backend_prefix: str) -> list[dict[str, str]]:
         if str(row.get("embedding_backend", "")).startswith(backend_prefix)
     ]
     if not rows:
-        raise ValueError(f"No manifest rows found for backend prefix {backend_prefix!r} in {path}.")
+        raise ValueError(
+            f"No manifest rows found for backend prefix {backend_prefix!r} in {path}."
+        )
     return rows
 
 
-def load_embeddings_and_rows(rows: list[dict[str, str]]) -> tuple[np.ndarray, list[dict[str, Any]]]:
+def load_embeddings_and_rows(
+    rows: list[dict[str, str]],
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
     matrices: list[np.ndarray] = []
     sample_rows: list[dict[str, Any]] = []
     offset = 0
@@ -87,14 +91,24 @@ def load_embeddings_and_rows(rows: list[dict[str, str]]) -> tuple[np.ndarray, li
         embeddings_path = artifact_dir / "task2_acse_sample_embeddings.npz"
         samples_path = artifact_dir / "task2_acse_samples.csv"
         items_path = artifact_dir / "task2_acse_items.csv"
-        missing = [path for path in [embeddings_path, samples_path, items_path] if not path.exists()]
+        missing = [
+            path
+            for path in [embeddings_path, samples_path, items_path]
+            if not path.exists()
+        ]
         if missing:
-            raise FileNotFoundError("Incomplete ACSE cache: " + ", ".join(str(path) for path in missing))
+            raise FileNotFoundError(
+                "Incomplete ACSE cache: " + ", ".join(str(path) for path in missing)
+            )
 
-        embeddings = np.load(embeddings_path, allow_pickle=False)["embeddings"].astype(np.float32, copy=False)
+        embeddings = np.load(embeddings_path, allow_pickle=False)["embeddings"].astype(
+            np.float32, copy=False
+        )
         samples = eu.read_csv_rows(samples_path)
         if embeddings.shape[0] != len(samples):
-            raise ValueError(f"Embedding/sample row mismatch in {artifact_dir}: {embeddings.shape[0]} != {len(samples)}")
+            raise ValueError(
+                f"Embedding/sample row mismatch in {artifact_dir}: {embeddings.shape[0]} != {len(samples)}"
+            )
         backend_label = str(manifest_row.get("embedding_backend", ""))
         backend_labels.add(backend_label)
         if is_tfidf_backend(backend_label):
@@ -134,7 +148,9 @@ def load_embeddings_and_rows(rows: list[dict[str, str]]) -> tuple[np.ndarray, li
             )
         offset += embeddings.shape[0]
     if needs_shared_tfidf_refit:
-        non_tfidf = sorted(label for label in backend_labels if not is_tfidf_backend(label))
+        non_tfidf = sorted(
+            label for label in backend_labels if not is_tfidf_backend(label)
+        )
         if non_tfidf:
             raise ValueError(
                 "Cannot mix per-run TF-IDF caches with fixed-width embedding caches in one global projection; "
@@ -198,8 +214,14 @@ def plot_grouped_3d(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create a global 3D projection over cached ACSE sample embeddings.")
-    parser.add_argument("--manifest", type=Path, default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME)
+    parser = argparse.ArgumentParser(
+        description="Create a global 3D projection over cached ACSE sample embeddings."
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME,
+    )
     parser.add_argument("--backend-prefix", default="mlx:")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--method", choices=["pca", "tsne"], default="pca")
@@ -215,8 +237,12 @@ def main() -> None:
     args = parser.parse_args()
 
     root = eu.project_root()
-    manifest_path = args.manifest if args.manifest.is_absolute() else root / args.manifest
-    backend_tag = eu.safe_identifier(args.backend_prefix.rstrip(":") or args.backend_prefix or "selected")
+    manifest_path = (
+        args.manifest if args.manifest.is_absolute() else root / args.manifest
+    )
+    backend_tag = eu.safe_identifier(
+        args.backend_prefix.rstrip(":") or args.backend_prefix or "selected"
+    )
     backend_title = args.backend_prefix.rstrip(":") or args.backend_prefix or "selected"
     default_output = Path(
         f"outputs/acse_global_{backend_tag}_projection"
@@ -224,21 +250,33 @@ def main() -> None:
         else f"outputs/acse_global_{backend_tag}_tsne_projection"
     )
     requested_output = args.output_dir or default_output
-    output_dir = requested_output if requested_output.is_absolute() else root / requested_output
+    output_dir = (
+        requested_output if requested_output.is_absolute() else root / requested_output
+    )
     rows = manifest_rows(manifest_path, args.backend_prefix)
     embeddings, sample_rows = load_embeddings_and_rows(rows)
     projection_details: dict[str, Any]
     if args.method == "pca":
-        pca = PCA(n_components=3, svd_solver="randomized", random_state=args.random_state)
+        pca = PCA(
+            n_components=3, svd_solver="randomized", random_state=args.random_state
+        )
         projected = pca.fit_transform(embeddings)
         projection_details = {
             "projection": "pca_3d",
             "axis_prefix": "PC",
-            "pca_explained_variance_ratio": [float(value) for value in pca.explained_variance_ratio_],
+            "pca_explained_variance_ratio": [
+                float(value) for value in pca.explained_variance_ratio_
+            ],
         }
     else:
-        prepca_components = min(args.tsne_prepca_components, embeddings.shape[0], embeddings.shape[1])
-        prepca = PCA(n_components=prepca_components, svd_solver="randomized", random_state=args.random_state)
+        prepca_components = min(
+            args.tsne_prepca_components, embeddings.shape[0], embeddings.shape[1]
+        )
+        prepca = PCA(
+            n_components=prepca_components,
+            svd_solver="randomized",
+            random_state=args.random_state,
+        )
         prepared = prepca.fit_transform(embeddings)
         tsne = TSNE(
             n_components=3,
@@ -259,7 +297,9 @@ def main() -> None:
             "random_state": args.random_state,
             "tsne_preprocessing": "pca",
             "tsne_prepca_components": int(prepca_components),
-            "tsne_prepca_explained_variance_sum": float(np.sum(prepca.explained_variance_ratio_)),
+            "tsne_prepca_explained_variance_sum": float(
+                np.sum(prepca.explained_variance_ratio_)
+            ),
             "tsne_perplexity": float(args.tsne_perplexity),
             "tsne_max_iter": int(args.tsne_max_iter),
             "tsne_angle": float(args.tsne_angle),
@@ -321,7 +361,9 @@ def main() -> None:
         **projection_details,
     }
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
 

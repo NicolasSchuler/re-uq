@@ -43,8 +43,6 @@ datasets x `MUST`/`SHALL` keywords).
 """
 
 
-
-
 def _seed_row(rows: list[dict[str, Any]], seed_id: str) -> dict[str, Any]:
     for row in rows:
         if str(row.get("seed_id")) == seed_id:
@@ -60,9 +58,13 @@ def _dataset_section(
     review_rows_path: Path,
 ) -> str:
     seeds = eu.read_csv_rows(seeds_path)
-    review_rows = len(eu.read_csv_rows(review_rows_path)) if review_rows_path.exists() else 0
+    review_rows = (
+        len(eu.read_csv_rows(review_rows_path)) if review_rows_path.exists() else 0
+    )
     items = eu.read_csv_rows(items_paths["must"])
-    shall_items = eu.read_csv_rows(items_paths.get("shall")) if items_paths.get("shall") else []
+    shall_items = (
+        eu.read_csv_rows(items_paths.get("shall")) if items_paths.get("shall") else []
+    )
     worked_seed_id = worked_seed_id or str(seeds[0]["seed_id"])
     seed = _seed_row(seeds, worked_seed_id)
     worked = [row for row in items if str(row.get("seed_id")) == worked_seed_id]
@@ -89,34 +91,54 @@ def _dataset_section(
     # Step 1: the source requirement and the extracted capability.
     lines.append(f"### Step 1 — Source requirement and capability ({worked_seed_id})")
     lines.append("")
-    lines.append("The seed row in `data/processed/seeds_selected*.csv` records the original "
-                 "corpus requirement and the reviewed capability clause:")
+    lines.append(
+        "The seed row in `data/processed/seeds_selected*.csv` records the original "
+        "corpus requirement and the reviewed capability clause:"
+    )
     lines.append("")
     lines.append("| Field | Value |")
     lines.append("| --- | --- |")
     lines.append(f"| `seed_id` | `{worked_seed_id}` |")
     lines.append(f"| `source_dataset` | `{seed.get('source_dataset', '')}` |")
-    lines.append("| `original_requirement` | " + _inline(str(seed.get("original_requirement", ""))) + " |")
-    lines.append("| `capability_text_final` | " + _inline(str(seed.get("capability_text_final", ""))) + " |")
+    lines.append(
+        "| `original_requirement` | "
+        + _inline(str(seed.get("original_requirement", "")))
+        + " |"
+    )
+    lines.append(
+        "| `capability_text_final` | "
+        + _inline(str(seed.get("capability_text_final", "")))
+        + " |"
+    )
     lines.append("")
-    lines.append("The capability clause is the *content* that must survive every transformation "
-                 "unchanged; only its modal force varies.")
+    lines.append(
+        "The capability clause is the *content* that must survive every transformation "
+        "unchanged; only its modal force varies."
+    )
     lines.append("")
 
     # Step 2: the four fixed templates applied to that capability.
     lines.append("### Step 2 — The four controlled variants")
     lines.append("")
-    lines.append("Every seed is rendered through the four fixed templates below (verbatim from "
-                 "`eval_utils.source_statement`); nothing else in the sentence changes:")
+    lines.append(
+        "Every seed is rendered through the four fixed templates below (verbatim from "
+        "`eval_utils.source_statement`); nothing else in the sentence changes:"
+    )
     lines.append("")
-    template_rows = eu.main_modality_template_rows(str(seed.get("capability_text_final", "")))
-    lines.append(eu.markdown_table(template_rows, eu.MAIN_MODALITY_TEMPLATE_INVENTORY_FIELDS))
+    template_rows = eu.main_modality_template_rows(
+        str(seed.get("capability_text_final", ""))
+    )
+    lines.append(
+        eu.markdown_table(template_rows, eu.MAIN_MODALITY_TEMPLATE_INVENTORY_FIELDS)
+    )
     lines.append("")
 
     # Step 3: the resulting items with gold labels.
     lines.append("### Step 3 — The resulting items and their gold labels")
     lines.append("")
-    lines.append("| `item_id` | Source statement (what the model sees) | Task 1 gold | Task 2 gold | Ordinal |")
+    lines.append(
+        "| `item_id` | Source statement (what the model sees) | Task 1 gold | Task 2 gold | Ordinal |"
+    )
     lines.append("| --- | --- | --- | --- | --- |")
     for row in worked:
         lines.append(
@@ -141,33 +163,43 @@ def _dataset_section(
             )
         )
     lines.append("")
-    lines.append("Gold labels are **structural**, not judged per item: the gold modality is the "
-                 "condition the template encodes, Task 1's gold entailment decision is `yes` "
-                 "iff the condition is `mandatory`, and the ordinal strength is fixed per "
-                 "condition (`mandatory`=3, `recommended`=2, `optional`=1, `nice_to_have`=0). "
-                 "The `SHALL` row above is the robustness variant: identical to the mandatory "
-                 "condition except the keyword `MUST` is swapped for `SHALL`.")
+    lines.append(
+        "Gold labels are **structural**, not judged per item: the gold modality is the "
+        "condition the template encodes, Task 1's gold entailment decision is `yes` "
+        "iff the condition is `mandatory`, and the ordinal strength is fixed per "
+        "condition (`mandatory`=3, `recommended`=2, `optional`=1, `nice_to_have`=0). "
+        "The `SHALL` row above is the robustness variant: identical to the mandatory "
+        "condition except the keyword `MUST` is swapped for `SHALL`."
+    )
     lines.append("")
 
     # Step 4: weak-intent phrasing probes for the same seed.
     lines.append("### Step 4 — Weak-intent phrasing probes (same seed)")
     lines.append("")
-    lines.append("The benchmark's weak condition uses the `useful_if` template. To check that "
-                 "results are not tied to that single surface form, the same capability is also "
-                 "rendered through three alternative weak phrasings "
-                 "(`eval_utils.WEAK_MODALITY_PROBE_TEMPLATES`); all keep the gold label "
-                 "`nice_to_have`:")
+    lines.append(
+        "The benchmark's weak condition uses the `useful_if` template. To check that "
+        "results are not tied to that single surface form, the same capability is also "
+        "rendered through three alternative weak phrasings "
+        "(`eval_utils.WEAK_MODALITY_PROBE_TEMPLATES`); all keep the gold label "
+        "`nice_to_have`:"
+    )
     lines.append("")
     capability = eu.capability_clause(str(seed.get("capability_text_final", "")))
     probe_rows = [
         {
             "template_id": f"probe_{template['template_id']}",
-            "source statement": template["source_template"].format(capability=capability),
+            "source statement": template["source_template"].format(
+                capability=capability
+            ),
             "gold modality": "nice_to_have",
         }
         for template in eu.WEAK_MODALITY_PROBE_TEMPLATES
     ]
-    lines.append(eu.markdown_table(probe_rows, ["template_id", "source statement", "gold modality"]))
+    lines.append(
+        eu.markdown_table(
+            probe_rows, ["template_id", "source statement", "gold modality"]
+        )
+    )
     lines.append("")
     return "\n".join(lines)
 
@@ -217,7 +249,9 @@ def build_document(root: Path, nice_seed: str | None, mlm_seed: str | None) -> s
 def _validation_section(root: Path) -> str:
     docs = root / "docs"
     construct_rows = eu.read_csv_rows(docs / "weak_modality_construct_review.csv")
-    reviewer_roles = sorted({str(row.get("reviewer_role", "")) for row in construct_rows})
+    reviewer_roles = sorted(
+        {str(row.get("reviewer_role", "")) for row in construct_rows}
+    )
     seed_reviews = [
         ("`nice`", root / "data/processed/seeds_review.csv"),
         ("`mlm_tapt`", root / "data/processed/seeds_review_mlm_tapt.csv"),
@@ -225,7 +259,11 @@ def _validation_section(root: Path) -> str:
     statement_reviews = [
         ("`nice`", "`MUST`", root / "outputs/benchmark_statements_review.csv"),
         ("`nice`", "`SHALL`", root / "outputs/benchmark_statements_review_shall.csv"),
-        ("`mlm_tapt`", "`MUST`", root / "outputs/benchmark_statements_review_mlm_tapt.csv"),
+        (
+            "`mlm_tapt`",
+            "`MUST`",
+            root / "outputs/benchmark_statements_review_mlm_tapt.csv",
+        ),
         (
             "`mlm_tapt`",
             "`SHALL`",
@@ -303,9 +341,17 @@ def main(argv: list[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(
         description="Export the step-by-step benchmark ground-truth document."
     )
-    parser.add_argument("--output", type=Path, default=Path("docs/benchmark_ground_truth.md"))
-    parser.add_argument("--nice-seed", default="S0001", help="Worked-example seed for the nice dataset.")
-    parser.add_argument("--mlm-seed", default=None, help="Worked-example seed for mlm_tapt (default: first).")
+    parser.add_argument(
+        "--output", type=Path, default=Path("docs/benchmark_ground_truth.md")
+    )
+    parser.add_argument(
+        "--nice-seed", default="S0001", help="Worked-example seed for the nice dataset."
+    )
+    parser.add_argument(
+        "--mlm-seed",
+        default=None,
+        help="Worked-example seed for mlm_tapt (default: first).",
+    )
     args = parser.parse_args(argv)
 
     root = eu.project_root()

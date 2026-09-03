@@ -13,7 +13,9 @@ import pandas as pd
 
 try:
     import eval_utils as eu
-except ModuleNotFoundError:  # pragma: no cover - exercised when imported as package in tests
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - exercised when imported as package in tests
     from scripts import eval_utils as eu
 
 
@@ -73,7 +75,9 @@ def read_jsonl_records(path: Path) -> tuple[list[dict[str, Any]], list[dict[str,
     return records, errors
 
 
-def evaluate_outputs(output_path: Path, gold_key_path: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
+def evaluate_outputs(
+    output_path: Path, gold_key_path: Path
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     records, parse_errors = read_jsonl_records(output_path)
     outputs = pd.DataFrame.from_records(records)
     gold = eu.read_csv_frame(gold_key_path)
@@ -84,13 +88,17 @@ def evaluate_outputs(output_path: Path, gold_key_path: Path) -> tuple[pd.DataFra
         raise ValueError(f"Output file is missing required fields: {missing_fields}")
 
     outputs["valid_label"] = outputs["modality"].isin(ALLOWED_MODALITIES)
-    outputs["valid_confidence"] = outputs["confidence"].map(valid_probability_confidence)
+    outputs["valid_confidence"] = outputs["confidence"].map(
+        valid_probability_confidence
+    )
 
     duplicate_ids = int(outputs["external_item_id"].duplicated().sum())
     if duplicate_ids:
         duplicated_values = sorted(
             str(value)
-            for value in outputs.loc[outputs["external_item_id"].duplicated(keep=False), "external_item_id"].unique()
+            for value in outputs.loc[
+                outputs["external_item_id"].duplicated(keep=False), "external_item_id"
+            ].unique()
         )
         preview = ", ".join(duplicated_values[:10])
         if len(duplicated_values) > 10:
@@ -99,18 +107,26 @@ def evaluate_outputs(output_path: Path, gold_key_path: Path) -> tuple[pd.DataFra
             "Output file contains duplicate external_item_id values; "
             f"each item must be scored exactly once. Duplicates: {preview}"
         )
-    missing_ids = sorted(set(gold["external_item_id"]) - set(outputs["external_item_id"]))
+    missing_ids = sorted(
+        set(gold["external_item_id"]) - set(outputs["external_item_id"])
+    )
     extra_ids = sorted(set(outputs["external_item_id"]) - set(gold["external_item_id"]))
 
-    merged = gold.merge(outputs, on="external_item_id", how="left", suffixes=("_gold", "_pred"))
+    merged = gold.merge(
+        outputs, on="external_item_id", how="left", suffixes=("_gold", "_pred")
+    )
     merged["confidence_num"] = pd.to_numeric(merged["confidence"], errors="coerce")
     merged["correct"] = merged["modality"].eq(merged["task2_gold_modality"])
     merged["gold_strength"] = merged["task2_gold_modality"].map(eu.ORDINAL_STRENGTH)
     merged["pred_strength"] = merged["modality"].map(eu.ORDINAL_STRENGTH)
     merged["overcommit"] = merged["pred_strength"] > merged["gold_strength"]
     merged["undercommit"] = merged["pred_strength"] < merged["gold_strength"]
-    merged["high_conf_overcommit_80"] = merged["overcommit"] & (merged["confidence_num"] >= 0.80)
-    merged["high_conf_overcommit_90"] = merged["overcommit"] & (merged["confidence_num"] >= 0.90)
+    merged["high_conf_overcommit_80"] = merged["overcommit"] & (
+        merged["confidence_num"] >= 0.80
+    )
+    merged["high_conf_overcommit_90"] = merged["overcommit"] & (
+        merged["confidence_num"] >= 0.90
+    )
     text_rows = [
         eu.text_modality_fields(
             row.get("requirement", ""),
@@ -184,8 +200,12 @@ def overall_summary(scored: pd.DataFrame) -> dict[str, Any]:
         "label_text_consistency": float(scored["label_text_consistent"].mean()),
         "text_overcommit_rate": float(scored["text_overcommit"].mean()),
         "text_undercommit_rate": float(scored["text_undercommit"].mean()),
-        "text_high_conf_overcommit_80": float(scored["text_high_conf_overcommit_80"].mean()),
-        "text_high_conf_overcommit_90": float(scored["text_high_conf_overcommit_90"].mean()),
+        "text_high_conf_overcommit_80": float(
+            scored["text_high_conf_overcommit_80"].mean()
+        ),
+        "text_high_conf_overcommit_90": float(
+            scored["text_high_conf_overcommit_90"].mean()
+        ),
         "weak_text_modality_accuracy": float(weak["text_modality_correct"].mean()),
         "weak_text_overcommit_rate": float(weak["text_overcommit"].mean()),
     }
@@ -217,51 +237,51 @@ def markdown_report(
             "## Validation",
             "",
             f"- Output rows: {validation['output_rows']}",
-        f"- Gold rows: {validation['gold_rows']}",
-        f"- Parse errors: {validation['parse_errors']}",
-        f"- Duplicate IDs: {validation['duplicate_ids']}",
-        f"- Missing IDs: {len(validation['missing_ids'])}",
-        f"- Extra IDs: {len(validation['extra_ids'])}",
-        f"- Invalid labels: {validation['invalid_label_count']}",
-        f"- Invalid confidence values: {validation['invalid_confidence_count']}",
-        f"- Confidence scale: {validation.get('confidence_scale', '')}",
-        f"- Prompt version: {validation.get('prompt_version', '')}",
-        f"- Evaluated at UTC: {validation.get('evaluated_at_utc', '')}",
-        f"- Raw output SHA-256: {validation.get('raw_output_sha256', '')}",
-        f"- Gold key SHA-256: {validation.get('gold_key_sha256', '')}",
-        f"- Prompt SHA-256: {validation.get('prompt_sha256', '')}",
-        f"- Paper-ready under current contract: {'yes' if validation.get('paper_ready') else 'no'}",
-        f"- Paper-ready blockers: {', '.join(validation.get('paper_ready_blockers', [])) or 'none'}",
-        "",
-        "## Overall",
-        "",
-        f"- Accuracy: {overall['accuracy']:.3f}",
-        f"- Over-commitment rate: {overall['overcommit_rate']:.3f}",
-        f"- Under-commitment rate: {overall['undercommit_rate']:.3f}",
-        f"- High-confidence over-commitment >= 0.80: {overall['high_conf_overcommit_80']:.3f}",
-        f"- High-confidence over-commitment >= 0.90: {overall['high_conf_overcommit_90']:.3f}",
-        f"- Mean confidence: {overall['mean_confidence']:.3f}",
-        f"- Weak-modality accuracy: {overall['weak_accuracy']:.3f}",
-        f"- Weak-modality over-commitment rate: {overall['weak_overcommit_rate']:.3f}",
-        f"- Text-modality accuracy: {overall['text_modality_accuracy']:.3f}",
-        f"- Label-text consistency: {overall['label_text_consistency']:.3f}",
-        f"- Text-level over-commitment rate: {overall['text_overcommit_rate']:.3f}",
-        f"- Text-level high-confidence over-commitment >= 0.80: {overall['text_high_conf_overcommit_80']:.3f}",
-        f"- Text-level high-confidence over-commitment >= 0.90: {overall['text_high_conf_overcommit_90']:.3f}",
-        f"- Weak text-modality accuracy: {overall['weak_text_modality_accuracy']:.3f}",
-        "",
-        "## By Source Condition",
-        "",
-        by_condition.to_markdown(index=False, floatfmt=".3f"),
-        "",
-        "## Confusion Matrix",
-        "",
-        confusion.to_markdown(),
-        "",
-        "## Text-Modality Confusion Matrix",
-        "",
-        text_confusion.to_markdown(),
-        "",
+            f"- Gold rows: {validation['gold_rows']}",
+            f"- Parse errors: {validation['parse_errors']}",
+            f"- Duplicate IDs: {validation['duplicate_ids']}",
+            f"- Missing IDs: {len(validation['missing_ids'])}",
+            f"- Extra IDs: {len(validation['extra_ids'])}",
+            f"- Invalid labels: {validation['invalid_label_count']}",
+            f"- Invalid confidence values: {validation['invalid_confidence_count']}",
+            f"- Confidence scale: {validation.get('confidence_scale', '')}",
+            f"- Prompt version: {validation.get('prompt_version', '')}",
+            f"- Evaluated at UTC: {validation.get('evaluated_at_utc', '')}",
+            f"- Raw output SHA-256: {validation.get('raw_output_sha256', '')}",
+            f"- Gold key SHA-256: {validation.get('gold_key_sha256', '')}",
+            f"- Prompt SHA-256: {validation.get('prompt_sha256', '')}",
+            f"- Paper-ready under current contract: {'yes' if validation.get('paper_ready') else 'no'}",
+            f"- Paper-ready blockers: {', '.join(validation.get('paper_ready_blockers', [])) or 'none'}",
+            "",
+            "## Overall",
+            "",
+            f"- Accuracy: {overall['accuracy']:.3f}",
+            f"- Over-commitment rate: {overall['overcommit_rate']:.3f}",
+            f"- Under-commitment rate: {overall['undercommit_rate']:.3f}",
+            f"- High-confidence over-commitment >= 0.80: {overall['high_conf_overcommit_80']:.3f}",
+            f"- High-confidence over-commitment >= 0.90: {overall['high_conf_overcommit_90']:.3f}",
+            f"- Mean confidence: {overall['mean_confidence']:.3f}",
+            f"- Weak-modality accuracy: {overall['weak_accuracy']:.3f}",
+            f"- Weak-modality over-commitment rate: {overall['weak_overcommit_rate']:.3f}",
+            f"- Text-modality accuracy: {overall['text_modality_accuracy']:.3f}",
+            f"- Label-text consistency: {overall['label_text_consistency']:.3f}",
+            f"- Text-level over-commitment rate: {overall['text_overcommit_rate']:.3f}",
+            f"- Text-level high-confidence over-commitment >= 0.80: {overall['text_high_conf_overcommit_80']:.3f}",
+            f"- Text-level high-confidence over-commitment >= 0.90: {overall['text_high_conf_overcommit_90']:.3f}",
+            f"- Weak text-modality accuracy: {overall['weak_text_modality_accuracy']:.3f}",
+            "",
+            "## By Source Condition",
+            "",
+            by_condition.to_markdown(index=False, floatfmt=".3f"),
+            "",
+            "## Confusion Matrix",
+            "",
+            confusion.to_markdown(),
+            "",
+            "## Text-Modality Confusion Matrix",
+            "",
+            text_confusion.to_markdown(),
+            "",
         ]
     )
     return "\n".join(lines)
@@ -271,7 +291,9 @@ def write_external_comparison_report(output_dir: Path) -> Path | None:
     rows: list[dict[str, Any]] = []
     for scored_path in sorted(output_dir.glob("*_scored_items.csv")):
         model_slug = scored_path.name.removesuffix("_scored_items.csv")
-        paper_ready = evaluation_report_paper_ready(output_dir / f"{model_slug}_evaluation.md")
+        paper_ready = evaluation_report_paper_ready(
+            output_dir / f"{model_slug}_evaluation.md"
+        )
         if paper_ready is None:
             continue
         scored = eu.read_csv_frame(scored_path)
@@ -288,7 +310,9 @@ def write_external_comparison_report(output_dir: Path) -> Path | None:
         ]:
             if column not in scored.columns:
                 scored[column] = False
-            scored[column] = scored[column].astype(str).str.lower().isin({"true", "1", "yes"})
+            scored[column] = (
+                scored[column].astype(str).str.lower().isin({"true", "1", "yes"})
+            )
         rows.append(
             {
                 "model_slug": model_slug,
@@ -296,11 +320,15 @@ def write_external_comparison_report(output_dir: Path) -> Path | None:
                 "n": len(scored),
                 "label_accuracy": scored["correct"].mean(),
                 "label_overcommit": scored["overcommit"].mean(),
-                "label_high_conf_overcommit_90": scored["high_conf_overcommit_90"].mean(),
+                "label_high_conf_overcommit_90": scored[
+                    "high_conf_overcommit_90"
+                ].mean(),
                 "text_accuracy": scored["text_modality_correct"].mean(),
                 "label_text_consistency": scored["label_text_consistent"].mean(),
                 "text_overcommit": scored["text_overcommit"].mean(),
-                "text_high_conf_overcommit_90": scored["text_high_conf_overcommit_90"].mean(),
+                "text_high_conf_overcommit_90": scored[
+                    "text_high_conf_overcommit_90"
+                ].mean(),
             }
         )
     if not rows:
@@ -325,20 +353,25 @@ def evaluation_report_paper_ready(path: Path) -> bool | None:
     if not path.exists():
         return None
     text = path.read_text(encoding="utf-8")
-    match = re.search(r"Paper-ready under current contract:\s*(yes|no)", text, flags=re.IGNORECASE)
+    match = re.search(
+        r"Paper-ready under current contract:\s*(yes|no)", text, flags=re.IGNORECASE
+    )
     if match is None:
         return None
     return match.group(1).lower() == "yes"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate external web-model outputs for the Task 2 probe.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate external web-model outputs for the Task 2 probe."
+    )
     parser.add_argument("outputs_jsonl", type=Path)
     parser.add_argument("--model-name", default="external_model")
     parser.add_argument(
         "--gold-key",
         type=Path,
-        default=eu.project_root() / "outputs/external_ai_service_probe/external_task2_gold_key.csv",
+        default=eu.project_root()
+        / "outputs/external_ai_service_probe/external_task2_gold_key.csv",
     )
     parser.add_argument(
         "--output-dir",
@@ -349,20 +382,30 @@ def main() -> None:
     parser.add_argument(
         "--prompt-path",
         type=Path,
-        default=eu.project_root() / "outputs/external_ai_service_probe/external_task2_prompt.md",
+        default=eu.project_root()
+        / "outputs/external_ai_service_probe/external_task2_prompt.md",
     )
     args = parser.parse_args()
 
     scored, validation = evaluate_outputs(args.outputs_jsonl, args.gold_key)
     validation["prompt_version"] = args.prompt_version
-    validation["prompt_sha256"] = eu.sha256_file(args.prompt_path) if args.prompt_path.exists() else ""
+    validation["prompt_sha256"] = (
+        eu.sha256_file(args.prompt_path) if args.prompt_path.exists() else ""
+    )
     validation["evaluated_at_utc"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     if not validation["prompt_sha256"]:
-        validation["paper_ready_blockers"] = [*validation.get("paper_ready_blockers", []), "missing_prompt_hash"]
+        validation["paper_ready_blockers"] = [
+            *validation.get("paper_ready_blockers", []),
+            "missing_prompt_hash",
+        ]
         validation["paper_ready"] = False
     by_condition = source_condition_summary(scored)
-    confusion = pd.crosstab(scored["task2_gold_modality"], scored["modality"], dropna=False)
-    text_confusion = pd.crosstab(scored["task2_gold_modality"], scored["text_modality"], dropna=False)
+    confusion = pd.crosstab(
+        scored["task2_gold_modality"], scored["modality"], dropna=False
+    )
+    text_confusion = pd.crosstab(
+        scored["task2_gold_modality"], scored["text_modality"], dropna=False
+    )
     overall = overall_summary(scored)
 
     slug = slugify(args.model_name)
@@ -377,7 +420,14 @@ def main() -> None:
     by_condition.to_csv(condition_path, index=False)
     confusion.to_csv(confusion_path)
     report_path.write_text(
-        markdown_report(args.model_name, validation, overall, by_condition, confusion, text_confusion),
+        markdown_report(
+            args.model_name,
+            validation,
+            overall,
+            by_condition,
+            confusion,
+            text_confusion,
+        ),
         encoding="utf-8",
     )
     written_comparison_path = write_external_comparison_report(args.output_dir)

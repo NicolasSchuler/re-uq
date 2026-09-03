@@ -1025,6 +1025,7 @@ def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
     run_batch_order = normalize_batch_order(
         config.get("batch_order", llm_config.get("batch_order")), "batch_order"
     )
+
     def _acse_setting(value: Any) -> str | None:
         # A missing key must stay None, not become the string "None".
         if value is None:
@@ -1034,7 +1035,9 @@ def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
     return {
         "acse_embedding_backend": _acse_setting(config.get("acse_embedding_backend")),
-        "acse_embedding_mlx_model": _acse_setting(config.get("acse_embedding_mlx_model")),
+        "acse_embedding_mlx_model": _acse_setting(
+            config.get("acse_embedding_mlx_model")
+        ),
         "run_group_id": run_group_id,
         "seed": run_seed,
         "batch_order": run_batch_order,
@@ -5726,7 +5729,9 @@ def semantic_embedding_backend_args(
     prefix = f"{ACSE_MLX_EMBEDDING_BACKEND}:"
     if label.startswith(prefix) and label[len(prefix) :].strip():
         return ACSE_MLX_EMBEDDING_BACKEND, label[len(prefix) :].strip()
-    raise ValueError(f"Invalid persisted ACSE semantic embedding backend label: {label!r}.")
+    raise ValueError(
+        f"Invalid persisted ACSE semantic embedding backend label: {label!r}."
+    )
 
 
 def recorded_semantic_embedding_backend(rows: Iterable[Mapping[str, Any]]) -> str:
@@ -9238,9 +9243,7 @@ def text_over_commitment_ci_fields(
             fields[f"{metric_name}_ci_high"] = ""
             continue
 
-        def metric(
-            sample_rows: list[dict[str, Any]], strict: bool = strict
-        ) -> float:
+        def metric(sample_rows: list[dict[str, Any]], strict: bool = strict) -> float:
             return text_strengthening_rate(sample_rows, strict=strict)
 
         point, low, high = bootstrap_seed_metric(

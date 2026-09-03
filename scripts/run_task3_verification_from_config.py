@@ -382,9 +382,7 @@ def plan_cell(
         eu.write_csv_rows(
             items_path, all_items, fieldnames=eu.TASK3_VERIFICATION_FIELDS
         )
-    items = (
-        all_items[: max(1, args.smoke_items)] if args.mode == "smoke" else all_items
-    )
+    items = all_items[: max(1, args.smoke_items)] if args.mode == "smoke" else all_items
     jobs = eu.planned_completion_jobs_for_items(
         items,
         prompt_fn=lambda item: task3_prompt_for(

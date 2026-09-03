@@ -65,44 +65,81 @@ except ModuleNotFoundError:  # pragma: no cover
 # source_modality probe scores 0.96 only because the modality word is literally
 # prepended to the text, so we deliberately report the honest 0.84/0.73 instead.
 CONTEXT_BARS = [
-    {"label": "Input commitment level", "decimals": 2,
-         "backend": "mlx", "text": "reqonly", "group": "item", "scope": "global",
-         "target": "source_modality"},
-    {"label": "Source dataset", "decimals": 2,
-         "backend": "mlx", "text": "reqonly", "group": "item", "scope": "global",
-         "target": "dataset_variant"},
+    {
+        "label": "Input commitment level",
+        "decimals": 2,
+        "backend": "mlx",
+        "text": "reqonly",
+        "group": "item",
+        "scope": "global",
+        "target": "source_modality",
+    },
+    {
+        "label": "Source dataset",
+        "decimals": 2,
+        "backend": "mlx",
+        "text": "reqonly",
+        "group": "item",
+        "scope": "global",
+        "target": "dataset_variant",
+    },
 ]
 
 # Strengthening bars come from the exact configuration the paper's Table 1
 # reports: neural embedding, label-prefixed string, seed-grouped CV, one-shot
 # (deterministic) strengthening target. These must match Table 1 to the digit.
 TARGET_BARS = [
-    {"label": "Global classifier\n(all inputs pooled)", "decimals": 3, "expect": 0.822,
-         "backend": "mlx", "text": "prefixed", "group": "seed", "scope": "global",
-         "target": "deterministic_strict_text_overcommit"},
-    {"label": "Within recommended-only inputs", "decimals": 3, "expect": 0.519,
-         "backend": "mlx", "text": "prefixed", "group": "seed",
-         "scope": "source_modality=recommended",
-         "target": "deterministic_strict_text_overcommit"},
-    {"label": "Within optional-only inputs", "decimals": 3, "expect": 0.582,
-         "backend": "mlx", "text": "prefixed", "group": "seed",
-         "scope": "source_modality=optional",
-         "target": "deterministic_strict_text_overcommit"},
+    {
+        "label": "Global classifier\n(all inputs pooled)",
+        "decimals": 3,
+        "expect": 0.822,
+        "backend": "mlx",
+        "text": "prefixed",
+        "group": "seed",
+        "scope": "global",
+        "target": "deterministic_strict_text_overcommit",
+    },
+    {
+        "label": "Within recommended-only inputs",
+        "decimals": 3,
+        "expect": 0.519,
+        "backend": "mlx",
+        "text": "prefixed",
+        "group": "seed",
+        "scope": "source_modality=recommended",
+        "target": "deterministic_strict_text_overcommit",
+    },
+    {
+        "label": "Within optional-only inputs",
+        "decimals": 3,
+        "expect": 0.582,
+        "backend": "mlx",
+        "text": "prefixed",
+        "group": "seed",
+        "scope": "source_modality=optional",
+        "target": "deterministic_strict_text_overcommit",
+    },
     # Weak-intent-only is a looser test (there "strengthened" nearly coincides
     # with "contains any modal word"); shown so the within-level check is not
     # cherry-picked to two strata. Mandatory-only is undefined (no stronger level).
-    {"label": "Within weak-intent inputs", "decimals": 3, "expect": 0.600,
-         "backend": "mlx", "text": "prefixed", "group": "seed",
-         "scope": "source_modality=nice_to_have",
-         "target": "deterministic_strict_text_overcommit"},
+    {
+        "label": "Within weak-intent inputs",
+        "decimals": 3,
+        "expect": 0.600,
+        "backend": "mlx",
+        "text": "prefixed",
+        "group": "seed",
+        "scope": "source_modality=nice_to_have",
+        "target": "deterministic_strict_text_overcommit",
+    },
 ]
 
 # Colour-blind-safe: neutral slate-blue for context, one orange accent for the
 # target group. Blue vs orange is the safest deutan/protan-distinguishable pair.
-CONTEXT_COLOR = "#5B7FA6"   # muted slate blue
-TARGET_COLOR = "#E69F00"    # Okabe-Ito orange
-INK = "#1f2937"             # dark slate for text
-MUTED = "#475569"           # secondary text
+CONTEXT_COLOR = "#5B7FA6"  # muted slate blue
+TARGET_COLOR = "#E69F00"  # Okabe-Ito orange
+INK = "#1f2937"  # dark slate for text
+MUTED = "#475569"  # secondary text
 
 CHANCE = 0.5
 
@@ -132,8 +169,12 @@ def resolve_bars(
     for spec in specs:
         value = auroc_cell(
             summary,
-            backend=spec["backend"], text=spec["text"], group=spec["group"],
-            scope=spec["scope"], target=spec["target"], model="hgb",
+            backend=spec["backend"],
+            text=spec["text"],
+            group=spec["group"],
+            scope=spec["scope"],
+            target=spec["target"],
+            model="hgb",
         )
         if np.isnan(value):
             raise ValueError(f"no probe_grid row for {spec['label']!r}: {spec}")
@@ -166,10 +207,26 @@ def draw(
 
     for bar, y, color in all_bars:
         val = bar["value"]
-        ax.barh(y, val - CHANCE, left=CHANCE, height=0.62, color=color,
-                edgecolor="white", linewidth=0.5, zorder=3)
-        ax.text(val + 0.008, y, f"{val:.{bar['decimals']}f}", va="center",
-                ha="left", fontsize=8.5, color=INK, zorder=4)
+        ax.barh(
+            y,
+            val - CHANCE,
+            left=CHANCE,
+            height=0.62,
+            color=color,
+            edgecolor="white",
+            linewidth=0.5,
+            zorder=3,
+        )
+        ax.text(
+            val + 0.008,
+            y,
+            f"{val:.{bar['decimals']}f}",
+            va="center",
+            ha="left",
+            fontsize=8.5,
+            color=INK,
+            zorder=4,
+        )
 
     labels = [b["label"] for b, _, _ in all_bars]
     ys = [y for _, y, _ in all_bars]
@@ -189,18 +246,43 @@ def draw(
     ax.tick_params(axis="x", length=3)
 
     # Group headers above each group.
-    ax.text(CHANCE, max(y_ctx) + 0.62, "Context (not the target)",
-            fontsize=9.0, fontweight="bold", color=MUTED, va="bottom", ha="left")
-    ax.text(CHANCE, max(y_tgt) + 0.62, "Target: was the text strengthened?",
-            fontsize=9.0, fontweight="bold", color="#B26F00", va="bottom", ha="left")
+    ax.text(
+        CHANCE,
+        max(y_ctx) + 0.62,
+        "Context (not the target)",
+        fontsize=9.0,
+        fontweight="bold",
+        color=MUTED,
+        va="bottom",
+        ha="left",
+    )
+    ax.text(
+        CHANCE,
+        max(y_tgt) + 0.62,
+        "Target: was the text strengthened?",
+        fontsize=9.0,
+        fontweight="bold",
+        color="#B26F00",
+        va="bottom",
+        ha="left",
+    )
 
     # Annotation on the global-classifier bar: it looks usable only because it
     # can read the input level off the representation. Placed just right of the
     # value label (no connector) so nothing overlaps the "0.822".
     g_bar, g_y, _ = next(t for t in all_bars if t[0] is target[0])
-    ax.text(g_bar["value"] + 0.065, g_y, "inflated by\ninput-level leakage",
-            fontsize=7.8, color="#B26F00", fontstyle="italic", va="center",
-            ha="left", linespacing=1.1, clip_on=False)
+    ax.text(
+        g_bar["value"] + 0.065,
+        g_y,
+        "inflated by\ninput-level leakage",
+        fontsize=7.8,
+        color="#B26F00",
+        fontstyle="italic",
+        va="center",
+        ha="left",
+        linespacing=1.1,
+        clip_on=False,
+    )
 
     # Bracket spanning every within-level bar: "~ chance within one input level".
     y_hi, y_lo = y_tgt[1], y_tgt[-1]
@@ -208,27 +290,42 @@ def draw(
     ax.plot([xb, xb], [y_lo, y_hi], color=MUTED, lw=0.9, zorder=4)
     for yy in (y_lo, y_hi):
         ax.plot([xb - 0.012, xb], [yy, yy], color=MUTED, lw=0.9, zorder=4)
-    ax.text(xb + 0.02, (y_hi + y_lo) / 2.0, "≈ chance within\none input level",
-            fontsize=7.8, color=MUTED, fontstyle="italic", va="center", ha="left")
+    ax.text(
+        xb + 0.02,
+        (y_hi + y_lo) / 2.0,
+        "≈ chance within\none input level",
+        fontsize=7.8,
+        color=MUTED,
+        fontstyle="italic",
+        va="center",
+        ha="left",
+    )
 
     fig.tight_layout(pad=0.4)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, bbox_inches="tight", pad_inches=0.02)
-    fig.savefig(output_path.with_suffix(".png"), dpi=300, bbox_inches="tight",
-                pad_inches=0.02)
+    fig.savefig(
+        output_path.with_suffix(".png"), dpi=300, bbox_inches="tight", pad_inches=0.02
+    )
     plt.close(fig)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--diagnostic-dir", type=Path,
-                        default=Path("outputs/embedding_diagnostic"))
-    parser.add_argument("--output", type=Path,
-                        default=Path("docs/figures/embedding_diagnostic.pdf"))
+    parser.add_argument(
+        "--diagnostic-dir", type=Path, default=Path("outputs/embedding_diagnostic")
+    )
+    parser.add_argument(
+        "--output", type=Path, default=Path("docs/figures/embedding_diagnostic.pdf")
+    )
     args = parser.parse_args()
 
     root = eu.project_root()
-    diagnostic_dir = args.diagnostic_dir if args.diagnostic_dir.is_absolute() else root / args.diagnostic_dir
+    diagnostic_dir = (
+        args.diagnostic_dir
+        if args.diagnostic_dir.is_absolute()
+        else root / args.diagnostic_dir
+    )
     output_path = args.output if args.output.is_absolute() else root / args.output
 
     summary = read_summary(diagnostic_dir / "probe_grid_summary.csv")
@@ -237,10 +334,16 @@ def main() -> None:
 
     print("Bars pulled from probe_grid_summary.csv (metric = AUROC):")
     for b in context + target:
-        note = f"  == Table 1 ({b['expect']:.3f})" if b.get("expect") else "  (diagnostic substrate)"
+        note = (
+            f"  == Table 1 ({b['expect']:.3f})"
+            if b.get("expect")
+            else "  (diagnostic substrate)"
+        )
         flat = b["label"].replace("\n", " ")
-        print(f"  {flat:<34s} {b['value']:.3f}   [{b['backend']}/{b['text']}/{b['group']}"
-              f"/{b['scope']}/{b['target']}]{note}")
+        print(
+            f"  {flat:<34s} {b['value']:.3f}   [{b['backend']}/{b['text']}/{b['group']}"
+            f"/{b['scope']}/{b['target']}]{note}"
+        )
 
     draw(context, target, output_path)
     print(f"wrote {output_path} and {output_path.with_suffix('.png')}")

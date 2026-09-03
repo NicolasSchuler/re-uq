@@ -67,14 +67,18 @@ def notebook_document(cells: list[nbf.NotebookNode]) -> nbf.NotebookNode:
     return notebook
 
 
-def write_notebook(name: str, cells: list[nbf.NotebookNode], notebook_dir: Path = NOTEBOOK_DIR) -> None:
+def write_notebook(
+    name: str, cells: list[nbf.NotebookNode], notebook_dir: Path = NOTEBOOK_DIR
+) -> None:
     """Write one generated companion notebook into the target directory."""
     path = notebook_dir / name
     notebook = notebook_document(cells)
     nbf.write(notebook, path)
 
 
-def populate_notebooks(notebook_dir: Path = NOTEBOOK_DIR, *, dry_run: bool = False) -> None:
+def populate_notebooks(
+    notebook_dir: Path = NOTEBOOK_DIR, *, dry_run: bool = False
+) -> None:
     """Generate all companion notebooks, optionally validating without writes."""
     for name, builder in NOTEBOOK_BUILDERS:
         cells = builder()
@@ -1635,14 +1639,20 @@ NOTEBOOK_BUILDERS = [
 
 def main(argv: Sequence[str] | None = None) -> None:
     """CLI entry point for regenerating or dry-running companion notebooks."""
-    parser = argparse.ArgumentParser(description="Generate the stripped companion notebooks from source builders.")
+    parser = argparse.ArgumentParser(
+        description="Generate the stripped companion notebooks from source builders."
+    )
     parser.add_argument(
         "--notebook-dir",
         type=Path,
         default=NOTEBOOK_DIR,
         help="Directory to write notebooks into. Defaults to this checkout's notebooks/ directory.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Build and serialize notebooks without writing files.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build and serialize notebooks without writing files.",
+    )
     args = parser.parse_args(argv)
 
     populate_notebooks(args.notebook_dir, dry_run=args.dry_run)

@@ -807,9 +807,9 @@ def export_tables(
         for row in det_rows:
             model = str(row.get("model", ""))
             rows_by_model[model].append(row)
-            rows_by_model_modality[
-                (model, str(row.get("source_modality", "")))
-            ].append(row)
+            rows_by_model_modality[(model, str(row.get("source_modality", "")))].append(
+                row
+            )
         cell_models = sorted(rows_by_model)
         task2_rows.append(
             task2_snapshot_row(dataset, variant, len(cell_models), det_rows, raw_rows)

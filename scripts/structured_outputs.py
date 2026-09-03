@@ -103,11 +103,15 @@ def response_model_for_task(task: str, *, batched: bool = False) -> type[BaseMod
         raise ValueError(f"Unsupported task for structured output: {task}") from exc
 
 
-def validated_payload_for_task(task: str, payload: Any, *, batched: bool = False) -> dict[str, Any]:
+def validated_payload_for_task(
+    task: str, payload: Any, *, batched: bool = False
+) -> dict[str, Any]:
     model = response_model_for_task(task, batched=batched)
     return model.model_validate(payload).model_dump(mode="json")
 
 
-def validated_json_for_task(task: str, text: str, *, batched: bool = False) -> dict[str, Any]:
+def validated_json_for_task(
+    task: str, text: str, *, batched: bool = False
+) -> dict[str, Any]:
     model = response_model_for_task(task, batched=batched)
     return model.model_validate_json(text).model_dump(mode="json")

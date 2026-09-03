@@ -89,10 +89,17 @@ class StructuredOutputsTest(unittest.TestCase):
 
     def test_task_models_reject_invalid_labels_missing_fields_and_extras(self):
         invalid_cases = [
-            (so.Task1Response, {"decision": "maybe", "confidence": 0.9, "brief_reason": "hedged"}),
+            (
+                so.Task1Response,
+                {"decision": "maybe", "confidence": 0.9, "brief_reason": "hedged"},
+            ),
             (
                 so.Task2Response,
-                {"requirement": "The system SHOULD export reports.", "modality": "should", "confidence": 0.9},
+                {
+                    "requirement": "The system SHOULD export reports.",
+                    "modality": "should",
+                    "confidence": 0.9,
+                },
             ),
             (
                 so.Task3Response,
@@ -108,7 +115,11 @@ class StructuredOutputsTest(unittest.TestCase):
             (so.Task3Response, {"relation": "preserves", "confidence": 0.9}),
             (
                 so.ExternalTask2Response,
-                {"requirement": "The system MAY export reports.", "modality": "optional", "confidence": 0.9},
+                {
+                    "requirement": "The system MAY export reports.",
+                    "modality": "optional",
+                    "confidence": 0.9,
+                },
             ),
             (
                 so.Task2Response,
@@ -204,7 +215,9 @@ class StructuredOutputsTest(unittest.TestCase):
 
         self.assertEqual(parsed["modality"], "optional")
         self.assertIs(so.response_model_for_task("task3"), so.Task3Response)
-        self.assertIs(so.response_model_for_task("task2", batched=True), so.Task2BatchResponse)
+        self.assertIs(
+            so.response_model_for_task("task2", batched=True), so.Task2BatchResponse
+        )
         with self.assertRaisesRegex(ValueError, "Unsupported task"):
             so.response_model_for_task("task4")
 

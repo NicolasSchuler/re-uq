@@ -61,6 +61,8 @@ SOURCE_LABEL = {
     "optional": "optional",
     "nice_to_have": "weak intent",
 }
+
+
 def set_style() -> None:
     plt.rcParams.update(
         {
@@ -102,7 +104,13 @@ def balanced_subsample(
     true within-level prevalence (preserved stays the visible majority)."""
     chosen: list[int] = []
     for modality in SOURCE_ORDER:
-        idx = np.asarray([i for i, row in enumerate(rows) if str(row.get("source_modality", "")) == modality])
+        idx = np.asarray(
+            [
+                i
+                for i, row in enumerate(rows)
+                if str(row.get("source_modality", "")) == modality
+            ]
+        )
         if idx.size == 0:
             continue
         if idx.size > per_modality:
@@ -111,11 +119,17 @@ def balanced_subsample(
     return np.asarray(sorted(set(chosen)))
 
 
-def compute_projection(embeddings: np.ndarray, method: str, random_state: int) -> np.ndarray:
+def compute_projection(
+    embeddings: np.ndarray, method: str, random_state: int
+) -> np.ndarray:
     if method == "pca":
         pca = PCA(n_components=2, svd_solver="randomized", random_state=random_state)
         return np.asarray(pca.fit_transform(embeddings), dtype=float)
-    prepca = PCA(n_components=min(50, embeddings.shape[1]), svd_solver="randomized", random_state=random_state)
+    prepca = PCA(
+        n_components=min(50, embeddings.shape[1]),
+        svd_solver="randomized",
+        random_state=random_state,
+    )
     prepared = prepca.fit_transform(embeddings)
     tsne = TSNE(
         n_components=2,
@@ -131,12 +145,16 @@ def compute_projection(embeddings: np.ndarray, method: str, random_state: int) -
 
 # Okabe-Ito colour-blind-safe, maximally distinct across the four input levels
 SRC_PALETTE = {
-    "mandatory": "#0072B2",     # blue
-    "recommended": "#009E73",   # bluish green
-    "optional": "#E69F00",      # orange
+    "mandatory": "#0072B2",  # blue
+    "recommended": "#009E73",  # bluish green
+    "optional": "#E69F00",  # orange
     "nice_to_have": "#CC79A7",  # reddish purple
 }
-DRIFT_PALETTE = {"clean": "#9aa3af", "broad_text_oc": "#E69F00", "strict_text_oc": "#C1121F"}
+DRIFT_PALETTE = {
+    "clean": "#9aa3af",
+    "broad_text_oc": "#E69F00",
+    "strict_text_oc": "#C1121F",
+}
 # per-class (size, alpha, edge width, zorder) for the drift panel
 DRIFT_STYLE = {
     "clean": (9.0, 0.70, 0.0, 1),
@@ -155,35 +173,80 @@ def panel_projection(
     rng: np.random.Generator | None = None,
 ) -> None:
     if color_field == "source_modality":
-        keys = np.asarray([str(row.get("source_modality", "")) for row in rows], dtype=object)
+        keys = np.asarray(
+            [str(row.get("source_modality", "")) for row in rows], dtype=object
+        )
         # single scatter in shuffled order so no input level systematically occludes another
         colors = np.asarray([SRC_PALETTE.get(k, "#94a3b8") for k in keys], dtype=object)
         order = np.arange(len(rows))
         if rng is not None:
             rng.shuffle(order)
-        ax.scatter(coords[order, 0], coords[order, 1], s=9.5, c=list(colors[order]),
-                   alpha=0.72, linewidths=0.0, zorder=2, rasterized=True)
+        ax.scatter(
+            coords[order, 0],
+            coords[order, 1],
+            s=9.5,
+            c=list(colors[order]),
+            alpha=0.72,
+            linewidths=0.0,
+            zorder=2,
+            rasterized=True,
+        )
         handles = [
-            Line2D([], [], marker="o", linestyle="none", markersize=4.5,
-                   markerfacecolor=SRC_PALETTE[name], markeredgecolor="none", label=SOURCE_LABEL[name])
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="none",
+                markersize=4.5,
+                markerfacecolor=SRC_PALETTE[name],
+                markeredgecolor="none",
+                label=SOURCE_LABEL[name],
+            )
             for name in SOURCE_LEGEND_ORDER
         ]
-        ax.legend(handles=handles, loc="upper right", handletextpad=0.2, borderpad=0.25,
-                  labelspacing=0.25, framealpha=0.85)
+        ax.legend(
+            handles=handles,
+            loc="upper right",
+            handletextpad=0.2,
+            borderpad=0.25,
+            labelspacing=0.25,
+            framealpha=0.85,
+        )
     else:
         keys = np.asarray([drift_status(row) for row in rows], dtype=object)
-        label_map = {"clean": "preserved", "broad_text_oc": "strengthened (implied)", "strict_text_oc": "strengthened (explicit word)"}
-        for label in ["clean", "broad_text_oc", "strict_text_oc"]:  # rare classes last (on top)
+        label_map = {
+            "clean": "preserved",
+            "broad_text_oc": "strengthened (implied)",
+            "strict_text_oc": "strengthened (explicit word)",
+        }
+        for label in [
+            "clean",
+            "broad_text_oc",
+            "strict_text_oc",
+        ]:  # rare classes last (on top)
             mask = keys == label
             if not mask.any():
                 continue
             size, alpha, edge_w, zorder = DRIFT_STYLE[label]
             ax.scatter(
-                coords[mask, 0], coords[mask, 1], s=size, c=DRIFT_PALETTE[label], alpha=alpha,
-                linewidths=edge_w, edgecolors="#0f172a" if edge_w > 0 else "none",
-                zorder=zorder, label=label_map[label], rasterized=True,
+                coords[mask, 0],
+                coords[mask, 1],
+                s=size,
+                c=DRIFT_PALETTE[label],
+                alpha=alpha,
+                linewidths=edge_w,
+                edgecolors="#0f172a" if edge_w > 0 else "none",
+                zorder=zorder,
+                label=label_map[label],
+                rasterized=True,
             )
-        leg = ax.legend(loc="upper right", handletextpad=0.2, borderpad=0.25, labelspacing=0.25, framealpha=0.85)
+        leg = ax.legend(
+            loc="upper right",
+            handletextpad=0.2,
+            borderpad=0.25,
+            labelspacing=0.25,
+            framealpha=0.85,
+        )
         for handle in leg.legend_handles:
             handle.set_alpha(1.0)
             handle.set_sizes([16])
@@ -191,7 +254,9 @@ def panel_projection(
     ax.set_xticks([])
     ax.set_yticks([])
     ax.margins(0.02)
-    for spine in ax.spines.values():  # light frame so (a) and (b) read as separate panels
+    for (
+        spine
+    ) in ax.spines.values():  # light frame so (a) and (b) read as separate panels
         spine.set_visible(True)
         spine.set_edgecolor("#cbd5e1")
         spine.set_linewidth(0.8)
@@ -238,7 +303,15 @@ def hbar_detection(
         if np.isnan(val):
             continue
         ax.barh(yi, val - 0.5, left=0.5, color=color, height=0.52, zorder=2)
-        ax.text(val + 0.012, yi, f"{val:.2f}", va="center", ha="left", fontsize=11.5, color="#0f172a")
+        ax.text(
+            val + 0.012,
+            yi,
+            f"{val:.2f}",
+            va="center",
+            ha="left",
+            fontsize=11.5,
+            color="#0f172a",
+        )
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=11.0)
     ax.set_ylim(-0.5, len(labels) - 0.5)
@@ -249,17 +322,43 @@ def panel_readout(
     ax: Axes, summary: list[dict[str, Any]], group_mode: str, model: str
 ) -> None:
     """(c) What can be read off the generated text, by gradient-boosted trees."""
-    def within_mean(backend: str) -> float:
-        return float(np.nanmean([
-            auroc_cell(summary, backend=backend, text="reqonly", group=group_mode,
-                       scope=f"source_modality={lvl}", target="deterministic_strict_text_overcommit", model=model)
-            for lvl in ("nice_to_have", "optional", "recommended")
-        ]))
 
-    src = auroc_cell(summary, backend="mlx", text="reqonly", group=group_mode,
-                     scope="global", target="source_modality", model=model)
-    dataset = auroc_cell(summary, backend="mlx", text="reqonly", group=group_mode,
-                         scope="global", target="dataset_variant", model=model)
+    def within_mean(backend: str) -> float:
+        return float(
+            np.nanmean(
+                [
+                    auroc_cell(
+                        summary,
+                        backend=backend,
+                        text="reqonly",
+                        group=group_mode,
+                        scope=f"source_modality={lvl}",
+                        target="deterministic_strict_text_overcommit",
+                        model=model,
+                    )
+                    for lvl in ("nice_to_have", "optional", "recommended")
+                ]
+            )
+        )
+
+    src = auroc_cell(
+        summary,
+        backend="mlx",
+        text="reqonly",
+        group=group_mode,
+        scope="global",
+        target="source_modality",
+        model=model,
+    )
+    dataset = auroc_cell(
+        summary,
+        backend="mlx",
+        text="reqonly",
+        group=group_mode,
+        scope="global",
+        target="dataset_variant",
+        model=model,
+    )
     strengthen_emb = within_mean("mlx")
     strengthen_kw = within_mean("tfidf")
 
@@ -273,20 +372,42 @@ def panel_readout(
     colors = ["#009E73", "#009E73", "#D55E00", "#D55E00"]
     y = hbar_detection(ax, labels, values, colors)
     mid = (y[2] + y[3]) / 2.0
-    ax.annotate("", xy=(0.5 + 0.001, y[3] - 0.33), xytext=(0.5 + 0.001, y[2] + 0.33),
-                arrowprops={"arrowstyle": "-", "lw": 0.0})
-    ax.text(max(strengthen_emb, strengthen_kw) + 0.05, mid, "≈ coin flip\n(neither works)",
-            va="center", ha="left", fontsize=10.5, color="#D55E00", fontstyle="italic")
+    ax.annotate(
+        "",
+        xy=(0.5 + 0.001, y[3] - 0.33),
+        xytext=(0.5 + 0.001, y[2] + 0.33),
+        arrowprops={"arrowstyle": "-", "lw": 0.0},
+    )
+    ax.text(
+        max(strengthen_emb, strengthen_kw) + 0.05,
+        mid,
+        "≈ coin flip\n(neither works)",
+        va="center",
+        ha="left",
+        fontsize=10.5,
+        color="#D55E00",
+        fontstyle="italic",
+    )
     style_detection_axis(ax)
-    ax.set_title("(c) What can be read from a generated requirement  (HistGradientBoosting)",
-                 fontsize=12.0)
+    ax.set_title(
+        "(c) What can be read from a generated requirement  (HistGradientBoosting)",
+        fontsize=12.0,
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME)
-    parser.add_argument("--diagnostic-dir", type=Path, default=Path("outputs/embedding_diagnostic"))
-    parser.add_argument("--output", type=Path, default=Path("docs/figures/embedding_diagnostic.pdf"))
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME,
+    )
+    parser.add_argument(
+        "--diagnostic-dir", type=Path, default=Path("outputs/embedding_diagnostic")
+    )
+    parser.add_argument(
+        "--output", type=Path, default=Path("docs/figures/embedding_diagnostic.pdf")
+    )
     parser.add_argument("--method", choices=["tsne", "pca"], default="tsne")
     parser.add_argument("--per-modality", type=int, default=850)
     parser.add_argument("--group-mode", default="item")
@@ -295,16 +416,26 @@ def main() -> None:
     args = parser.parse_args()
 
     root = eu.project_root()
-    diagnostic_dir = args.diagnostic_dir if args.diagnostic_dir.is_absolute() else root / args.diagnostic_dir
-    manifest_path = args.manifest if args.manifest.is_absolute() else root / args.manifest
+    diagnostic_dir = (
+        args.diagnostic_dir
+        if args.diagnostic_dir.is_absolute()
+        else root / args.diagnostic_dir
+    )
+    manifest_path = (
+        args.manifest if args.manifest.is_absolute() else root / args.manifest
+    )
     output_path = args.output if args.output.is_absolute() else root / args.output
 
-    cache = np.load(diagnostic_dir / "task2_reqonly_mlx_embeddings.npz", allow_pickle=False)
+    cache = np.load(
+        diagnostic_dir / "task2_reqonly_mlx_embeddings.npz", allow_pickle=False
+    )
     reqonly = cache["embeddings"].astype(np.float32, copy=False)
     rows = manifest_rows(manifest_path, "mlx:")
     _, sample_rows = load_embeddings_and_rows(rows)
     if len(sample_rows) != reqonly.shape[0]:
-        raise ValueError(f"row/embedding mismatch: {len(sample_rows)} vs {reqonly.shape[0]}")
+        raise ValueError(
+            f"row/embedding mismatch: {len(sample_rows)} vs {reqonly.shape[0]}"
+        )
     summary = read_summary(diagnostic_dir / "probe_grid_summary.csv")
 
     # Project distinct generated requirements (each unique text appears ~17x across
@@ -324,8 +455,10 @@ def main() -> None:
     keep_local = balanced_subsample(unique_rows, args.per_modality, rng)
     global_idx = unique_global_arr[keep_local]
     sub_rows = [unique_rows[k] for k in keep_local]
-    print(f"projection subsample: {global_idx.size} points "
-          f"(strict positives kept: {sum(drift_status(r) == 'strict_text_oc' for r in sub_rows)})")
+    print(
+        f"projection subsample: {global_idx.size} points "
+        f"(strict positives kept: {sum(drift_status(r) == 'strict_text_oc' for r in sub_rows)})"
+    )
     coords = compute_projection(reqonly[global_idx], args.method, args.random_state)
 
     set_style()
@@ -336,10 +469,17 @@ def main() -> None:
     ax_b = fig.add_subplot(gs[0, 6:12])
     ax_c = fig.add_subplot(gs[1, 1:11])
 
-    panel_projection(ax_a, coords, sub_rows, "source_modality",
-                     "(a) Colored by input strength", rng=rng)
-    panel_projection(ax_b, coords, sub_rows, "drift",
-                     "(b) Colored by strength increase")
+    panel_projection(
+        ax_a,
+        coords,
+        sub_rows,
+        "source_modality",
+        "(a) Colored by input strength",
+        rng=rng,
+    )
+    panel_projection(
+        ax_b, coords, sub_rows, "drift", "(b) Colored by strength increase"
+    )
     panel_readout(ax_c, summary, args.group_mode, args.model)
     fig.suptitle("Generated requirements", fontsize=14.0, fontweight="bold")
 

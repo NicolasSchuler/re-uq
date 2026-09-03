@@ -61,7 +61,10 @@ class EvalUtilsTest(unittest.TestCase):
         validation_retries=3,
     ):
         if extra_body is self._INSTRUCTOR_EXTRA_BODY_DEFAULT:
-            extra_body = {"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}}
+            extra_body = {
+                "thinking": {"type": "disabled"},
+                "response_format": {"type": "json_object"},
+            }
         seeds = [
             {
                 "seed_id": f"S{index + 1:04d}",
@@ -72,7 +75,9 @@ class EvalUtilsTest(unittest.TestCase):
             for index in range(seed_count)
         ]
         benchmark = eu.build_benchmark_items(seeds)
-        mandatory_items = [row for row in benchmark if row["source_modality"] == "mandatory"]
+        mandatory_items = [
+            row for row in benchmark if row["source_modality"] == "mandatory"
+        ]
         return eu.planned_completion_jobs(
             mandatory_items,
             tasks=["task1"],
@@ -137,7 +142,10 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(by_modality["mandatory"]["task1_gold_decision"], "yes")
         self.assertEqual(by_modality["recommended"]["task1_gold_decision"], "no")
         self.assertEqual(by_modality["optional"]["task2_gold_modality"], "optional")
-        self.assertGreater(by_modality["mandatory"]["ordinal_strength"], by_modality["nice_to_have"]["ordinal_strength"])
+        self.assertGreater(
+            by_modality["mandatory"]["ordinal_strength"],
+            by_modality["nice_to_have"]["ordinal_strength"],
+        )
 
     def test_benchmark_statement_review_export(self):
         seeds = export_report_seeds()
@@ -147,8 +155,13 @@ class EvalUtilsTest(unittest.TestCase):
             frame = eu.benchmark_statement_review_frame(benchmark)
 
             self.assertEqual(len(frame), 1)
-            self.assertEqual(frame.iloc[0]["MUST source"], "The system MUST export reports.")
-            self.assertEqual(frame.iloc[0]["Nice-to-have source"], "It would be useful if the system could export reports.")
+            self.assertEqual(
+                frame.iloc[0]["MUST source"], "The system MUST export reports."
+            )
+            self.assertEqual(
+                frame.iloc[0]["Nice-to-have source"],
+                "It would be useful if the system could export reports.",
+            )
             self.assertTrue(export_paths["markdown"].exists())
             self.assertTrue(export_paths["csv"].exists())
 
@@ -158,8 +171,14 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(len(items), 4)
         self.assertEqual(len({row["item_id"] for row in items}), 4)
         by_modality = {row["source_modality"]: row for row in items}
-        self.assertEqual(by_modality["mandatory"]["source_statement"], "The system SHALL export reports.")
-        self.assertEqual(by_modality["mandatory"]["candidate_requirement"], "The system SHALL export reports.")
+        self.assertEqual(
+            by_modality["mandatory"]["source_statement"],
+            "The system SHALL export reports.",
+        )
+        self.assertEqual(
+            by_modality["mandatory"]["candidate_requirement"],
+            "The system SHALL export reports.",
+        )
         self.assertEqual(by_modality["mandatory"]["task1_gold_decision"], "yes")
         self.assertEqual(by_modality["recommended"]["task1_gold_decision"], "no")
 
@@ -178,9 +197,14 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual(len(items), 80)
         self.assertEqual(len({row["item_id"] for row in items}), 80)
-        self.assertEqual({row["task2_gold_modality"] for row in items}, {"nice_to_have"})
+        self.assertEqual(
+            {row["task2_gold_modality"] for row in items}, {"nice_to_have"}
+        )
         self.assertEqual({row["source_modality"] for row in items}, {"nice_to_have"})
-        self.assertEqual({row["template_id"] for row in items}, {row["template_id"] for row in eu.WEAK_MODALITY_PROBE_TEMPLATES})
+        self.assertEqual(
+            {row["template_id"] for row in items},
+            {row["template_id"] for row in eu.WEAK_MODALITY_PROBE_TEMPLATES},
+        )
         for row in items:
             text = row["source_statement"].lower()
             self.assertNotIn("nice_to_have", text)
@@ -202,7 +226,9 @@ class EvalUtilsTest(unittest.TestCase):
             eu.MODALITIES,
         )
         self.assertEqual(len(by_variant["shall"]), 1)
-        self.assertEqual(len(by_variant["weak_probe"]), len(eu.WEAK_MODALITY_PROBE_TEMPLATES))
+        self.assertEqual(
+            len(by_variant["weak_probe"]), len(eu.WEAK_MODALITY_PROBE_TEMPLATES)
+        )
 
         for row in rows:
             self.assertIn("{capability}", row["source_statement_template"])
@@ -213,9 +239,14 @@ class EvalUtilsTest(unittest.TestCase):
             )
             self.assertIn(row["intended_gold_modality"], eu.MODALITIES)
 
-        must_templates = {row["condition"]: row["source_statement_template"] for row in by_variant["must"]}
+        must_templates = {
+            row["condition"]: row["source_statement_template"]
+            for row in by_variant["must"]
+        }
         self.assertEqual(must_templates["mandatory"], "The system MUST {capability}.")
-        self.assertEqual(must_templates["recommended"], "The system SHOULD {capability}.")
+        self.assertEqual(
+            must_templates["recommended"], "The system SHOULD {capability}."
+        )
         self.assertEqual(must_templates["optional"], "The system MAY {capability}.")
         self.assertEqual(
             must_templates["nice_to_have"],
@@ -227,7 +258,10 @@ class EvalUtilsTest(unittest.TestCase):
         )
         self.assertEqual(
             {row["source_statement_template"] for row in by_variant["weak_probe"]},
-            {template["source_template"] for template in eu.WEAK_MODALITY_PROBE_TEMPLATES},
+            {
+                template["source_template"]
+                for template in eu.WEAK_MODALITY_PROBE_TEMPLATES
+            },
         )
 
     def test_write_main_modality_template_inventory_writes_csv_and_markdown(self):
@@ -239,7 +273,9 @@ class EvalUtilsTest(unittest.TestCase):
 
             written = eu.read_csv_rows(paths["csv"])
             self.assertEqual(len(written), len(eu.main_modality_template_rows()))
-            self.assertEqual(list(written[0]), eu.MAIN_MODALITY_TEMPLATE_INVENTORY_FIELDS)
+            self.assertEqual(
+                list(written[0]), eu.MAIN_MODALITY_TEMPLATE_INVENTORY_FIELDS
+            )
 
             markdown = paths["markdown"].read_text(encoding="utf-8")
             self.assertIn("The system SHALL {capability}.", markdown)
@@ -249,16 +285,23 @@ class EvalUtilsTest(unittest.TestCase):
         rows = eu.weak_modality_template_sanity_rows()
         incomplete = eu.weak_modality_sanity_status(rows)
         self.assertFalse(incomplete["valid"])
-        self.assertEqual(set(incomplete["incomplete_template_ids"]), {row["template_id"] for row in eu.WEAK_MODALITY_PROBE_TEMPLATES})
+        self.assertEqual(
+            set(incomplete["incomplete_template_ids"]),
+            {row["template_id"] for row in eu.WEAK_MODALITY_PROBE_TEMPLATES},
+        )
 
-        agreed = [{**row, "weaker_than_should": "yes", "reviewer": "r1"} for row in rows]
+        agreed = [
+            {**row, "weaker_than_should": "yes", "reviewer": "r1"} for row in rows
+        ]
         self.assertTrue(eu.weak_modality_sanity_status(agreed)["valid"])
 
         disagreed = list(agreed)
         disagreed[0] = {**disagreed[0], "weaker_than_should": "no"}
         status = eu.weak_modality_sanity_status(disagreed)
         self.assertFalse(status["valid"])
-        self.assertEqual(status["disagreeing_template_ids"], [disagreed[0]["template_id"]])
+        self.assertEqual(
+            status["disagreeing_template_ids"], [disagreed[0]["template_id"]]
+        )
 
     def test_weak_modality_construct_review_requires_two_agreeing_reviewers(self):
         rows = eu.weak_modality_construct_review_rows()
@@ -287,7 +330,9 @@ class EvalUtilsTest(unittest.TestCase):
         disagreed[0] = {**disagreed[0], "weaker_than_should": "no"}
         status = eu.weak_modality_construct_review_status(disagreed)
         self.assertFalse(status["valid"])
-        self.assertEqual(status["disagreeing_template_ids"], [disagreed[0]["template_id"]])
+        self.assertEqual(
+            status["disagreeing_template_ids"], [disagreed[0]["template_id"]]
+        )
 
     def test_construct_review_gate_accepts_shipped_csv(self):
         shipped = eu.project_root() / "docs/weak_modality_construct_review.csv"
@@ -311,7 +356,9 @@ class EvalUtilsTest(unittest.TestCase):
                 blank_rows,
                 fieldnames=eu.WEAK_MODALITY_CONSTRUCT_REVIEW_FIELDS,
             )
-            status = eu.weak_modality_construct_review_status(eu.read_csv_rows(blank_path))
+            status = eu.weak_modality_construct_review_status(
+                eu.read_csv_rows(blank_path)
+            )
             self.assertFalse(status["valid"])
             # Both reviewer slots present but no judgments filled.
             self.assertEqual(status["missing_template_ids"], [])
@@ -356,20 +403,27 @@ class EvalUtilsTest(unittest.TestCase):
 
         for text, expected in cases:
             with self.subTest(text=text):
-                self.assertEqual(eu.requirement_text_modality_diagnostic(text)["text_modality"], expected)
+                self.assertEqual(
+                    eu.requirement_text_modality_diagnostic(text)["text_modality"],
+                    expected,
+                )
 
         self.assertEqual(
-            eu.requirement_text_modality_diagnostic("The system SHOULD export reports.")["text_modality_basis"],
+            eu.requirement_text_modality_diagnostic(
+                "The system SHOULD export reports."
+            )["text_modality_basis"],
             "explicit_modal",
         )
         self.assertEqual(
-            eu.requirement_text_modality_diagnostic("It would be nice if the system could export reports.")[
-                "text_modality_basis"
-            ],
+            eu.requirement_text_modality_diagnostic(
+                "It would be nice if the system could export reports."
+            )["text_modality_basis"],
             "weak_phrase",
         )
         self.assertEqual(
-            eu.requirement_text_modality_diagnostic("The system exports reports.")["text_modality_basis"],
+            eu.requirement_text_modality_diagnostic("The system exports reports.")[
+                "text_modality_basis"
+            ],
             "heuristic_system_verb",
         )
 
@@ -377,9 +431,21 @@ class EvalUtilsTest(unittest.TestCase):
         """A prohibition inside a mandatory obligation is still mandatory."""
         cases = [
             # Positive cue present -> it wins, priority mandatory > recommended > optional.
-            ("The system must ensure that users cannot delete records.", "mandatory", "explicit_modal"),
-            ("Not only must the system export reports, it must archive them.", "mandatory", "explicit_modal"),
-            ("Users may not delete records; the system must log attempts.", "mandatory", "explicit_modal"),
+            (
+                "The system must ensure that users cannot delete records.",
+                "mandatory",
+                "explicit_modal",
+            ),
+            (
+                "Not only must the system export reports, it must archive them.",
+                "mandatory",
+                "explicit_modal",
+            ),
+            (
+                "Users may not delete records; the system must log attempts.",
+                "mandatory",
+                "explicit_modal",
+            ),
             # No positive cue -> the negated modal stands.
             ("The system must not export reports.", "negated", "negated_modal"),
             ("The system cannot export reports.", "negated", "negated_modal"),
@@ -393,26 +459,30 @@ class EvalUtilsTest(unittest.TestCase):
 
         # Mixed categories are flagged; a same-category negation is not.
         self.assertTrue(
-            eu.requirement_text_modality_diagnostic("Users may not delete records; the system must log attempts.")[
-                "text_modality_multi_modal"
-            ]
+            eu.requirement_text_modality_diagnostic(
+                "Users may not delete records; the system must log attempts."
+            )["text_modality_multi_modal"]
         )
         self.assertFalse(
-            eu.requirement_text_modality_diagnostic("Not only must the system export reports, it must archive them.")[
-                "text_modality_multi_modal"
-            ]
+            eu.requirement_text_modality_diagnostic(
+                "Not only must the system export reports, it must archive them."
+            )["text_modality_multi_modal"]
         )
         # A weak phrase still outranks every modal cue.
         self.assertEqual(
-            eu.requirement_text_modality_diagnostic("It would be nice if the system must export reports.")[
-                "text_modality"
-            ],
+            eu.requirement_text_modality_diagnostic(
+                "It would be nice if the system must export reports."
+            )["text_modality"],
             "nice_to_have",
         )
 
     def test_text_modality_overcommitment_fields(self):
-        optional_to_shall = eu.text_modality_fields("The system shall export reports.", "optional", "optional", 0.98)
-        nice_to_could = eu.text_modality_fields("The system could export reports.", "nice_to_have", "nice_to_have", 0.94)
+        optional_to_shall = eu.text_modality_fields(
+            "The system shall export reports.", "optional", "optional", 0.98
+        )
+        nice_to_could = eu.text_modality_fields(
+            "The system could export reports.", "nice_to_have", "nice_to_have", 0.94
+        )
         weak_phrase = eu.text_modality_fields(
             "It would be nice if the system could export reports.",
             "nice_to_have",
@@ -435,7 +505,12 @@ class EvalUtilsTest(unittest.TestCase):
             eu.write_csv_rows(csv_path, [{"id": "1"}, {"id": "2"}])
             prompt_path.write_text("prompt\n", encoding="utf-8")
 
-            manifest = eu.write_benchmark_manifest([csv_path, prompt_path], manifest_path, root=root, metadata={"kind": "test"})
+            manifest = eu.write_benchmark_manifest(
+                [csv_path, prompt_path],
+                manifest_path,
+                root=root,
+                metadata={"kind": "test"},
+            )
             loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
 
             self.assertEqual(manifest["metadata"]["kind"], "test")
@@ -445,7 +520,9 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_verify_benchmark_manifest_passes_on_real_manifest(self):
         root = eu.project_root()
-        summary = eu.verify_benchmark_manifest(root / "outputs/benchmark_manifest.json", root)
+        summary = eu.verify_benchmark_manifest(
+            root / "outputs/benchmark_manifest.json", root
+        )
         self.assertGreater(summary["checked"], 0)
         self.assertEqual(summary["missing"], [])
 
@@ -468,7 +545,14 @@ class EvalUtilsTest(unittest.TestCase):
             manifest_path = root / "manifest.json"
             manifest_path.write_text(
                 json.dumps(
-                    {"artifacts": [{"path": "prompts/mandatory_entailment.txt", "sha256": "0" * 64}]}
+                    {
+                        "artifacts": [
+                            {
+                                "path": "prompts/mandatory_entailment.txt",
+                                "sha256": "0" * 64,
+                            }
+                        ]
+                    }
                 ),
                 encoding="utf-8",
             )
@@ -481,7 +565,14 @@ class EvalUtilsTest(unittest.TestCase):
             manifest_path = root / "manifest.json"
             manifest_path.write_text(
                 json.dumps(
-                    {"artifacts": [{"path": "data/processed/seeds_review.csv", "sha256": "0" * 64}]}
+                    {
+                        "artifacts": [
+                            {
+                                "path": "data/processed/seeds_review.csv",
+                                "sha256": "0" * 64,
+                            }
+                        ]
+                    }
                 ),
                 encoding="utf-8",
             )
@@ -501,16 +592,16 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertEqual(eu.rule_based_source_modality(text), expected)
 
     def test_rule_baseline_scores_are_perfect_on_controlled_benchmark(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         scores = eu.build_rule_baseline_scores(benchmark)
         summary = eu.metric_summary_by_model_task_method(scores)
 
         self.assertEqual(len(scores), 8)
         self.assertEqual({row["model"] for row in scores}, {eu.RULE_BASELINE_MODEL})
         self.assertTrue(all(row["accuracy"] == 1.0 for row in summary))
-        self.assertTrue(all(row["uq_method"] == eu.RULE_BASELINE_METHOD for row in summary))
+        self.assertTrue(
+            all(row["uq_method"] == eu.RULE_BASELINE_METHOD for row in summary)
+        )
 
     def test_parse_task1_response(self):
         raw = 'Some preface {"decision": "yes", "confidence": 87, "brief_reason": "MUST matches"}'
@@ -521,7 +612,11 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_instructor_response_models_enforce_confidence_probability(self):
         parsed = so.Task2Response.model_validate(
-            {"requirement": "The system MAY export reports.", "modality": "optional", "confidence": 0.95}
+            {
+                "requirement": "The system MAY export reports.",
+                "modality": "optional",
+                "confidence": 0.95,
+            }
         )
 
         self.assertEqual(parsed.confidence, 0.95)
@@ -570,9 +665,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(eu.confidence_probability(instructor_scale_only), 0.7)
 
     def test_v2_raw_records_mark_probability_confidence_for_non_instructor_runs(self):
-        item = eu.build_benchmark_items(
-            export_report_seeds()
-        )[0]
+        item = eu.build_benchmark_items(export_report_seeds())[0]
 
         record = eu.build_raw_record(
             run_id="full-1",
@@ -597,13 +690,13 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual(record["parse_status"], "ok")
         self.assertEqual(record["confidence_scale"], eu.CONFIDENCE_SCALE_0_1)
-        self.assertEqual(record["output_contract_version"], so.PROMPT_OUTPUT_CONTRACT_VERSION)
+        self.assertEqual(
+            record["output_contract_version"], so.PROMPT_OUTPUT_CONTRACT_VERSION
+        )
         self.assertEqual(eu.confidence_probability(record), 0.9)
 
     def test_raw_records_infer_probability_scale_from_prompt_contract(self):
-        item = eu.build_benchmark_items(
-            export_report_seeds()
-        )[0]
+        item = eu.build_benchmark_items(export_report_seeds())[0]
 
         record = eu.build_raw_record(
             run_id="full-1",
@@ -627,13 +720,13 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual(record["parse_status"], "ok")
         self.assertEqual(record["confidence_scale"], eu.CONFIDENCE_SCALE_0_1)
-        self.assertEqual(record["output_contract_version"], so.PROMPT_OUTPUT_CONTRACT_VERSION)
+        self.assertEqual(
+            record["output_contract_version"], so.PROMPT_OUTPUT_CONTRACT_VERSION
+        )
         self.assertEqual(eu.confidence_probability(record), 0.9)
 
     def test_v2_raw_records_reject_percentage_confidence_without_legacy_marker(self):
-        item = eu.build_benchmark_items(
-            export_report_seeds()
-        )[0]
+        item = eu.build_benchmark_items(export_report_seeds())[0]
 
         record = eu.build_raw_record(
             run_id="full-1",
@@ -659,9 +752,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertIsNotNone(record["parsed_json"])
 
     def test_task1_selected_label_confidence_sets_p_yes_for_yes_and_no(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         item_by_modality = {row["source_modality"]: row for row in benchmark}
         raw_rows = [
             {
@@ -672,7 +763,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "sample_kind": "deterministic",
                 "sample_index": 0,
                 "parse_status": "ok",
-                "parsed_json": {"decision": "yes", "confidence": 0.8, "brief_reason": "mandatory"},
+                "parsed_json": {
+                    "decision": "yes",
+                    "confidence": 0.8,
+                    "brief_reason": "mandatory",
+                },
                 "output_contract_version": so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION,
                 "confidence_scale": so.INSTRUCTOR_CONFIDENCE_SCALE,
             },
@@ -684,7 +779,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "sample_kind": "deterministic",
                 "sample_index": 0,
                 "parse_status": "ok",
-                "parsed_json": {"decision": "no", "confidence": 0.7, "brief_reason": "optional"},
+                "parsed_json": {
+                    "decision": "no",
+                    "confidence": 0.7,
+                    "brief_reason": "optional",
+                },
                 "output_contract_version": so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION,
                 "confidence_scale": so.INSTRUCTOR_CONFIDENCE_SCALE,
             },
@@ -693,14 +792,24 @@ class EvalUtilsTest(unittest.TestCase):
         scores = eu.build_uq_scores(benchmark, raw_rows)
         score_by_item = {row["item_id"]: row for row in scores}
 
-        self.assertEqual(score_by_item[item_by_modality["mandatory"]["item_id"]]["confidence"], 0.8)
-        self.assertEqual(score_by_item[item_by_modality["mandatory"]["item_id"]]["p_yes"], 0.8)
-        self.assertEqual(score_by_item[item_by_modality["optional"]["item_id"]]["confidence"], 0.7)
-        self.assertAlmostEqual(score_by_item[item_by_modality["optional"]["item_id"]]["p_yes"], 0.3)
+        self.assertEqual(
+            score_by_item[item_by_modality["mandatory"]["item_id"]]["confidence"], 0.8
+        )
+        self.assertEqual(
+            score_by_item[item_by_modality["mandatory"]["item_id"]]["p_yes"], 0.8
+        )
+        self.assertEqual(
+            score_by_item[item_by_modality["optional"]["item_id"]]["confidence"], 0.7
+        )
+        self.assertAlmostEqual(
+            score_by_item[item_by_modality["optional"]["item_id"]]["p_yes"], 0.3
+        )
 
     def test_auto_capability_text_strips_quotes_and_boilerplate(self):
         self.assertEqual(
-            eu.auto_capability_text("'The system shall refresh the display every 60 seconds.'"),
+            eu.auto_capability_text(
+                "'The system shall refresh the display every 60 seconds.'"
+            ),
             "refresh the display every 60 seconds",
         )
         self.assertEqual(
@@ -708,15 +817,21 @@ class EvalUtilsTest(unittest.TestCase):
             "export reports as CSV",
         )
         self.assertEqual(
-            eu.auto_capability_text("'The system shall interface with CampusConnect's central server.'"),
+            eu.auto_capability_text(
+                "'The system shall interface with CampusConnect's central server.'"
+            ),
             "interface with CampusConnect's central server",
         )
         self.assertEqual(
-            eu.auto_capability_text("The TMT Observatory shall monitor subsystem performance."),
+            eu.auto_capability_text(
+                "The TMT Observatory shall monitor subsystem performance."
+            ),
             "monitor subsystem performance",
         )
         self.assertEqual(
-            eu.auto_capability_text("The system shall be able to display a summary which will include cohort progress."),
+            eu.auto_capability_text(
+                "The system shall be able to display a summary which will include cohort progress."
+            ),
             "display a summary which will include cohort progress",
         )
 
@@ -737,8 +852,13 @@ class EvalUtilsTest(unittest.TestCase):
         ]
         refreshed, updated = eu.refresh_capability_suggestions(rows)
         self.assertEqual(updated, 1)
-        self.assertEqual(refreshed[0]["capability_text_final"], "refresh the display every 60 seconds")
-        self.assertEqual(refreshed[1]["capability_text_final"], "show events and activities")
+        self.assertEqual(
+            refreshed[0]["capability_text_final"],
+            "refresh the display every 60 seconds",
+        )
+        self.assertEqual(
+            refreshed[1]["capability_text_final"], "show events and activities"
+        )
 
     def test_write_included_capability_review(self):
         rows = [
@@ -758,11 +878,16 @@ class EvalUtilsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             review_path = Path(tmpdir) / "seeds_review.csv"
             eu.write_csv_rows(review_path, rows)
-            export_paths = eu.write_included_capability_review(review_path, Path(tmpdir) / "outputs")
+            export_paths = eu.write_included_capability_review(
+                review_path, Path(tmpdir) / "outputs"
+            )
             frame = eu.included_capability_review_frame(review_path)
 
             self.assertEqual(len(frame), 1)
-            self.assertEqual(frame.iloc[0]["Final capability text"], "refresh the display every 60 seconds")
+            self.assertEqual(
+                frame.iloc[0]["Final capability text"],
+                "refresh the display every 60 seconds",
+            )
             self.assertTrue(export_paths["markdown"].exists())
             self.assertTrue(export_paths["csv"].exists())
 
@@ -780,7 +905,9 @@ class EvalUtilsTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "candidate_written")
             self.assertEqual(eu.read_csv_rows(path)[0]["value"], "reviewed")
-            self.assertEqual(eu.read_csv_rows(candidate_path)[0]["value"], "regenerated")
+            self.assertEqual(
+                eu.read_csv_rows(candidate_path)[0]["value"], "regenerated"
+            )
 
     def test_write_csv_rows_if_changed_reports_unchanged(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -832,21 +959,40 @@ class EvalUtilsTest(unittest.TestCase):
         }
         for requirement, expected_reason in cases.items():
             with self.subTest(requirement=requirement):
-                include, reason = eu.mlm_tapt_filter(requirement, eu.auto_capability_text(requirement), source_corpus="source_WEB")
+                include, reason = eu.mlm_tapt_filter(
+                    requirement,
+                    eu.auto_capability_text(requirement),
+                    source_corpus="source_WEB",
+                )
                 self.assertFalse(include)
                 self.assertIn(expected_reason, reason)
 
     def test_mlm_tapt_filter_accepts_clean_requirement(self):
         requirement = "The scheduler shall set the interval timer."
-        include, reason = eu.mlm_tapt_filter(requirement, eu.auto_capability_text(requirement), source_corpus="source_WEB")
+        include, reason = eu.mlm_tapt_filter(
+            requirement,
+            eu.auto_capability_text(requirement),
+            source_corpus="source_WEB",
+        )
 
         self.assertTrue(include, reason)
 
-    def test_make_mlm_tapt_seed_candidates_preserves_source_excludes_pure_and_dedupes(self):
+    def test_make_mlm_tapt_seed_candidates_preserves_source_excludes_pure_and_dedupes(
+        self,
+    ):
         rows = [
-            {"source": "alpha_WEB", "reqs": "The scheduler shall set the interval timer."},
-            {"source": "alpha_WEB", "reqs": "The scheduler shall set the interval timer."},
-            {"source": "beta_PURE", "reqs": "The report shall include diagnostic data."},
+            {
+                "source": "alpha_WEB",
+                "reqs": "The scheduler shall set the interval timer.",
+            },
+            {
+                "source": "alpha_WEB",
+                "reqs": "The scheduler shall set the interval timer.",
+            },
+            {
+                "source": "beta_PURE",
+                "reqs": "The report shall include diagnostic data.",
+            },
             {"source": "gamma_WEB", "reqs": "Initialization Data"},
             {"source": "delta_WEB", "reqs": "The display should show recent alerts."},
             {"source": "epsilon_WEB", "reqs": "Users may export reports."},
@@ -867,10 +1013,20 @@ class EvalUtilsTest(unittest.TestCase):
         candidates = []
         for source in ["a", "b", "c", "d", "e", "f"]:
             for index in range(50):
-                candidates.append({"auto_include": "yes", "source_corpus": source, "id": f"{source}{index}"})
+                candidates.append(
+                    {
+                        "auto_include": "yes",
+                        "source_corpus": source,
+                        "id": f"{source}{index}",
+                    }
+                )
 
-        first = eu.weighted_sample_candidate_indices(candidates, target_count=180, seed=42, source_cap=30)
-        second = eu.weighted_sample_candidate_indices(candidates, target_count=180, seed=42, source_cap=30)
+        first = eu.weighted_sample_candidate_indices(
+            candidates, target_count=180, seed=42, source_cap=30
+        )
+        second = eu.weighted_sample_candidate_indices(
+            candidates, target_count=180, seed=42, source_cap=30
+        )
         counts = {}
         for index in first:
             source = candidates[index]["source_corpus"]
@@ -884,16 +1040,25 @@ class EvalUtilsTest(unittest.TestCase):
         base = Path("data/processed/benchmark_items.csv")
 
         self.assertEqual(eu.artifact_path(base, "nice"), base)
-        self.assertEqual(eu.artifact_path(base, "mlm_tapt"), Path("data/processed/benchmark_items_mlm_tapt.csv"))
+        self.assertEqual(
+            eu.artifact_path(base, "mlm_tapt"),
+            Path("data/processed/benchmark_items_mlm_tapt.csv"),
+        )
         self.assertEqual(
             eu.artifact_path(base, "mlm_tapt", "shall"),
             Path("data/processed/benchmark_items_mlm_tapt_shall.csv"),
         )
 
     def test_task3_verification_items_path_is_run_specific(self):
-        path_a = eu.task3_verification_items_path(Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind")
-        path_b = eu.task3_verification_items_path(Path("/tmp/re-uq"), "nice", "must", "full-b", "m1", "blind")
-        path_c = eu.task3_verification_items_path(Path("/tmp/re-uq"), "nice", "must", "full-a", "m2", "blind")
+        path_a = eu.task3_verification_items_path(
+            Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind"
+        )
+        path_b = eu.task3_verification_items_path(
+            Path("/tmp/re-uq"), "nice", "must", "full-b", "m1", "blind"
+        )
+        path_c = eu.task3_verification_items_path(
+            Path("/tmp/re-uq"), "nice", "must", "full-a", "m2", "blind"
+        )
 
         self.assertNotEqual(path_a, path_b)
         self.assertNotEqual(path_a, path_c)
@@ -902,12 +1067,20 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertIn("m1", path_a.name)
 
     def test_task3_verification_items_path_routes_smoke_runs_into_the_smoke_tree(self):
-        default_path = eu.task3_verification_items_path(Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind")
+        default_path = eu.task3_verification_items_path(
+            Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind"
+        )
         smoke_path = eu.task3_verification_items_path(
             Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind", smoke=True
         )
         by_run_id = eu.task3_verification_items_path(
-            Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind", run_id="smoke-1"
+            Path("/tmp/re-uq"),
+            "nice",
+            "must",
+            "full-a",
+            "m1",
+            "blind",
+            run_id="smoke-1",
         )
 
         self.assertEqual(smoke_path.parent.name, "smoke")
@@ -917,11 +1090,19 @@ class EvalUtilsTest(unittest.TestCase):
         # A full run keeps the unchanged paper-facing path.
         self.assertEqual(
             default_path,
-            Path("/tmp/re-uq") / "data/processed/task3_verification_items" / default_path.name,
+            Path("/tmp/re-uq")
+            / "data/processed/task3_verification_items"
+            / default_path.name,
         )
         self.assertEqual(
             eu.task3_verification_items_path(
-                Path("/tmp/re-uq"), "nice", "must", "full-a", "m1", "blind", run_id="full-a"
+                Path("/tmp/re-uq"),
+                "nice",
+                "must",
+                "full-a",
+                "m1",
+                "blind",
+                run_id="full-a",
             ),
             default_path,
         )
@@ -941,17 +1122,25 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(eu.normalize_relation("same modality"), "preserves")
         self.assertEqual(eu.normalize_relation("content mismatch"), "content_changed")
 
-        _, status = eu.parse_task_response("task3", '{"relation":"preserves","confidence":50}')
+        _, status = eu.parse_task_response(
+            "task3", '{"relation":"preserves","confidence":50}'
+        )
         self.assertEqual(status, "missing_fields")
 
-        _, status = eu.parse_task_response("task3", '{"relation":"unclear","confidence":50,"evidence_phrase":"MAY"}')
+        _, status = eu.parse_task_response(
+            "task3", '{"relation":"unclear","confidence":50,"evidence_phrase":"MAY"}'
+        )
         self.assertEqual(status, "invalid_label")
 
     def test_task3_gold_relation_from_ordinal_modality(self):
-        self.assertEqual(eu.task3_gold_relation("nice_to_have", "recommended"), "strengthens")
+        self.assertEqual(
+            eu.task3_gold_relation("nice_to_have", "recommended"), "strengthens"
+        )
         self.assertEqual(eu.task3_gold_relation("optional", "mandatory"), "strengthens")
         self.assertEqual(eu.task3_gold_relation("mandatory", "optional"), "weakens")
-        self.assertEqual(eu.task3_gold_relation("recommended", "recommended"), "preserves")
+        self.assertEqual(
+            eu.task3_gold_relation("recommended", "recommended"), "preserves"
+        )
 
     def test_task3_prompt_modes_are_distinct(self):
         item = {
@@ -960,12 +1149,22 @@ class EvalUtilsTest(unittest.TestCase):
             "source_modality": "nice_to_have",
             "task2_text_modality": "recommended",
         }
-        blind_template = Path("prompts/modality_verification.txt").read_text(encoding="utf-8")
-        declared_template = Path("prompts/modality_verification_declared.txt").read_text(encoding="utf-8")
+        blind_template = Path("prompts/modality_verification.txt").read_text(
+            encoding="utf-8"
+        )
+        declared_template = Path(
+            "prompts/modality_verification_declared.txt"
+        ).read_text(encoding="utf-8")
 
-        blind_prompt = task3_cli.task3_prompt_for(blind_template, item, audit_mode="blind")
-        declared_text_prompt = task3_cli.task3_prompt_for(declared_template, item, audit_mode="declared_text")
-        declared_source_prompt = task3_cli.task3_prompt_for(declared_template, item, audit_mode="declared_source")
+        blind_prompt = task3_cli.task3_prompt_for(
+            blind_template, item, audit_mode="blind"
+        )
+        declared_text_prompt = task3_cli.task3_prompt_for(
+            declared_template, item, audit_mode="declared_text"
+        )
+        declared_source_prompt = task3_cli.task3_prompt_for(
+            declared_template, item, audit_mode="declared_source"
+        )
 
         self.assertNotIn("Declared extracted modality", blind_prompt)
         self.assertIn("Declared extracted modality", declared_text_prompt)
@@ -988,7 +1187,13 @@ class EvalUtilsTest(unittest.TestCase):
             [{"task": "task3", "request_index": 0, "item": base_item}]
         )
         declared_prompt = eu.batch_prompt_for_completion_jobs(
-            [{"task": "task3", "request_index": 0, "item": {**base_item, "task3_audit_mode": "declared_text"}}]
+            [
+                {
+                    "task": "task3",
+                    "request_index": 0,
+                    "item": {**base_item, "task3_audit_mode": "declared_text"},
+                }
+            ]
         )
 
         self.assertNotIn("extracted_modality", blind_prompt)
@@ -1005,15 +1210,23 @@ class EvalUtilsTest(unittest.TestCase):
         rank_strength = [1.0, 0.67, 0.33, 0.0]
         recoded_strength = [1.0, 0.75, 0.33, 0.0]
         p_yes = [1.0, 0.05, 0.0, 0.05]
-        self.assertEqual(eu.spearman_corr(rank_strength, p_yes), eu.spearman_corr(recoded_strength, p_yes))
-        self.assertNotEqual(eu.pearson_corr(rank_strength, p_yes), eu.pearson_corr(recoded_strength, p_yes))
+        self.assertEqual(
+            eu.spearman_corr(rank_strength, p_yes),
+            eu.spearman_corr(recoded_strength, p_yes),
+        )
+        self.assertNotEqual(
+            eu.pearson_corr(rank_strength, p_yes),
+            eu.pearson_corr(recoded_strength, p_yes),
+        )
 
     def test_distribution_uncertainty_helpers(self):
         distribution = eu.label_distribution(["yes", "yes", "no"], ["yes", "no"])
 
         self.assertEqual(distribution, {"yes": 2 / 3, "no": 1 / 3})
         # Ties break toward the weakest label so they do not inflate over-commitment.
-        self.assertEqual(eu.majority_label({"yes": 0.5, "no": 0.5}, ["yes", "no"]), "no")
+        self.assertEqual(
+            eu.majority_label({"yes": 0.5, "no": 0.5}, ["yes", "no"]), "no"
+        )
         self.assertAlmostEqual(eu.variation_ratio(distribution), 1 / 3)
         self.assertGreater(eu.normalized_predictive_entropy(distribution), 0.0)
         self.assertLess(eu.normalized_predictive_entropy(distribution), 1.0)
@@ -1026,7 +1239,9 @@ class EvalUtilsTest(unittest.TestCase):
             "nice_to_have",
         )
         # (b) task1 even split -> weaker "no".
-        self.assertEqual(eu.majority_label({"yes": 0.5, "no": 0.5}, ["yes", "no"]), "no")
+        self.assertEqual(
+            eu.majority_label({"yes": 0.5, "no": 0.5}, ["yes", "no"]), "no"
+        )
         # (c) uniform 4-way tie -> weakest modality.
         uniform = dict.fromkeys(modalities, 0.25)
         self.assertEqual(eu.majority_label(uniform, modalities), "nice_to_have")
@@ -1036,7 +1251,9 @@ class EvalUtilsTest(unittest.TestCase):
             "mandatory",
         )
         self.assertEqual(
-            eu.majority_label({"mandatory": 0.1, "optional": 0.7, "nice_to_have": 0.2}, modalities),
+            eu.majority_label(
+                {"mandatory": 0.1, "optional": 0.7, "nice_to_have": 0.2}, modalities
+            ),
             "optional",
         )
 
@@ -1055,7 +1272,10 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(identical["semantic_cluster_count"], 1)
         self.assertEqual(identical["semantic_uncertainty_score"], 0.0)
         self.assertGreater(divergent["semantic_cluster_count"], 1)
-        self.assertGreater(divergent["semantic_uncertainty_score"], identical["semantic_uncertainty_score"])
+        self.assertGreater(
+            divergent["semantic_uncertainty_score"],
+            identical["semantic_uncertainty_score"],
+        )
 
     def test_acse_semantic_proxy_can_use_lazy_mlx_backend(self):
         fake_embeddings = eu.np.asarray(
@@ -1066,7 +1286,9 @@ class EvalUtilsTest(unittest.TestCase):
             ],
             dtype=float,
         )
-        with mock.patch.object(eu, "_mlx_text_embedding_matrix", return_value=fake_embeddings) as embed:
+        with mock.patch.object(
+            eu, "_mlx_text_embedding_matrix", return_value=fake_embeddings
+        ) as embed:
             diagnostics = eu.acse_semantic_proxy_diagnostics(
                 ["alpha", "alpha-ish", "beta"],
                 embedding_backend="mlx",
@@ -1074,7 +1296,10 @@ class EvalUtilsTest(unittest.TestCase):
             )
 
         embed.assert_called_once()
-        self.assertEqual(diagnostics["semantic_embedding_backend"], "mlx:mlx-community/fake-embedding")
+        self.assertEqual(
+            diagnostics["semantic_embedding_backend"],
+            "mlx:mlx-community/fake-embedding",
+        )
         self.assertGreater(diagnostics["semantic_cluster_count"], 1)
 
     def test_global_acse_loader_refits_tfidf_caches_in_shared_space(self):
@@ -1126,12 +1351,16 @@ class EvalUtilsTest(unittest.TestCase):
                     }
                 )
 
-            embeddings, rows = acse_global_projection.load_embeddings_and_rows(manifest_rows)
+            embeddings, rows = acse_global_projection.load_embeddings_and_rows(
+                manifest_rows
+            )
 
         self.assertEqual(embeddings.shape[0], 2)
         self.assertGreater(embeddings.shape[1], 0)
         self.assertEqual([row["global_embedding_index"] for row in rows], [0, 1])
-        self.assertEqual({row["global_embedding_source"] for row in rows}, {"shared_tfidf_refit"})
+        self.assertEqual(
+            {row["global_embedding_source"] for row in rows}, {"shared_tfidf_refit"}
+        )
 
     def test_acse_normalization_and_calibration_diagnostics(self):
         base = {
@@ -1165,7 +1394,9 @@ class EvalUtilsTest(unittest.TestCase):
         ]
 
         normalized = eu.acse_normalized_score_rows(scores)
-        calibration = eu.acse_calibration_diagnostic_rows(normalized, target_error_rates=(0.0,))
+        calibration = eu.acse_calibration_diagnostic_rows(
+            normalized, target_error_rates=(0.0,)
+        )
 
         by_item = {row["item_id"]: row for row in normalized}
         self.assertEqual(by_item["low-risk"]["acse_normalized_uncertainty_score"], 0.0)
@@ -1192,11 +1423,20 @@ class EvalUtilsTest(unittest.TestCase):
         ]
         diagnostics = eu.monotonicity_violation_diagnostics(rows)
 
-        self.assertEqual(eu.monotonicity_violation_diagnostics(rows, tolerance=0.0)["monotonicity_violations"], 2 / 3)
+        self.assertEqual(
+            eu.monotonicity_violation_diagnostics(rows, tolerance=0.0)[
+                "monotonicity_violations"
+            ],
+            2 / 3,
+        )
         self.assertEqual(diagnostics["monotonicity_violations"], 1 / 3)
         self.assertEqual(diagnostics["monotonicity_strict_violations"], 2 / 3)
-        self.assertEqual(diagnostics["monotonicity_tolerance"], eu.MONOTONICITY_TOLERANCE)
-        self.assertAlmostEqual(diagnostics["monotonicity_mean_max_increase"], (0.0 + 0.04 + 0.06) / 3)
+        self.assertEqual(
+            diagnostics["monotonicity_tolerance"], eu.MONOTONICITY_TOLERANCE
+        )
+        self.assertAlmostEqual(
+            diagnostics["monotonicity_mean_max_increase"], (0.0 + 0.04 + 0.06) / 3
+        )
         self.assertAlmostEqual(diagnostics["monotonicity_max_increase"], 0.06)
 
     def test_high_confidence_overcommitment_metrics(self):
@@ -1206,18 +1446,32 @@ class EvalUtilsTest(unittest.TestCase):
             {"task": "task1", "y_true": 1, "p_yes": 0.95},
         ]
         task2_rows = [
-            {"task": "task2", "gold_modality": "optional", "pred_modality": "mandatory", "confidence": 0.90},
-            {"task": "task2", "gold_modality": "recommended", "pred_modality": "optional", "confidence": 0.95},
+            {
+                "task": "task2",
+                "gold_modality": "optional",
+                "pred_modality": "mandatory",
+                "confidence": 0.90,
+            },
+            {
+                "task": "task2",
+                "gold_modality": "recommended",
+                "pred_modality": "optional",
+                "confidence": 0.95,
+            },
         ]
 
-        self.assertEqual(eu.high_confidence_overcommitment_rate(task1_rows, "task1", 0.80), 0.5)
-        self.assertEqual(eu.high_confidence_overcommitment_rate(task2_rows, "task2", 0.80), 0.5)
+        self.assertEqual(
+            eu.high_confidence_overcommitment_rate(task1_rows, "task1", 0.80), 0.5
+        )
+        self.assertEqual(
+            eu.high_confidence_overcommitment_rate(task2_rows, "task2", 0.80), 0.5
+        )
 
     def test_task2_prompt_sensitivity_summary_counts_nice_to_have_upgrade(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        item = next(
+            row for row in benchmark if row["source_modality"] == "nice_to_have"
         )
-        item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
         raw_rows = [
             {
                 "run_id": "r1-default",
@@ -1226,7 +1480,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "item_id": item["item_id"],
                 "seed_id": item["seed_id"],
                 "source_modality": item["source_modality"],
-                "parsed_json": {"requirement": "The system should export reports.", "modality": "recommended", "confidence": 95.0},
+                "parsed_json": {
+                    "requirement": "The system should export reports.",
+                    "modality": "recommended",
+                    "confidence": 95.0,
+                },
                 "parse_status": "ok",
             },
             {
@@ -1236,7 +1494,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "item_id": item["item_id"],
                 "seed_id": item["seed_id"],
                 "source_modality": item["source_modality"],
-                "parsed_json": {"requirement": "It would be useful if the system could export reports.", "modality": "nice_to_have", "confidence": 90.0},
+                "parsed_json": {
+                    "requirement": "It would be useful if the system could export reports.",
+                    "modality": "nice_to_have",
+                    "confidence": 90.0,
+                },
                 "parse_status": "ok",
             },
         ]
@@ -1245,7 +1507,9 @@ class EvalUtilsTest(unittest.TestCase):
         by_model = {row["model"]: row for row in summary}
 
         self.assertEqual(by_model["m1:default"]["nice_to_have_accuracy"], 0.0)
-        self.assertEqual(by_model["m1:default"]["nice_to_have_to_recommended_rate"], 1.0)
+        self.assertEqual(
+            by_model["m1:default"]["nice_to_have_to_recommended_rate"], 1.0
+        )
         self.assertEqual(by_model["m1:default"]["high_conf_overcommit_90"], 1.0)
         self.assertEqual(by_model["m1:labels_only"]["nice_to_have_accuracy"], 1.0)
         self.assertEqual(by_model["m1:labels_only"]["over_commitment"], 0.0)
@@ -1314,11 +1578,13 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(summary[0]["mean_confidence"], 0.95)
 
     def test_qualitative_examples_sorted_by_risk(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        optional_item = next(
+            row for row in benchmark if row["source_modality"] == "optional"
         )
-        optional_item = next(row for row in benchmark if row["source_modality"] == "optional")
-        nice_item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
+        nice_item = next(
+            row for row in benchmark if row["source_modality"] == "nice_to_have"
+        )
         scores = [
             {
                 "model": "m1",
@@ -1341,16 +1607,16 @@ class EvalUtilsTest(unittest.TestCase):
                 "p_yes": 0.95,
             },
         ]
-        examples = eu.qualitative_overcommitment_examples(scores, benchmark, limit=2, threshold=0.80)
+        examples = eu.qualitative_overcommitment_examples(
+            scores, benchmark, limit=2, threshold=0.80
+        )
 
         self.assertEqual(len(examples), 2)
         self.assertEqual(examples[0]["risk_score"], 0.95)
         self.assertEqual(examples[0]["source_modality"], "nice_to_have")
 
     def test_build_uq_scores_and_summary(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         raw_rows = []
         for item in benchmark:
             decision = "yes" if item["source_modality"] == "mandatory" else "no"
@@ -1358,7 +1624,11 @@ class EvalUtilsTest(unittest.TestCase):
                 raw_record(
                     item,
                     task="task1",
-                    parsed_json={"decision": decision, "confidence": 90.0, "brief_reason": ""},
+                    parsed_json={
+                        "decision": decision,
+                        "confidence": 90.0,
+                        "brief_reason": "",
+                    },
                 )
             )
         scores = eu.build_uq_scores(benchmark, raw_rows)
@@ -1371,7 +1641,11 @@ class EvalUtilsTest(unittest.TestCase):
         row = raw_record(
             item,
             task="task2",
-            parsed_json={"requirement": requirement, "modality": "mandatory", "confidence": 0.9},
+            parsed_json={
+                "requirement": requirement,
+                "modality": "mandatory",
+                "confidence": 0.9,
+            },
         )
         row["raw_text"] = json.dumps(row["parsed_json"])
         row.update(overrides)
@@ -1385,7 +1659,11 @@ class EvalUtilsTest(unittest.TestCase):
             self._task2_raw_row(item, "The system must export reports."),
         ]
 
-        scores = [row for row in eu.build_uq_scores(benchmark, rows) if row["uq_method"] == "verbalized_confidence"]
+        scores = [
+            row
+            for row in eu.build_uq_scores(benchmark, rows)
+            if row["uq_method"] == "verbalized_confidence"
+        ]
 
         self.assertEqual(len(scores), 1)
         # The later row wins, so the score reflects the latest answer's text.
@@ -1395,23 +1673,39 @@ class EvalUtilsTest(unittest.TestCase):
     def test_a_failed_row_followed_by_an_ok_retry_scores_once(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
         item = next(row for row in benchmark if row["source_modality"] == "mandatory")
-        failed = self._task2_raw_row(item, "", parse_status="invalid_json", parsed_json=None)
+        failed = self._task2_raw_row(
+            item, "", parse_status="invalid_json", parsed_json=None
+        )
         rows = [failed, self._task2_raw_row(item, "The system must export reports.")]
 
-        scores = [row for row in eu.build_uq_scores(benchmark, rows) if row["uq_method"] == "verbalized_confidence"]
+        scores = [
+            row
+            for row in eu.build_uq_scores(benchmark, rows)
+            if row["uq_method"] == "verbalized_confidence"
+        ]
 
         self.assertEqual(len(scores), 1)
         self.assertEqual(scores[0]["text_modality"], "mandatory")
         # The ok row wins whichever order it was appended in.
-        self.assertEqual([row["parse_status"] for row in eu.dedupe_raw_rows(rows)], ["ok"])
-        self.assertEqual([row["parse_status"] for row in eu.dedupe_raw_rows(list(reversed(rows)))], ["ok"])
+        self.assertEqual(
+            [row["parse_status"] for row in eu.dedupe_raw_rows(rows)], ["ok"]
+        )
+        self.assertEqual(
+            [row["parse_status"] for row in eu.dedupe_raw_rows(list(reversed(rows)))],
+            ["ok"],
+        )
         # With no ok row at all the last attempt survives, so the failure is visible.
-        self.assertEqual([row["parse_status"] for row in eu.dedupe_raw_rows([failed, failed])], ["invalid_json"])
+        self.assertEqual(
+            [row["parse_status"] for row in eu.dedupe_raw_rows([failed, failed])],
+            ["invalid_json"],
+        )
 
     def test_dedupe_keeps_distinct_requests_and_runs_apart(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
         item = next(row for row in benchmark if row["source_modality"] == "mandatory")
-        other_item = next(row for row in benchmark if row["source_modality"] == "optional")
+        other_item = next(
+            row for row in benchmark if row["source_modality"] == "optional"
+        )
         rows = [
             self._task2_raw_row(item, "a"),
             self._task2_raw_row(item, "b", run_id="r2"),
@@ -1424,7 +1718,10 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(len(eu.dedupe_raw_rows(rows)), len(rows))
         # Order of the survivors follows first appearance.
         self.assertEqual(
-            [row["parsed_json"]["requirement"] for row in eu.dedupe_raw_rows([*rows, self._task2_raw_row(item, "z")])],
+            [
+                row["parsed_json"]["requirement"]
+                for row in eu.dedupe_raw_rows([*rows, self._task2_raw_row(item, "z")])
+            ],
             ["z", "b", "c", "d", "e", "f"],
         )
 
@@ -1433,7 +1730,9 @@ class EvalUtilsTest(unittest.TestCase):
         item = next(row for row in benchmark if row["source_modality"] == "mandatory")
         rows = [self._task2_raw_row(item, "a"), self._task2_raw_row(item, "b")]
 
-        progress = eu.run_progress_summary(benchmark, rows, expected_stochastic_samples=0)
+        progress = eu.run_progress_summary(
+            benchmark, rows, expected_stochastic_samples=0
+        )
 
         self.assertEqual(len(progress), 1)
         self.assertEqual(progress[0]["observed_records"], 1)
@@ -1441,7 +1740,9 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_duplicate_task2_rows_build_one_task3_item(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
-        item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
+        item = next(
+            row for row in benchmark if row["source_modality"] == "nice_to_have"
+        )
         rows = [
             self._task2_raw_row(item, "The system may export reports."),
             self._task2_raw_row(item, "The system must export reports."),
@@ -1450,7 +1751,9 @@ class EvalUtilsTest(unittest.TestCase):
         items = eu.build_task3_verification_items(benchmark, rows)
 
         self.assertEqual(len(items), 1)
-        self.assertEqual(items[0]["task2_requirement"], "The system must export reports.")
+        self.assertEqual(
+            items[0]["task2_requirement"], "The system must export reports."
+        )
         self.assertEqual(items[0]["task2_text_modality"], "mandatory")
 
     def test_stochastic_completeness_counts_samples_that_were_never_written(self):
@@ -1467,11 +1770,15 @@ class EvalUtilsTest(unittest.TestCase):
         ]
 
         without_expectation = [
-            row for row in eu.build_uq_scores(benchmark, rows) if row["uq_method"] == "modality_consistency"
+            row
+            for row in eu.build_uq_scores(benchmark, rows)
+            if row["uq_method"] == "modality_consistency"
         ]
         with_expectation = [
             row
-            for row in eu.build_uq_scores(benchmark, rows, expected_stochastic_samples=5)
+            for row in eu.build_uq_scores(
+                benchmark, rows, expected_stochastic_samples=5
+            )
             if row["uq_method"] == "modality_consistency"
         ]
 
@@ -1512,21 +1819,25 @@ class EvalUtilsTest(unittest.TestCase):
             "parse_status": "ok",
             "latency_s": 0.1,
             "error": "",
-            "prompt": "Source statement:\n\"The system MUST with CampusConnect's central server.\"",
+            "prompt": 'Source statement:\n"The system MUST with CampusConnect\'s central server."',
         }
 
-        self.assertEqual(eu.benchmark_rows_with_current_raw_outputs(benchmark, [raw]), [])
+        self.assertEqual(
+            eu.benchmark_rows_with_current_raw_outputs(benchmark, [raw]), []
+        )
         self.assertEqual(eu.build_uq_scores(benchmark, [raw]), [])
 
-        fresh = {**raw, "prompt": f"Source statement:\n\"{item['source_statement']}\""}
-        self.assertEqual(len(eu.benchmark_rows_with_current_raw_outputs(benchmark, [fresh])), 1)
+        fresh = {**raw, "prompt": f'Source statement:\n"{item["source_statement"]}"'}
+        self.assertEqual(
+            len(eu.benchmark_rows_with_current_raw_outputs(benchmark, [fresh])), 1
+        )
         self.assertEqual(len(eu.build_uq_scores(benchmark, [fresh])), 1)
 
     def test_build_task3_items_scores_and_summary(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        source_item = next(
+            row for row in benchmark if row["source_modality"] == "nice_to_have"
         )
-        source_item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
         task2_raw = [
             {
                 "run_id": "full-r1",
@@ -1542,7 +1853,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "top_p": 1.0,
                 "prompt_version": "v1",
                 "raw_text": "",
-                "parsed_json": {"requirement": "The system SHOULD export reports.", "modality": "nice_to_have", "confidence": 95.0},
+                "parsed_json": {
+                    "requirement": "The system SHOULD export reports.",
+                    "modality": "nice_to_have",
+                    "confidence": 95.0,
+                },
                 "parse_status": "ok",
                 "latency_s": 0.1,
                 "error": "",
@@ -1582,7 +1897,9 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             },
         )
-        self.assertEqual(raw_record["task2_requirement"], "The system SHOULD export reports.")
+        self.assertEqual(
+            raw_record["task2_requirement"], "The system SHOULD export reports."
+        )
         self.assertEqual(raw_record["task2_text_modality"], "recommended")
         self.assertEqual(raw_record["task3_declared_relation"], "preserves")
         reconstructed_items = eu.task3_items_from_raw_rows([raw_record])
@@ -1629,7 +1946,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "top_p": 1.0,
                 "prompt_version": "v1:task3",
                 "raw_text": "",
-                "parsed_json": {"relation": "strengthens", "confidence": 80.0, "evidence_phrase": "It would be useful if"},
+                "parsed_json": {
+                    "relation": "strengthens",
+                    "confidence": 80.0,
+                    "evidence_phrase": "It would be useful if",
+                },
                 "parse_status": "ok",
                 "latency_s": 0.1,
                 "error": "",
@@ -1648,7 +1969,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "top_p": 1.0,
                 "prompt_version": "v1:task3",
                 "raw_text": "",
-                "parsed_json": {"relation": "strengthens", "confidence": 75.0, "evidence_phrase": "useful"},
+                "parsed_json": {
+                    "relation": "strengthens",
+                    "confidence": 75.0,
+                    "evidence_phrase": "useful",
+                },
                 "parse_status": "ok",
                 "latency_s": 0.1,
                 "error": "",
@@ -1679,16 +2004,24 @@ class EvalUtilsTest(unittest.TestCase):
         by_method = {row["uq_method"]: row for row in summary}
 
         self.assertEqual({row["task"] for row in scores}, {"task3"})
-        verbalized_score = next(row for row in scores if row["uq_method"] == "verbalized_confidence")
+        verbalized_score = next(
+            row for row in scores if row["uq_method"] == "verbalized_confidence"
+        )
         self.assertEqual(verbalized_score["confidence"], 0.9)
         self.assertEqual(by_method["verbalized_confidence"]["accuracy"], 0.0)
         self.assertEqual(by_method["verbalized_confidence"]["f1_or_macro_f1"], 0.0)
-        self.assertEqual(by_method["verbalized_confidence"]["strengthening_recall"], 0.0)
+        self.assertEqual(
+            by_method["verbalized_confidence"]["strengthening_recall"], 0.0
+        )
         self.assertEqual(by_method["verbalized_confidence"]["false_preserve_rate"], 1.0)
-        self.assertEqual(by_method["verbalized_confidence"]["evidence_phrase_source_rate"], 1.0)
+        self.assertEqual(
+            by_method["verbalized_confidence"]["evidence_phrase_source_rate"], 1.0
+        )
         self.assertEqual(by_method["relation_consistency"]["accuracy"], 1.0)
         self.assertEqual(by_method["relation_consistency"]["f1_or_macro_f1"], 1.0)
-        self.assertAlmostEqual(by_method["relation_consistency"]["parse_failure_rate"], 1 / 3)
+        self.assertAlmostEqual(
+            by_method["relation_consistency"]["parse_failure_rate"], 1 / 3
+        )
 
     def test_task2_summary_accuracy_uses_modality_labels(self):
         scores = [
@@ -1747,11 +2080,18 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual(summary[0]["accuracy"], 0.5)
         self.assertEqual(acc_point, 0.5)
-        self.assertEqual(summary[0]["f1_or_macro_f1"], eu.macro_f1_score(["nice_to_have", "optional"], ["recommended", "optional"], eu.MODALITIES))
+        self.assertEqual(
+            summary[0]["f1_or_macro_f1"],
+            eu.macro_f1_score(
+                ["nice_to_have", "optional"], ["recommended", "optional"], eu.MODALITIES
+            ),
+        )
         self.assertEqual(summary[0]["over_commitment"], 0.5)
         self.assertEqual(summary[0]["over_commitment_severity"], 1.0)
         self.assertEqual(summary[0]["over_commitment_severity_all"], 1.0)
-        self.assertEqual(summary[0]["over_commitment_severity_given_overcommitment"], 2.0)
+        self.assertEqual(
+            summary[0]["over_commitment_severity_given_overcommitment"], 2.0
+        )
         self.assertEqual(summary[0]["weak_recall"], 0.0)
         self.assertEqual(summary[0]["weak_strengthening_90"], 1.0)
         self.assertEqual(summary[0]["high_conf_overcommit_all_90"], 0.5)
@@ -1764,27 +2104,60 @@ class EvalUtilsTest(unittest.TestCase):
             {"task": "task1", "y_true": 1, "p_yes": 0.99},
         ]
         task2_rows = [
-            {"task": "task2", "gold_modality": "nice_to_have", "pred_modality": "recommended", "confidence": 0.95},
-            {"task": "task2", "gold_modality": "optional", "pred_modality": "optional", "confidence": 0.95},
-            {"task": "task2", "gold_modality": "mandatory", "pred_modality": "mandatory", "confidence": 0.95},
+            {
+                "task": "task2",
+                "gold_modality": "nice_to_have",
+                "pred_modality": "recommended",
+                "confidence": 0.95,
+            },
+            {
+                "task": "task2",
+                "gold_modality": "optional",
+                "pred_modality": "optional",
+                "confidence": 0.95,
+            },
+            {
+                "task": "task2",
+                "gold_modality": "mandatory",
+                "pred_modality": "mandatory",
+                "confidence": 0.95,
+            },
         ]
 
-        self.assertEqual(eu.unsupported_mandatory_acceptance_rate(task1_rows, 0.90), 0.5)
-        self.assertEqual(eu.high_confidence_overcommitment_rate(task1_rows, "task1", 0.90), 0.5)
-        self.assertEqual(eu.task2_high_confidence_overcommitment_rate(task2_rows, 0.90, denominator="all"), 1 / 3)
-        self.assertEqual(eu.task2_high_confidence_overcommitment_rate(task2_rows, 0.90, denominator="overcommittable"), 0.5)
+        self.assertEqual(
+            eu.unsupported_mandatory_acceptance_rate(task1_rows, 0.90), 0.5
+        )
+        self.assertEqual(
+            eu.high_confidence_overcommitment_rate(task1_rows, "task1", 0.90), 0.5
+        )
+        self.assertEqual(
+            eu.task2_high_confidence_overcommitment_rate(
+                task2_rows, 0.90, denominator="all"
+            ),
+            1 / 3,
+        )
+        self.assertEqual(
+            eu.task2_high_confidence_overcommitment_rate(
+                task2_rows, 0.90, denominator="overcommittable"
+            ),
+            0.5,
+        )
         self.assertEqual(eu.weak_strengthening_rate(task2_rows, 0.90), 1.0)
 
     def test_task2_deterministic_scores_include_text_modality_fields(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        optional_item = next(
+            row for row in benchmark if row["source_modality"] == "optional"
         )
-        optional_item = next(row for row in benchmark if row["source_modality"] == "optional")
         raw_rows = [
             raw_record(
                 optional_item,
                 task="task2",
-                parsed_json={"requirement": "The system SHALL export reports.", "modality": "optional", "confidence": 98.0},
+                parsed_json={
+                    "requirement": "The system SHALL export reports.",
+                    "modality": "optional",
+                    "confidence": 98.0,
+                },
             )
         ]
 
@@ -1832,7 +2205,9 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(metrics["text_modality_accuracy_all"], 0.5)
         self.assertEqual(metrics["text_modality_parse_coverage"], 0.5)
 
-        empty_metrics = eu.text_modality_summary_metrics([{"text_modality_parse_status": ""}])
+        empty_metrics = eu.text_modality_summary_metrics(
+            [{"text_modality_parse_status": ""}]
+        )
         self.assertEqual(empty_metrics["text_modality_accuracy"], "")
         self.assertEqual(empty_metrics["text_modality_accuracy_all"], "")
         self.assertEqual(empty_metrics["text_modality_parse_coverage"], "")
@@ -1913,11 +2288,16 @@ class EvalUtilsTest(unittest.TestCase):
                 "confidence": 0.9,
             }
             output_path.write_text(
-                json.dumps(duplicate_row) + "\n" + json.dumps({**duplicate_row, "confidence": 0.8}) + "\n",
+                json.dumps(duplicate_row)
+                + "\n"
+                + json.dumps({**duplicate_row, "confidence": 0.8})
+                + "\n",
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "duplicate external_item_id.*EXT0001"):
+            with self.assertRaisesRegex(
+                ValueError, "duplicate external_item_id.*EXT0001"
+            ):
                 external_eval.evaluate_outputs(output_path, gold_path)
 
     def test_external_comparison_skips_scored_items_without_current_report(self):
@@ -2015,12 +2395,17 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertEqual(validation["invalid_confidence_count"], 1)
             self.assertFalse(validation["paper_ready"])
             self.assertIn("invalid_confidence", validation["paper_ready_blockers"])
-            self.assertEqual(float(scored.loc[scored["external_item_id"].eq("EXT0001"), "confidence_num"].iloc[0]), 0.95)
+            self.assertEqual(
+                float(
+                    scored.loc[
+                        scored["external_item_id"].eq("EXT0001"), "confidence_num"
+                    ].iloc[0]
+                ),
+                0.95,
+            )
 
     def test_stochastic_uq_scores(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         item = benchmark[0]
         raw_rows = [
             {
@@ -2037,7 +2422,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "top_p": 1.0,
                 "prompt_version": "v1",
                 "raw_text": "",
-                "parsed_json": {"decision": "yes" if index < 4 else "no", "confidence": 70.0, "brief_reason": ""},
+                "parsed_json": {
+                    "decision": "yes" if index < 4 else "no",
+                    "confidence": 70.0,
+                    "brief_reason": "",
+                },
                 "parse_status": "ok",
                 "latency_s": 0.1,
                 "error": "",
@@ -2049,20 +2438,34 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual(
             set(by_method),
-            {"label_self_consistency", "predictive_entropy", "variation_ratio", eu.ACSE_PROXY_METHOD},
+            {
+                "label_self_consistency",
+                "predictive_entropy",
+                "variation_ratio",
+                eu.ACSE_PROXY_METHOD,
+            },
         )
         self.assertAlmostEqual(by_method["label_self_consistency"]["p_yes"], 0.8)
         self.assertAlmostEqual(by_method["variation_ratio"]["uncertainty_score"], 0.2)
-        self.assertEqual(by_method["predictive_entropy"]["uncertainty_measure"], "normalized_entropy")
-        self.assertGreater(by_method["predictive_entropy"]["uncertainty_score"], by_method["variation_ratio"]["uncertainty_score"])
-        self.assertEqual(by_method[eu.ACSE_PROXY_METHOD]["uncertainty_measure"], eu.ACSE_PROXY_MEASURE)
-        self.assertEqual(by_method[eu.ACSE_PROXY_METHOD]["semantic_embedding_backend"], eu.ACSE_PROXY_EMBEDDING_BACKEND)
+        self.assertEqual(
+            by_method["predictive_entropy"]["uncertainty_measure"], "normalized_entropy"
+        )
+        self.assertGreater(
+            by_method["predictive_entropy"]["uncertainty_score"],
+            by_method["variation_ratio"]["uncertainty_score"],
+        )
+        self.assertEqual(
+            by_method[eu.ACSE_PROXY_METHOD]["uncertainty_measure"],
+            eu.ACSE_PROXY_MEASURE,
+        )
+        self.assertEqual(
+            by_method[eu.ACSE_PROXY_METHOD]["semantic_embedding_backend"],
+            eu.ACSE_PROXY_EMBEDDING_BACKEND,
+        )
         self.assertEqual(by_method[eu.ACSE_PROXY_METHOD]["valid_n"], 5)
 
     def test_stochastic_parse_failures_are_retained_in_score_counts(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         item = benchmark[0]
         raw_rows = [
             {
@@ -2079,14 +2482,25 @@ class EvalUtilsTest(unittest.TestCase):
                 "top_p": 1.0,
                 "prompt_version": "v1",
                 "raw_text": "",
-                "parsed_json": {"decision": "yes", "confidence": 70.0, "brief_reason": ""},
+                "parsed_json": {
+                    "decision": "yes",
+                    "confidence": 70.0,
+                    "brief_reason": "",
+                },
                 "parse_status": "ok",
                 "latency_s": 0.1,
                 "error": "",
             }
             for index in range(4)
         ]
-        raw_rows.append({**raw_rows[0], "sample_index": 4, "parsed_json": None, "parse_status": "invalid_json"})
+        raw_rows.append(
+            {
+                **raw_rows[0],
+                "sample_index": 4,
+                "parsed_json": None,
+                "parse_status": "invalid_json",
+            }
+        )
 
         scores = eu.build_uq_scores(benchmark, raw_rows)
 
@@ -2095,9 +2509,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertTrue(all(row["parse_failures"] == 1 for row in scores))
 
     def test_ensemble_disagreement_scores_task1(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         item = benchmark[0]
         raw_rows = []
         for model, decision in [("m1", "yes"), ("m2", "no")]:
@@ -2105,13 +2517,19 @@ class EvalUtilsTest(unittest.TestCase):
                 raw_record(
                     item,
                     task="task1",
-                    parsed_json={"decision": decision, "confidence": 80.0, "brief_reason": ""},
+                    parsed_json={
+                        "decision": decision,
+                        "confidence": 80.0,
+                        "brief_reason": "",
+                    },
                     model=model,
                 )
             )
 
         scores = eu.build_uq_scores(benchmark, raw_rows)
-        ensemble = [row for row in scores if row["uq_method"] == "model_ensemble_disagreement"]
+        ensemble = [
+            row for row in scores if row["uq_method"] == "model_ensemble_disagreement"
+        ]
 
         self.assertEqual(len(ensemble), 1)
         self.assertEqual(ensemble[0]["model"], "ensemble:2_models")
@@ -2121,23 +2539,31 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertAlmostEqual(ensemble[0]["uncertainty_score"], 0.5)
 
     def test_ensemble_disagreement_scores_task2(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         item = benchmark[2]
         raw_rows = []
-        for model, modality in [("m1", "optional"), ("m2", "mandatory"), ("m3", "mandatory")]:
+        for model, modality in [
+            ("m1", "optional"),
+            ("m2", "mandatory"),
+            ("m3", "mandatory"),
+        ]:
             raw_rows.append(
                 raw_record(
                     item,
                     task="task2",
-                    parsed_json={"requirement": "The system MUST export reports.", "modality": modality, "confidence": 80.0},
+                    parsed_json={
+                        "requirement": "The system MUST export reports.",
+                        "modality": modality,
+                        "confidence": 80.0,
+                    },
                     model=model,
                 )
             )
 
         scores = eu.build_uq_scores(benchmark, raw_rows)
-        ensemble = [row for row in scores if row["uq_method"] == "model_ensemble_disagreement"]
+        ensemble = [
+            row for row in scores if row["uq_method"] == "model_ensemble_disagreement"
+        ]
 
         self.assertEqual(len(ensemble), 1)
         self.assertEqual(ensemble[0]["pred_modality"], "mandatory")
@@ -2227,7 +2653,11 @@ class EvalUtilsTest(unittest.TestCase):
                             "type": "output_text",
                             "text": "yes",
                             "logprobs": [
-                                {"token": "yes", "logprob": -0.2, "top_logprobs": [{"token": "no", "logprob": -2.0}]},
+                                {
+                                    "token": "yes",
+                                    "logprob": -0.2,
+                                    "top_logprobs": [{"token": "no", "logprob": -2.0}],
+                                },
                             ],
                         }
                     ],
@@ -2243,15 +2673,33 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(tokens[0]["top_logprobs"][0]["token"], "no")
 
     def test_responses_endpoint_url(self):
-        self.assertEqual(eu.responses_endpoint_url("http://localhost:1234/v1"), "http://localhost:1234/v1/responses")
-        self.assertEqual(eu.responses_endpoint_url("http://localhost:1234"), "http://localhost:1234/v1/responses")
-        self.assertEqual(eu.responses_endpoint_url("http://localhost:1234/v1/responses"), "http://localhost:1234/v1/responses")
+        self.assertEqual(
+            eu.responses_endpoint_url("http://localhost:1234/v1"),
+            "http://localhost:1234/v1/responses",
+        )
+        self.assertEqual(
+            eu.responses_endpoint_url("http://localhost:1234"),
+            "http://localhost:1234/v1/responses",
+        )
+        self.assertEqual(
+            eu.responses_endpoint_url("http://localhost:1234/v1/responses"),
+            "http://localhost:1234/v1/responses",
+        )
 
     def test_resolve_llm_concurrency_uses_config_and_env_override(self):
-        self.assertEqual(eu.resolve_llm_concurrency({"llm": {"concurrency": 3}}, env={}), 3)
-        self.assertEqual(eu.resolve_llm_concurrency({"llm": {"concurrency": 3}}, env={"LLM_CONCURRENCY": "7"}), 7)
+        self.assertEqual(
+            eu.resolve_llm_concurrency({"llm": {"concurrency": 3}}, env={}), 3
+        )
+        self.assertEqual(
+            eu.resolve_llm_concurrency(
+                {"llm": {"concurrency": 3}}, env={"LLM_CONCURRENCY": "7"}
+            ),
+            7,
+        )
         with self.assertRaises(ValueError):
-            eu.resolve_llm_concurrency({"llm": {"concurrency": 3}}, env={"LLM_CONCURRENCY": "0"})
+            eu.resolve_llm_concurrency(
+                {"llm": {"concurrency": 3}}, env={"LLM_CONCURRENCY": "0"}
+            )
         with self.assertRaises(ValueError):
             eu.resolve_llm_concurrency({"llm": {"concurrency": "nope"}}, env={})
 
@@ -2261,7 +2709,10 @@ class EvalUtilsTest(unittest.TestCase):
                 "run_group_id": "group1",
                 "datasets": ["nice", "mlm_tapt"],
                 "benchmark_variants": ["must"],
-                "logging": {"progress_every_records": 5, "warn_parse_failure_rate": 0.1},
+                "logging": {
+                    "progress_every_records": 5,
+                    "warn_parse_failure_rate": 0.1,
+                },
                 "profiles": [
                     {
                         "profile_id": "local",
@@ -2279,7 +2730,10 @@ class EvalUtilsTest(unittest.TestCase):
                         "api_key_env": "ZAI_API_KEY",
                         "models": ["glm-5.1"],
                         "json_mode": True,
-                        "extra_body": {"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+                        "extra_body": {
+                            "thinking": {"type": "disabled"},
+                            "response_format": {"type": "json_object"},
+                        },
                     },
                 ],
             }
@@ -2289,10 +2743,14 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(config["profiles"][0]["batch_size"], 4)
         self.assertEqual(config["logging"]["progress_every_records"], 5)
         self.assertEqual(config["logging"]["warn_parse_failure_rate"], 0.1)
-        self.assertEqual(config["profiles"][1]["base_url"], "https://api.z.ai/api/coding/paas/v4")
+        self.assertEqual(
+            config["profiles"][1]["base_url"], "https://api.z.ai/api/coding/paas/v4"
+        )
         self.assertEqual(config["profiles"][1]["response_format"], None)
         self.assertEqual(config["profiles"][1]["structured_output"], "json_object")
-        self.assertEqual(config["profiles"][1]["extra_body"]["thinking"]["type"], "disabled")
+        self.assertEqual(
+            config["profiles"][1]["extra_body"]["thinking"]["type"], "disabled"
+        )
         with self.assertRaises(ValueError):
             eu.validate_manual_server_profile(config["profiles"][0])
 
@@ -2334,7 +2792,11 @@ class EvalUtilsTest(unittest.TestCase):
     def test_run_logging_config_override_precedence(self):
         logging_config = eu.normalize_run_logging_config(
             {"progress_every_records": 50, "write_progress_csv": False},
-            overrides={"progress_every_records": 10, "warn_after_records": 0, "write_event_jsonl": False},
+            overrides={
+                "progress_every_records": 10,
+                "warn_after_records": 0,
+                "write_event_jsonl": False,
+            },
         )
 
         self.assertEqual(logging_config["progress_every_records"], 10)
@@ -2364,7 +2826,10 @@ class EvalUtilsTest(unittest.TestCase):
             profile_id="zai",
             run_group_id="group1",
             json_mode=True,
-            extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+            extra_body={
+                "thinking": {"type": "disabled"},
+                "response_format": {"type": "json_object"},
+            },
         )
 
         def fake_completion(**kwargs):
@@ -2384,7 +2849,9 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(record["profile_id"], "zai")
         self.assertEqual(record["run_group_id"], "group1")
         self.assertTrue(record["json_mode"])
-        self.assertEqual(record["request_extra_body"]["response_format"]["type"], "json_object")
+        self.assertEqual(
+            record["request_extra_body"]["response_format"]["type"], "json_object"
+        )
 
     def test_provider_preflight_does_not_duplicate_extra_body_response_format(self):
         captured = {}
@@ -2405,13 +2872,18 @@ class EvalUtilsTest(unittest.TestCase):
             api_key_env="ZAI_API_KEY",
             timeout_s=30,
             json_mode=True,
-            extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+            extra_body={
+                "thinking": {"type": "disabled"},
+                "response_format": {"type": "json_object"},
+            },
             completion_fn=fake_completion,
         )
 
         self.assertTrue(preflight["ok"])
         self.assertIsNone(captured["response_format"])
-        self.assertEqual(captured["extra_body"]["response_format"]["type"], "json_object")
+        self.assertEqual(
+            captured["extra_body"]["response_format"]["type"], "json_object"
+        )
 
     def test_provider_preflight_rejects_v2_percentage_confidence(self):
         def run_preflight(raw_text):
@@ -2435,7 +2907,9 @@ class EvalUtilsTest(unittest.TestCase):
                 completion_fn=fake_completion,
             )
 
-        valid = run_preflight('{"decision": "yes", "confidence": 0.8, "brief_reason": "ok"}')
+        valid = run_preflight(
+            '{"decision": "yes", "confidence": 0.8, "brief_reason": "ok"}'
+        )
         self.assertTrue(valid["ok"])
 
         for bad_confidence in [95, 100, "95%"]:
@@ -2489,7 +2963,10 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(profile["structured_output"], "json_schema")
         self.assertEqual(response_format["type"], "json_schema")
         schema = response_format["json_schema"]["schema"]
-        self.assertEqual(schema["properties"]["modality"]["enum"], ["mandatory", "recommended", "optional", "nice_to_have"])
+        self.assertEqual(
+            schema["properties"]["modality"]["enum"],
+            ["mandatory", "recommended", "optional", "nice_to_have"],
+        )
         self.assertTrue(response_format["json_schema"]["strict"])
 
     def test_json_schema_batch_uses_results_schema(self):
@@ -2550,19 +3027,31 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_batch_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_batch_completion, batch_size=2
+            )
+        )
 
         schema = captured["response_format"]["json_schema"]["schema"]
         self.assertIn("results", schema["properties"])
-        self.assertIn("request_index", schema["properties"]["results"]["items"]["properties"])
+        self.assertIn(
+            "request_index", schema["properties"]["results"]["items"]["properties"]
+        )
         self.assertEqual({row["structured_output"] for row in records}, {"json_schema"})
-        self.assertEqual({row["response_format"]["json_schema"]["name"] for row in records}, {"re_uq_task1_batch"})
+        self.assertEqual(
+            {row["response_format"]["json_schema"]["name"] for row in records},
+            {"re_uq_task1_batch"},
+        )
 
     def test_json_schema_replaces_extra_body_response_format(self):
         response_format, extra_body = eu.resolve_response_format_args(
             "task1",
             structured_output="json_schema",
-            extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+            extra_body={
+                "thinking": {"type": "disabled"},
+                "response_format": {"type": "json_object"},
+            },
         )
 
         self.assertIsNone(response_format)
@@ -2577,7 +3066,10 @@ class EvalUtilsTest(unittest.TestCase):
                 "base_url": "https://api.z.ai/api/coding/paas/v4",
                 "models": ["glm-5.1"],
                 "structured_output": "instructor",
-                "extra_body": {"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+                "extra_body": {
+                    "thinking": {"type": "disabled"},
+                    "response_format": {"type": "json_object"},
+                },
             }
         )
 
@@ -2588,7 +3080,9 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(profile["extra_body"], {"thinking": {"type": "disabled"}})
         self.assertIsNone(profile["response_format"])
 
-    def test_instructor_completion_passes_response_model_retries_mode_and_clean_extra_body(self):
+    def test_instructor_completion_passes_response_model_retries_mode_and_clean_extra_body(
+        self,
+    ):
         import instructor
 
         captured = {}
@@ -2609,9 +3103,12 @@ class EvalUtilsTest(unittest.TestCase):
         class DummyInstructorClient:
             chat = DummyChat()
 
-        with mock.patch("scripts.eval_utils.OpenAI") as openai_cls, mock.patch(
-            "instructor.from_openai", return_value=DummyInstructorClient()
-        ) as from_openai:
+        with (
+            mock.patch("scripts.eval_utils.OpenAI") as openai_cls,
+            mock.patch(
+                "instructor.from_openai", return_value=DummyInstructorClient()
+            ) as from_openai,
+        ):
             result = eu.instructor_completion(
                 host="http://localhost:1234/v1",
                 model="m1",
@@ -2622,7 +3119,10 @@ class EvalUtilsTest(unittest.TestCase):
                 timeout_s=30,
                 api_key_env="LOCAL_OPENAI_API_KEY",
                 response_format={"type": "json_object"},
-                extra_body={"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}},
+                extra_body={
+                    "thinking": {"type": "disabled"},
+                    "response_format": {"type": "json_object"},
+                },
                 task="task1",
                 instructor_mode="json",
                 validation_retries=3,
@@ -2645,7 +3145,9 @@ class EvalUtilsTest(unittest.TestCase):
         class DummyCompletions:
             def create(self, **kwargs):
                 exc = InstructorValidationError("bad model output")
-                exc.last_completion = '{"decision":"yes","confidence":95,"brief_reason":"bad scale"}'
+                exc.last_completion = (
+                    '{"decision":"yes","confidence":95,"brief_reason":"bad scale"}'
+                )
                 raise exc
 
         class DummyChat:
@@ -2654,8 +3156,9 @@ class EvalUtilsTest(unittest.TestCase):
         class DummyInstructorClient:
             chat = DummyChat()
 
-        with mock.patch("scripts.eval_utils.OpenAI"), mock.patch(
-            "instructor.from_openai", return_value=DummyInstructorClient()
+        with (
+            mock.patch("scripts.eval_utils.OpenAI"),
+            mock.patch("instructor.from_openai", return_value=DummyInstructorClient()),
         ):
             result = eu.instructor_completion(
                 host="http://localhost:1234/v1",
@@ -2692,11 +3195,15 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(captured["extra_body"], {"thinking": {"type": "disabled"}})
         self.assertEqual(record["parse_status"], "ok")
         self.assertEqual(record["parsed_json"]["confidence"], 0.8)
-        self.assertEqual(record["output_contract_version"], so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION)
+        self.assertEqual(
+            record["output_contract_version"], so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION
+        )
         self.assertEqual(record["confidence_scale"], so.INSTRUCTOR_CONFIDENCE_SCALE)
 
     def test_instructor_batch_partial_results_fall_back_unbatched(self):
-        jobs = self._instructor_task1_jobs(seed_count=2, extra_body=None, validation_retries=2)
+        jobs = self._instructor_task1_jobs(
+            seed_count=2, extra_body=None, validation_retries=2
+        )
         calls = []
 
         def fake_completion(**kwargs):
@@ -2729,7 +3236,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_completion, batch_size=2
+            )
+        )
 
         self.assertEqual([call["batched"] for call in calls], [True, False])
         self.assertEqual(len(records), 2)
@@ -2777,7 +3288,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_completion, batch_size=2
+            )
+        )
 
         self.assertEqual([call["batched"] for call in calls], [True, False])
         self.assertEqual({record["parse_status"] for record in records}, {"ok"})
@@ -2817,11 +3332,17 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_completion, batch_size=2
+            )
+        )
 
         self.assertEqual([call["batched"] for call in calls], [True, False, False])
         self.assertEqual({record["parse_status"] for record in records}, {"ok"})
-        self.assertEqual([record["parsed_json"]["confidence"] for record in records], [0.77, 0.77])
+        self.assertEqual(
+            [record["parsed_json"]["confidence"] for record in records], [0.77, 0.77]
+        )
 
     def test_instructor_batch_duplicate_request_index_falls_back_unbatched(self):
         jobs = self._instructor_task1_jobs(seed_count=2)
@@ -2864,14 +3385,28 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_completion, batch_size=2
+            )
+        )
 
         parsed_results, parse_status = eu.parse_batch_completion_results(
             json.dumps(
                 {
                     "results": [
-                        {"request_index": 1, "decision": "yes", "confidence": 0.8, "brief_reason": "a"},
-                        {"request_index": 1, "decision": "yes", "confidence": 0.9, "brief_reason": "b"},
+                        {
+                            "request_index": 1,
+                            "decision": "yes",
+                            "confidence": 0.8,
+                            "brief_reason": "a",
+                        },
+                        {
+                            "request_index": 1,
+                            "decision": "yes",
+                            "confidence": 0.9,
+                            "brief_reason": "b",
+                        },
                     ]
                 }
             )
@@ -2880,7 +3415,9 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(set(parsed_results), {1})
         self.assertEqual([call["batched"] for call in calls], [True, False, False])
         self.assertEqual({record["parse_status"] for record in records}, {"ok"})
-        self.assertEqual([record["parsed_json"]["confidence"] for record in records], [0.76, 0.76])
+        self.assertEqual(
+            [record["parsed_json"]["confidence"] for record in records], [0.76, 0.76]
+        )
 
     def test_instructor_malformed_batch_and_failed_fallback_remain_pending(self):
         jobs = self._instructor_task1_jobs(seed_count=2)
@@ -2904,14 +3441,25 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_completion, batch_size=2
+            )
+        )
 
         self.assertEqual([call["batched"] for call in calls], [True, False, False])
-        self.assertEqual({record["parse_status"] for record in records}, {"instructor_validation_error"})
-        self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs))
+        self.assertEqual(
+            {record["parse_status"] for record in records},
+            {"instructor_validation_error"},
+        )
+        self.assertEqual(
+            len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs)
+        )
 
     def test_instructor_failed_fallback_stays_pending(self):
-        jobs = self._instructor_task1_jobs(seed_count=1, extra_body=None, validation_retries=2)
+        jobs = self._instructor_task1_jobs(
+            seed_count=1, extra_body=None, validation_retries=2
+        )
 
         def fake_completion(**kwargs):
             return {
@@ -2922,14 +3470,20 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=1))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_completion, batch_size=1
+            )
+        )
 
         self.assertEqual(records[0]["parse_status"], "instructor_validation_error")
         self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), 1)
 
     def test_zai_example_uses_coding_plan_endpoint(self):
         config = eu.load_run_config("run_configs/full_matrix.example.json")
-        zai_profile = next(profile for profile in config["profiles"] if profile["profile_id"] == "zai")
+        zai_profile = next(
+            profile for profile in config["profiles"] if profile["profile_id"] == "zai"
+        )
 
         self.assertEqual(zai_profile["base_url"], "https://api.z.ai/api/coding/paas/v4")
         self.assertIn("Coding Plan", zai_profile["notes"])
@@ -2990,7 +3544,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_batch_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_batch_completion, batch_size=2
+            )
+        )
 
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["max_tokens"], 128)
@@ -3055,12 +3613,21 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_ignored_batch_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs,
+                max_workers=1,
+                completion_fn=fake_ignored_batch_completion,
+                batch_size=2,
+            )
+        )
 
         # One batch call plus one single-item call per item of that batch.
         self.assertEqual(len(prompts), 1 + len(jobs))
         self.assertEqual({row["parse_status"] for row in records}, {"ok"})
-        self.assertEqual({row["parsed_json"]["brief_reason"] for row in records}, {"single"})
+        self.assertEqual(
+            {row["parsed_json"]["brief_reason"] for row in records}, {"single"}
+        )
         # The rows were really sent alone: batch_size 1 and no batch_id.
         self.assertEqual({row["batch_size"] for row in records}, {1})
         self.assertTrue(all("batch_id" not in row for row in records))
@@ -3086,14 +3653,22 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_broken_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_broken_completion, batch_size=2
+            )
+        )
 
         self.assertEqual({row["parse_status"] for row in records}, {"invalid_json"})
         self.assertTrue(all(row["parsed_json"] is None for row in records))
         # The fallback's own status stands, but the batch-level cause is kept.
-        self.assertTrue(all(row["error"].startswith("batch_fallback:") for row in records))
+        self.assertTrue(
+            all(row["error"].startswith("batch_fallback:") for row in records)
+        )
         self.assertTrue(all("missing request_index" in row["error"] for row in records))
-        self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs))
+        self.assertEqual(
+            len(eu.pending_completion_jobs(jobs, records, "full-1")), len(jobs)
+        )
 
     def test_batched_completion_falls_back_when_the_batch_request_errors(self):
         jobs = self._task1_two_seed_jobs()
@@ -3115,13 +3690,22 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_failing_batch_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs,
+                max_workers=1,
+                completion_fn=fake_failing_batch_completion,
+                batch_size=2,
+            )
+        )
 
         self.assertEqual({row["parse_status"] for row in records}, {"ok"})
         self.assertEqual({row["batch_size"] for row in records}, {1})
         self.assertEqual(eu.pending_completion_jobs(jobs, records, "full-1"), [])
 
-    def test_batched_completion_count_matches_but_no_index_overlap_is_not_positional(self):
+    def test_batched_completion_count_matches_but_no_index_overlap_is_not_positional(
+        self,
+    ):
         jobs = self._task1_two_seed_jobs()
 
         def fake_no_index_batch_completion(**kwargs):
@@ -3141,7 +3725,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "raw_text": json.dumps(
                     {
                         "results": [
-                            {"decision": "yes", "confidence": 0.8, "brief_reason": "batched"}
+                            {
+                                "decision": "yes",
+                                "confidence": 0.8,
+                                "brief_reason": "batched",
+                            }
                             for _ in items
                         ]
                     }
@@ -3151,13 +3739,22 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_no_index_batch_completion, batch_size=2))
+        records = list(
+            eu.run_completion_jobs(
+                jobs,
+                max_workers=1,
+                completion_fn=fake_no_index_batch_completion,
+                batch_size=2,
+            )
+        )
 
         self.assertEqual(len(records), 2)
         # Index-less batch results are never matched positionally: every row is
         # the single-item fallback answer, not the batch's first result.
         self.assertEqual({row["parse_status"] for row in records}, {"ok"})
-        self.assertEqual({row["parsed_json"]["brief_reason"] for row in records}, {"fallback"})
+        self.assertEqual(
+            {row["parsed_json"]["brief_reason"] for row in records}, {"fallback"}
+        )
         self.assertEqual({row["parsed_json"]["decision"] for row in records}, {"no"})
         self.assertEqual({row["batch_size"] for row in records}, {1})
 
@@ -3175,7 +3772,9 @@ class EvalUtilsTest(unittest.TestCase):
         mismatching = [{**job, "parse_status": "ok", "job_config_sha": "sha-old"}]
 
         self.assertEqual(eu.pending_completion_jobs([job], matching, "full-1"), [])
-        self.assertEqual(len(eu.pending_completion_jobs([job], mismatching, "full-1")), 1)
+        self.assertEqual(
+            len(eu.pending_completion_jobs([job], mismatching, "full-1")), 1
+        )
 
     def test_resume_reuses_legacy_row_without_config_sha_with_warning(self):
         job = {
@@ -3221,9 +3820,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(len(eu.pending_completion_jobs([job], failed, "full-1")), 1)
 
     def test_run_registry_summary_and_upsert(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )[:1]
+        benchmark = eu.build_benchmark_items(export_report_seeds())[:1]
         raw_rows = []
         for task in ["task1", "task2"]:
             item = benchmark[0]
@@ -3238,7 +3835,13 @@ class EvalUtilsTest(unittest.TestCase):
                     "sample_kind": "deterministic",
                     "sample_index": 0,
                     "parse_status": "ok",
-                    "parsed_json": {"decision": "yes", "confidence": 90} if task == "task1" else {"requirement": "The system MUST export reports.", "modality": "mandatory", "confidence": 90},
+                    "parsed_json": {"decision": "yes", "confidence": 90}
+                    if task == "task1"
+                    else {
+                        "requirement": "The system MUST export reports.",
+                        "modality": "mandatory",
+                        "confidence": 90,
+                    },
                     "prompt": item["source_statement"],
                     "prompt_version": "v1",
                     "temperature": 0.0,
@@ -3295,12 +3898,20 @@ class EvalUtilsTest(unittest.TestCase):
         )
         early_warnings = eu.warning_events_for_counters(
             counters,
-            {"warn_after_records": 4, "warn_parse_failure_rate": 0.1, "warn_request_error_rate": 0.1},
+            {
+                "warn_after_records": 4,
+                "warn_parse_failure_rate": 0.1,
+                "warn_request_error_rate": 0.1,
+            },
             set(),
         )
         warnings = eu.warning_events_for_counters(
             counters,
-            {"warn_after_records": 3, "warn_parse_failure_rate": 0.1, "warn_request_error_rate": 0.1},
+            {
+                "warn_after_records": 3,
+                "warn_parse_failure_rate": 0.1,
+                "warn_request_error_rate": 0.1,
+            },
             set(),
         )
 
@@ -3309,22 +3920,25 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(counters["request_error_records"], 1)
         self.assertEqual(counters["records_per_s"], 1.0)
         self.assertEqual(early_warnings, [])
-        self.assertEqual({warning["warning_type"] for warning in warnings}, {"parse_failure_rate", "request_error_rate"})
+        self.assertEqual(
+            {warning["warning_type"] for warning in warnings},
+            {"parse_failure_rate", "request_error_rate"},
+        )
 
     def test_run_event_jsonl_shape(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "events.jsonl"
             eu.append_run_event(path, {"event_type": "start", "run_id": "r1"})
-            eu.append_run_event(path, {"event_type": "finish", "run_id": "r1", "observed_records": 1})
+            eu.append_run_event(
+                path, {"event_type": "finish", "run_id": "r1", "observed_records": 1}
+            )
 
             rows = eu.read_jsonl(path)
             self.assertEqual([row["event_type"] for row in rows], ["start", "finish"])
             self.assertTrue(all("created_at_utc" in row for row in rows))
 
     def test_run_group_ensemble_disagreement_across_run_ids(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         item = benchmark[0]
         raw_rows = [
             {
@@ -3339,7 +3953,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "sample_kind": "deterministic",
                 "sample_index": 0,
                 "parse_status": "ok",
-                "parsed_json": {"requirement": item["source_statement"], "modality": "mandatory", "confidence": 90},
+                "parsed_json": {
+                    "requirement": item["source_statement"],
+                    "modality": "mandatory",
+                    "confidence": 90,
+                },
                 "prompt": item["source_statement"],
             },
             {
@@ -3354,15 +3972,23 @@ class EvalUtilsTest(unittest.TestCase):
                 "sample_kind": "deterministic",
                 "sample_index": 0,
                 "parse_status": "ok",
-                "parsed_json": {"requirement": item["source_statement"], "modality": "recommended", "confidence": 90},
+                "parsed_json": {
+                    "requirement": item["source_statement"],
+                    "modality": "recommended",
+                    "confidence": 90,
+                },
                 "prompt": item["source_statement"],
             },
         ]
 
-        scores = eu.build_run_group_ensemble_disagreement_scores(benchmark, raw_rows, run_group_id="group1")
+        scores = eu.build_run_group_ensemble_disagreement_scores(
+            benchmark, raw_rows, run_group_id="group1"
+        )
 
         self.assertEqual(len(scores), 1)
-        self.assertEqual(scores[0]["uq_method"], "model_ensemble_disagreement_run_group")
+        self.assertEqual(
+            scores[0]["uq_method"], "model_ensemble_disagreement_run_group"
+        )
         self.assertEqual(scores[0]["valid_n"], 2)
 
     def test_run_matrix_completed_rows_filter_excludes_smoke_by_default(self):
@@ -3373,17 +3999,38 @@ class EvalUtilsTest(unittest.TestCase):
             {"run_group_id": "other", "run_id": "full-3", "status": "complete"},
         ]
 
-        selected = compare_matrix.completed_registry_rows(rows, "group1", include_smoke=False)
-        selected_with_smoke = compare_matrix.completed_registry_rows(rows, "group1", include_smoke=True)
+        selected = compare_matrix.completed_registry_rows(
+            rows, "group1", include_smoke=False
+        )
+        selected_with_smoke = compare_matrix.completed_registry_rows(
+            rows, "group1", include_smoke=True
+        )
 
         self.assertEqual([row["run_id"] for row in selected], ["full-1"])
-        self.assertEqual([row["run_id"] for row in selected_with_smoke], ["full-1", "smoke-1"])
+        self.assertEqual(
+            [row["run_id"] for row in selected_with_smoke], ["full-1", "smoke-1"]
+        )
 
     def test_run_matrix_completed_rows_can_exclude_model_prefixes(self):
         rows = [
-            {"run_group_id": "group1", "run_id": "full-1", "status": "complete", "model": "local.gemma4-31b-it"},
-            {"run_group_id": "group1", "run_id": "full-2", "status": "complete", "model": "azure.gpt-5.4"},
-            {"run_group_id": "group1", "run_id": "full-3", "status": "complete", "model": "glm-5"},
+            {
+                "run_group_id": "group1",
+                "run_id": "full-1",
+                "status": "complete",
+                "model": "local.gemma4-31b-it",
+            },
+            {
+                "run_group_id": "group1",
+                "run_id": "full-2",
+                "status": "complete",
+                "model": "azure.gpt-5.4",
+            },
+            {
+                "run_group_id": "group1",
+                "run_id": "full-3",
+                "status": "complete",
+                "model": "glm-5",
+            },
         ]
 
         selected = compare_matrix.completed_registry_rows(
@@ -3420,7 +4067,7 @@ class EvalUtilsTest(unittest.TestCase):
                         "source_dataset": "NICE",
                         "original_requirement": "The system shall print invoices.",
                         "capability_text_final": "print invoices",
-                    }
+                    },
                 ]
             )
             eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
@@ -3432,7 +4079,11 @@ class EvalUtilsTest(unittest.TestCase):
                         "datasets": ["nice"],
                         "benchmark_variants": ["must"],
                         "stochastic": {"temperature": 0.7, "top_p": 1.0, "samples": 1},
-                        "logging": {"progress_every_records": 2, "progress_every_seconds": 999, "warn_after_records": 2},
+                        "logging": {
+                            "progress_every_records": 2,
+                            "progress_every_seconds": 999,
+                            "warn_after_records": 2,
+                        },
                         "profiles": [
                             {
                                 "profile_id": "fake",
@@ -3472,7 +4123,9 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertFalse((root / "data/processed/model_outputs_raw.jsonl").exists())
             rows = eu.read_jsonl(root / "data/processed/smoke/model_outputs_raw.jsonl")
             registry = eu.read_csv_rows(root / "data/processed/smoke/run_registry.csv")
-            progress = eu.read_csv_rows(root / "data/processed/smoke/run_progress_live.csv")
+            progress = eu.read_csv_rows(
+                root / "data/processed/smoke/run_progress_live.csv"
+            )
             events = eu.read_jsonl(root / "data/processed/smoke/run_events.jsonl")
             self.assertEqual(len(rows), 8)
             self.assertEqual(len({row["batch_id"] for row in rows}), 4)
@@ -3482,8 +4135,12 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertEqual(registry[0]["expected_api_calls"], "4")
             self.assertEqual(registry[0]["observed_api_calls"], "4")
             self.assertEqual({row["task"] for row in progress}, {"task1", "task2"})
-            self.assertEqual({row["event_type"] for row in events}, {"start", "progress", "finish"})
-            finish_event = next(row for row in reversed(events) if row["event_type"] == "finish")
+            self.assertEqual(
+                {row["event_type"] for row in events}, {"start", "progress", "finish"}
+            )
+            finish_event = next(
+                row for row in reversed(events) if row["event_type"] == "finish"
+            )
             self.assertEqual(finish_event["pending_jobs"], 0)
             self.assertEqual(finish_event["pending_api_calls"], 0)
 
@@ -3604,17 +4261,34 @@ class EvalUtilsTest(unittest.TestCase):
                     root, "nice", "must", "full-source", "fake-model", "blind"
                 ).exists()
             )
-            task3_rows = eu.read_jsonl(root / "data/processed/smoke/model_outputs_raw_task3_verification.jsonl")
-            registry = eu.read_csv_rows(root / "data/processed/smoke/run_registry_task3_verification.csv")
-            progress = eu.read_csv_rows(root / "data/processed/smoke/run_progress_live_task3_verification.csv")
-            self.assertFalse((root / "data/processed/model_outputs_raw_task3_verification.jsonl").exists())
+            task3_rows = eu.read_jsonl(
+                root / "data/processed/smoke/model_outputs_raw_task3_verification.jsonl"
+            )
+            registry = eu.read_csv_rows(
+                root / "data/processed/smoke/run_registry_task3_verification.csv"
+            )
+            progress = eu.read_csv_rows(
+                root / "data/processed/smoke/run_progress_live_task3_verification.csv"
+            )
+            self.assertFalse(
+                (
+                    root / "data/processed/model_outputs_raw_task3_verification.jsonl"
+                ).exists()
+            )
             self.assertEqual(len(task3_items), len(benchmark))
             self.assertEqual(len(task3_rows), 2)
-            self.assertFalse((root / "data/processed/task3_verification_items.csv").exists())
+            self.assertFalse(
+                (root / "data/processed/task3_verification_items.csv").exists()
+            )
             self.assertEqual({row["task"] for row in task3_rows}, {"task3"})
             self.assertEqual({row["parse_status"] for row in task3_rows}, {"ok"})
             self.assertEqual({row["task3_audit_mode"] for row in task3_rows}, {"blind"})
-            self.assertTrue(all("Declared extracted modality" not in row["prompt"] for row in task3_rows))
+            self.assertTrue(
+                all(
+                    "Declared extracted modality" not in row["prompt"]
+                    for row in task3_rows
+                )
+            )
             self.assertEqual(registry[0]["status"], "complete")
             self.assertEqual(registry[0]["tasks"], "task3")
             self.assertIn("audit_mode=blind", registry[0]["notes"])
@@ -3636,15 +4310,16 @@ class EvalUtilsTest(unittest.TestCase):
                     Path(f"prompts/{prompt_name}").read_text(encoding="utf-8"),
                     encoding="utf-8",
                 )
-            review_rows = [{**row, "weaker_than_should": "yes"} for row in eu.weak_modality_construct_review_rows()]
+            review_rows = [
+                {**row, "weaker_than_should": "yes"}
+                for row in eu.weak_modality_construct_review_rows()
+            ]
             eu.write_csv_rows(
                 root / "docs/weak_modality_construct_review.csv",
                 review_rows,
                 fieldnames=eu.WEAK_MODALITY_CONSTRUCT_REVIEW_FIELDS,
             )
-            benchmark = eu.build_benchmark_items(
-                export_report_seeds()
-            )
+            benchmark = eu.build_benchmark_items(export_report_seeds())
             eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
             task1_template = eu.load_prompt(root / "prompts/mandatory_entailment.txt")
             task2_template = eu.load_prompt(root / "prompts/modality_extraction.txt")
@@ -3675,7 +4350,9 @@ class EvalUtilsTest(unittest.TestCase):
                         temperature=0.0,
                         top_p=1.0,
                         prompt_version="v2-conf01",
-                        prompt=eu.prompt_for_benchmark_task(task, item, task1_template, task2_template),
+                        prompt=eu.prompt_for_benchmark_task(
+                            task, item, task1_template, task2_template
+                        ),
                         completion={
                             "ok": True,
                             "raw_text": json.dumps(parsed),
@@ -3687,7 +4364,9 @@ class EvalUtilsTest(unittest.TestCase):
                         run_group_id="group1",
                     )
                     raw_rows.append(raw)
-                    eu.append_jsonl(root / "data/processed/model_outputs_raw.jsonl", raw)
+                    eu.append_jsonl(
+                        root / "data/processed/model_outputs_raw.jsonl", raw
+                    )
             registry_row = eu.run_registry_summary(
                 benchmark,
                 raw_rows,
@@ -3703,7 +4382,9 @@ class EvalUtilsTest(unittest.TestCase):
                 started_at_utc="2026-05-22T00:00:00Z",
                 finished_at_utc="2026-05-22T00:01:00Z",
             )
-            eu.upsert_run_registry_row(root / "data/processed/run_registry.csv", registry_row)
+            eu.upsert_run_registry_row(
+                root / "data/processed/run_registry.csv", registry_row
+            )
             eu.write_benchmark_manifest(
                 [
                     root / "data/processed/benchmark_items.csv",
@@ -3744,27 +4425,31 @@ class EvalUtilsTest(unittest.TestCase):
 
             self.assertTrue((output_dir / "metrics_summary.csv").exists())
             self.assertTrue((output_dir / "paper_results_table.md").exists())
-            self.assertTrue((output_dir / "acse_semantic_normalized_scores.csv").exists())
+            self.assertTrue(
+                (output_dir / "acse_semantic_normalized_scores.csv").exists()
+            )
             self.assertTrue((output_dir / "acse_semantic_calibration.csv").exists())
             self.assertTrue((output_dir / "acse_semantic_calibration.md").exists())
             self.assertTrue((output_dir / "task1_p_yes_by_modality.svg").exists())
             self.assertTrue((output_dir / "provenance_manifest.json").exists())
-            provenance = json.loads((output_dir / "provenance_manifest.json").read_text(encoding="utf-8"))
+            provenance = json.loads(
+                (output_dir / "provenance_manifest.json").read_text(encoding="utf-8")
+            )
             self.assertEqual(provenance["run_id"], "full-analysis")
             self.assertEqual(provenance["stale_item_count"], 0)
             self.assertEqual(provenance["acse_normalized_rows"], 0)
 
     def test_analysis_rejects_legacy_task3_as_official_blind(self):
         with self.assertRaisesRegex(ValueError, "legacy"):
-            analysis_cli.require_task3_audit_mode([{"task": "task3", "item_id": "legacy-item"}], "blind")
+            analysis_cli.require_task3_audit_mode(
+                [{"task": "task3", "item_id": "legacy-item"}], "blind"
+            )
 
     def test_show_run_progress_reads_outputs_without_mutation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             _scaffold_project_root(root, with_prompts=False)
-            benchmark = eu.build_benchmark_items(
-                export_report_seeds()
-            )[:1]
+            benchmark = eu.build_benchmark_items(export_report_seeds())[:1]
             eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
             raw_rows = [
                 {
@@ -3797,13 +4482,19 @@ class EvalUtilsTest(unittest.TestCase):
                 expected_stochastic_samples=0,
                 started_at_utc="2026-05-21T00:00:00Z",
             )
-            eu.upsert_run_registry_row(root / "data/processed/run_registry.csv", registry_row)
+            eu.upsert_run_registry_row(
+                root / "data/processed/run_registry.csv", registry_row
+            )
 
-            before = sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file())
+            before = sorted(
+                path.relative_to(root) for path in root.rglob("*") if path.is_file()
+            )
             output = io.StringIO()
             with redirect_stdout(output):
                 show_run_progress.print_progress(root, "nice", "must", "full-1")
-            after = sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file())
+            after = sorted(
+                path.relative_to(root) for path in root.rglob("*") if path.is_file()
+            )
 
             self.assertEqual(before, after)
             self.assertIn("full-1: records 1/1", output.getvalue())
@@ -3813,9 +4504,7 @@ class EvalUtilsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             _scaffold_project_root(root, with_prompts=False)
-            benchmark = eu.build_benchmark_items(
-                export_report_seeds()
-            )[:1]
+            benchmark = eu.build_benchmark_items(export_report_seeds())[:1]
             eu.write_csv_rows(root / "data/processed/benchmark_items.csv", benchmark)
             raw_rows = [
                 {
@@ -3864,14 +4553,18 @@ class EvalUtilsTest(unittest.TestCase):
                     expected_stochastic_samples=0,
                     started_at_utc="2026-05-21T00:00:00Z",
                 )
-                eu.upsert_run_registry_row(root / "data/processed/run_registry.csv", registry_row)
+                eu.upsert_run_registry_row(
+                    root / "data/processed/run_registry.csv", registry_row
+                )
 
             with self.assertRaisesRegex(ValueError, "matches multiple registry rows"):
                 show_run_progress.print_progress(root, "nice", "must", "full-1")
 
             output = io.StringIO()
             with redirect_stdout(output):
-                show_run_progress.print_progress(root, "nice", "must", "full-1", model="m2")
+                show_run_progress.print_progress(
+                    root, "nice", "must", "full-1", model="m2"
+                )
 
             text = output.getvalue()
             self.assertIn("full-1: records 1/1", text)
@@ -3913,7 +4606,9 @@ class EvalUtilsTest(unittest.TestCase):
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=2, completion_fn=fake_completion))
+        records = list(
+            eu.run_completion_jobs(jobs, max_workers=2, completion_fn=fake_completion)
+        )
 
         self.assertEqual(len(records), 4)
         self.assertEqual({row["request_index"] for row in records}, {0, 1, 2, 3})
@@ -3931,8 +4626,12 @@ class EvalUtilsTest(unittest.TestCase):
         selected_run_id, rows = eu.select_run_rows(raw_rows, prefix="full")
         self.assertEqual(selected_run_id, "full-20260518-120000-cccc")
         self.assertEqual([row["value"] for row in rows], [3, 4])
-        self.assertFalse(eu.run_id_matches_prefix("full-shall-20260518-130000-dddd", "full"))
-        self.assertTrue(eu.run_id_matches_prefix("full-shall-20260518-130000-dddd", "full-shall"))
+        self.assertFalse(
+            eu.run_id_matches_prefix("full-shall-20260518-130000-dddd", "full")
+        )
+        self.assertTrue(
+            eu.run_id_matches_prefix("full-shall-20260518-130000-dddd", "full-shall")
+        )
 
     def test_select_run_rows_honors_explicit_run_id(self):
         raw_rows = [
@@ -3940,11 +4639,15 @@ class EvalUtilsTest(unittest.TestCase):
             {"run_id": "full-20260518-120000-cccc", "value": 2},
             {"run_id": "full-shall-20260518-130000-dddd", "value": 3},
         ]
-        selected_run_id, rows = eu.select_run_rows(raw_rows, run_id="full-20260518-100000-aaaa", prefix="full")
+        selected_run_id, rows = eu.select_run_rows(
+            raw_rows, run_id="full-20260518-100000-aaaa", prefix="full"
+        )
         self.assertEqual(selected_run_id, "full-20260518-100000-aaaa")
         self.assertEqual([row["value"] for row in rows], [1])
 
-        selected_run_id, rows = eu.select_run_rows(raw_rows, run_id="full-shall-20260518-130000-dddd", prefix="full")
+        selected_run_id, rows = eu.select_run_rows(
+            raw_rows, run_id="full-shall-20260518-130000-dddd", prefix="full"
+        )
         self.assertEqual(selected_run_id, "full-shall-20260518-130000-dddd")
         self.assertEqual(rows, [])
 
@@ -3957,9 +4660,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(eu.calibration_probabilities(rows, "task2"), [0.9, 0.8])
 
     def test_run_progress_summary_for_partial_outputs(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         item = benchmark[0]
         raw_rows = [
             {
@@ -3969,7 +4670,11 @@ class EvalUtilsTest(unittest.TestCase):
                 "item_id": item["item_id"],
                 "sample_kind": "deterministic",
                 "parse_status": "ok",
-                "parsed_json": {"decision": "yes", "confidence": 90.0, "brief_reason": ""},
+                "parsed_json": {
+                    "decision": "yes",
+                    "confidence": 90.0,
+                    "brief_reason": "",
+                },
             },
             {
                 "run_id": "r1",
@@ -3982,7 +4687,9 @@ class EvalUtilsTest(unittest.TestCase):
             },
         ]
 
-        progress = eu.run_progress_summary(benchmark, raw_rows, expected_stochastic_samples=5)
+        progress = eu.run_progress_summary(
+            benchmark, raw_rows, expected_stochastic_samples=5
+        )
 
         self.assertEqual(len(progress), 1)
         self.assertEqual(progress[0]["observed_records"], 2)
@@ -4014,9 +4721,7 @@ class EvalUtilsTest(unittest.TestCase):
         )
 
     def test_run_progress_summary_ignores_rows_for_removed_benchmark_items(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         raw_rows = [
             {
                 "run_id": "r1",
@@ -4025,18 +4730,22 @@ class EvalUtilsTest(unittest.TestCase):
                 "item_id": "removed_item",
                 "sample_kind": "deterministic",
                 "parse_status": "ok",
-                "parsed_json": {"decision": "yes", "confidence": 90.0, "brief_reason": ""},
+                "parsed_json": {
+                    "decision": "yes",
+                    "confidence": 90.0,
+                    "brief_reason": "",
+                },
             }
         ]
 
-        progress = eu.run_progress_summary(benchmark, raw_rows, expected_stochastic_samples=5)
+        progress = eu.run_progress_summary(
+            benchmark, raw_rows, expected_stochastic_samples=5
+        )
 
         self.assertEqual(progress, [])
 
     def test_write_preliminary_result_snapshot(self):
-        benchmark = eu.build_benchmark_items(
-            export_report_seeds()
-        )
+        benchmark = eu.build_benchmark_items(export_report_seeds())
         item = benchmark[0]
         raw_rows = [
             raw_record(
@@ -4058,7 +4767,10 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertEqual(snapshot["progress_rows"], 1)
             for path in snapshot["paths"].values():
                 self.assertTrue(path.exists())
-            self.assertIn("Preliminary Results", snapshot["paths"]["table"].read_text(encoding="utf-8"))
+            self.assertIn(
+                "Preliminary Results",
+                snapshot["paths"]["table"].read_text(encoding="utf-8"),
+            )
 
     def test_matplotlib_figure_export(self):
         rows = [
@@ -4088,8 +4800,12 @@ class EvalUtilsTest(unittest.TestCase):
 
             self.assertTrue(paths["markdown"].exists())
             self.assertTrue(paths["csv"].exists())
-            self.assertIn("predictive_entropy", paths["markdown"].read_text(encoding="utf-8"))
-            self.assertIn(eu.ACSE_PROXY_METHOD, paths["markdown"].read_text(encoding="utf-8"))
+            self.assertIn(
+                "predictive_entropy", paths["markdown"].read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                eu.ACSE_PROXY_METHOD, paths["markdown"].read_text(encoding="utf-8")
+            )
 
 
 class ResponseProvenanceAndRetryTest(unittest.TestCase):
@@ -4126,7 +4842,11 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                 "model": "served-m1",
                 "system_fingerprint": "fp_123",
                 "choices": [{"finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 7,
+                    "total_tokens": 18,
+                },
             }
         )
 
@@ -4154,7 +4874,11 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                     "model": "served-m1",
                     "system_fingerprint": "fp_9",
                     "choices": [{"finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 30, "completion_tokens": 12, "total_tokens": 42},
+                    "usage": {
+                        "prompt_tokens": 30,
+                        "completion_tokens": 12,
+                        "total_tokens": 42,
+                    },
                 },
                 "latency_s": 0.01,
                 "error": "",
@@ -4198,13 +4922,21 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                 "response_json": {
                     "model": "served-m1",
                     "choices": [{"finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 100, "completion_tokens": 80, "total_tokens": 180},
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 80,
+                        "total_tokens": 180,
+                    },
                 },
                 "latency_s": 0.02,
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=4))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_completion, batch_size=4
+            )
+        )
 
         self.assertGreater(len(records), 1)
         for record in records:
@@ -4221,7 +4953,10 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
             return {
                 "ok": True,
                 "raw_text": '{"requirement": "The system must expo',
-                "response_json": {"choices": [{"finish_reason": "length"}], "model": "m1"},
+                "response_json": {
+                    "choices": [{"finish_reason": "length"}],
+                    "model": "m1",
+                },
                 "latency_s": 0.01,
                 "error": "",
             }
@@ -4238,12 +4973,20 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
             return {
                 "ok": True,
                 "raw_text": '{"requirement": "The system must export reports.", "modality": "mandatory", "confidence": 0.9}',
-                "response_json": {"choices": [{"finish_reason": "length"}], "model": "m1"},
+                "response_json": {
+                    "choices": [{"finish_reason": "length"}],
+                    "model": "m1",
+                },
                 "latency_s": 0.01,
                 "error": "",
             }
 
-        self.assertEqual(eu.run_completion_job(jobs[0], completion_fn=fake_completion)["parse_status"], "ok")
+        self.assertEqual(
+            eu.run_completion_job(jobs[0], completion_fn=fake_completion)[
+                "parse_status"
+            ],
+            "ok",
+        )
 
     def test_request_error_is_not_relabelled_as_truncated(self):
         jobs = self._plan()
@@ -4257,7 +5000,12 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                 "error": "boom",
             }
 
-        self.assertEqual(eu.run_completion_job(jobs[0], completion_fn=fake_completion)["parse_status"], "request_error")
+        self.assertEqual(
+            eu.run_completion_job(jobs[0], completion_fn=fake_completion)[
+                "parse_status"
+            ],
+            "request_error",
+        )
 
     # --- item 3: seed -----------------------------------------------------
 
@@ -4306,10 +5054,14 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
 
             def create(self, **kwargs):
                 captured.update(kwargs)
-                return FakeResponse(dump={"model": "m1", "choices": [{"finish_reason": "stop"}]})
+                return FakeResponse(
+                    dump={"model": "m1", "choices": [{"finish_reason": "stop"}]}
+                )
 
         with mock.patch.object(eu, "OpenAI", FakeClient):
-            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, seed=1234)
+            result = eu.chat_completion(
+                "http://x/v1", "m1", "prompt", 0.0, 1.0, seed=1234
+            )
 
         self.assertEqual(captured["seed"], 1234)
         self.assertEqual(captured["messages"], [{"role": "user", "content": "prompt"}])
@@ -4318,7 +5070,9 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
 
         captured.clear()
         with mock.patch.object(eu, "OpenAI", FakeClient):
-            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, seed=None)
+            result = eu.chat_completion(
+                "http://x/v1", "m1", "prompt", 0.0, 1.0, seed=None
+            )
 
         self.assertNotIn("seed", captured)
         self.assertIsNone(result["request_seed"])
@@ -4329,7 +5083,13 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
 
         def fake_completion(**kwargs):
             captured.update(kwargs)
-            return {"ok": True, "raw_text": "{}", "response_json": {}, "latency_s": 0.0, "error": ""}
+            return {
+                "ok": True,
+                "raw_text": "{}",
+                "response_json": {},
+                "latency_s": 0.0,
+                "error": "",
+            }
 
         record = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
 
@@ -4355,12 +5115,16 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         }
         first = eu.request_payload_sha(payload)
 
-        self.assertEqual(first, eu.request_payload_sha(dict(reversed(list(payload.items())))))
+        self.assertEqual(
+            first, eu.request_payload_sha(dict(reversed(list(payload.items()))))
+        )
         # Transport-only kwargs do not move the fingerprint...
         self.assertEqual(first, eu.request_payload_sha({**payload, "logprobs": True}))
         # ...but any hashed request field does.
         self.assertNotEqual(first, eu.request_payload_sha({**payload, "seed": 1}))
-        self.assertNotEqual(first, eu.request_payload_sha({**payload, "max_tokens": 65}))
+        self.assertNotEqual(
+            first, eu.request_payload_sha({**payload, "max_tokens": 65})
+        )
 
     def test_chat_completion_reports_request_payload_sha(self):
         class FakeClient:
@@ -4371,7 +5135,9 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                 return FakeResponse()
 
         with mock.patch.object(eu, "OpenAI", FakeClient):
-            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_tokens=64, seed=5)
+            result = eu.chat_completion(
+                "http://x/v1", "m1", "prompt", 0.0, 1.0, max_tokens=64, seed=5
+            )
 
         self.assertEqual(
             result["request_payload_sha"],
@@ -4391,7 +5157,13 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         jobs = self._plan()
 
         def fake_completion(**kwargs):
-            return {"ok": True, "raw_text": "{}", "response_json": {}, "latency_s": 0.0, "error": ""}
+            return {
+                "ok": True,
+                "raw_text": "{}",
+                "response_json": {},
+                "latency_s": 0.0,
+                "error": "",
+            }
 
         record = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
         again = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
@@ -4411,10 +5183,22 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         }
         baseline = eu.compute_job_config_sha(**base)
 
-        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, extra_body={"thinking": {"type": "disabled"}}))
-        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, response_format={"type": "json_object"}))
-        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, instructor_mode="tools"))
-        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, validation_retries=5))
+        self.assertNotEqual(
+            baseline,
+            eu.compute_job_config_sha(
+                **base, extra_body={"thinking": {"type": "disabled"}}
+            ),
+        )
+        self.assertNotEqual(
+            baseline,
+            eu.compute_job_config_sha(**base, response_format={"type": "json_object"}),
+        )
+        self.assertNotEqual(
+            baseline, eu.compute_job_config_sha(**base, instructor_mode="tools")
+        )
+        self.assertNotEqual(
+            baseline, eu.compute_job_config_sha(**base, validation_retries=5)
+        )
         self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, seed=1))
         self.assertEqual(baseline, eu.compute_job_config_sha(**base))
 
@@ -4432,25 +5216,43 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         batched = eu.compute_job_config_sha(**base, task="task2", batch_size=16)
 
         self.assertNotEqual(baseline, batched)
-        self.assertNotEqual(batched, eu.compute_job_config_sha(**base, task="task2", batch_size=8))
+        self.assertNotEqual(
+            batched, eu.compute_job_config_sha(**base, task="task2", batch_size=8)
+        )
         self.assertNotEqual(
             batched,
-            eu.compute_job_config_sha(**base, task="task2", batch_size=16, batch_order="shuffled"),
+            eu.compute_job_config_sha(
+                **base, task="task2", batch_size=16, batch_order="shuffled"
+            ),
         )
-        self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, fallback_batch_size=4))
+        self.assertNotEqual(
+            baseline, eu.compute_job_config_sha(**base, fallback_batch_size=4)
+        )
         # Different tasks render different batch wrappers.
-        self.assertNotEqual(batched, eu.compute_job_config_sha(**base, task="task1", batch_size=16))
+        self.assertNotEqual(
+            batched, eu.compute_job_config_sha(**base, task="task1", batch_size=16)
+        )
 
         # The wrapper text is hashed for batched plans ...
-        with mock.patch.object(eu, "batch_prompt_wrapper_sha", return_value="EDITED-WRAPPER"):
-            self.assertNotEqual(batched, eu.compute_job_config_sha(**base, task="task2", batch_size=16))
+        with mock.patch.object(
+            eu, "batch_prompt_wrapper_sha", return_value="EDITED-WRAPPER"
+        ):
+            self.assertNotEqual(
+                batched, eu.compute_job_config_sha(**base, task="task2", batch_size=16)
+            )
             # ... and never for single-item plans, whatever the wrapper says.
-            self.assertEqual(baseline, eu.compute_job_config_sha(**base, task="task2", batch_size=1))
+            self.assertEqual(
+                baseline, eu.compute_job_config_sha(**base, task="task2", batch_size=1)
+            )
             self.assertEqual(baseline, eu.compute_job_config_sha(**base, task="task1"))
 
     def test_batch_prompt_wrapper_sha_digests_the_rendered_wrapper(self):
         probe_jobs = [
-            {"task": "task2", "request_index": index, "item": dict(eu.BATCH_WRAPPER_PROBE_ITEM)}
+            {
+                "task": "task2",
+                "request_index": index,
+                "item": dict(eu.BATCH_WRAPPER_PROBE_ITEM),
+            }
             for index in range(2)
         ]
 
@@ -4458,8 +5260,12 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
             eu.batch_prompt_wrapper_sha("task2"),
             eu.sha256_text(eu.batch_prompt_for_completion_jobs(probe_jobs)),
         )
-        self.assertNotEqual(eu.batch_prompt_wrapper_sha("task1"), eu.batch_prompt_wrapper_sha("task2"))
-        self.assertNotEqual(eu.batch_prompt_wrapper_sha("task2"), eu.batch_prompt_wrapper_sha("task3"))
+        self.assertNotEqual(
+            eu.batch_prompt_wrapper_sha("task1"), eu.batch_prompt_wrapper_sha("task2")
+        )
+        self.assertNotEqual(
+            eu.batch_prompt_wrapper_sha("task2"), eu.batch_prompt_wrapper_sha("task3")
+        )
 
     def test_planned_jobs_record_the_batch_size(self):
         unbatched = self._plan()
@@ -4468,7 +5274,9 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         self.assertEqual({job["batch_size"] for job in unbatched}, {1})
         self.assertEqual({job["batch_size"] for job in batched}, {16})
         # The planned batch size is part of the resume fingerprint.
-        self.assertNotEqual(batched[0]["job_config_sha"], unbatched[0]["job_config_sha"])
+        self.assertNotEqual(
+            batched[0]["job_config_sha"], unbatched[0]["job_config_sha"]
+        )
 
     def test_planned_task3_jobs_record_the_batch_size(self):
         items = [
@@ -4534,8 +5342,13 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         )
         FakeClient, calls = self._fake_client_raising([rate_limited])
 
-        with mock.patch.object(eu, "OpenAI", FakeClient), mock.patch.object(eu.time, "sleep") as sleeper:
-            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3)
+        with (
+            mock.patch.object(eu, "OpenAI", FakeClient),
+            mock.patch.object(eu.time, "sleep") as sleeper,
+        ):
+            result = eu.chat_completion(
+                "http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3
+            )
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["retry_count"], 1)
@@ -4554,8 +5367,13 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         )
         FakeClient, calls = self._fake_client_raising([server_error] * 10)
 
-        with mock.patch.object(eu, "OpenAI", FakeClient), mock.patch.object(eu.time, "sleep"):
-            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3)
+        with (
+            mock.patch.object(eu, "OpenAI", FakeClient),
+            mock.patch.object(eu.time, "sleep"),
+        ):
+            result = eu.chat_completion(
+                "http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3
+            )
 
         self.assertFalse(result["ok"])
         self.assertEqual(calls["count"], 3)
@@ -4573,8 +5391,13 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         )
         FakeClient, calls = self._fake_client_raising([budget_error] * 5)
 
-        with mock.patch.object(eu, "OpenAI", FakeClient), mock.patch.object(eu.time, "sleep") as sleeper:
-            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3)
+        with (
+            mock.patch.object(eu, "OpenAI", FakeClient),
+            mock.patch.object(eu.time, "sleep") as sleeper,
+        ):
+            result = eu.chat_completion(
+                "http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3
+            )
 
         self.assertFalse(result["ok"])
         self.assertEqual(calls["count"], 1)
@@ -4590,7 +5413,9 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         for status in (408, 429, 500, 502, 503):
             self.assertTrue(eu.is_transient_provider_error(StatusError(status)), status)
         for status in (400, 401, 403, 404, 422):
-            self.assertFalse(eu.is_transient_provider_error(StatusError(status)), status)
+            self.assertFalse(
+                eu.is_transient_provider_error(StatusError(status)), status
+            )
         self.assertTrue(eu.is_transient_provider_error(TimeoutError()))
         self.assertFalse(eu.is_transient_provider_error(ValueError("nope")))
 
@@ -4607,7 +5432,12 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                 "retry_count": 2,
             }
 
-        self.assertEqual(eu.run_completion_job(jobs[0], completion_fn=fake_completion)["retry_count"], 2)
+        self.assertEqual(
+            eu.run_completion_job(jobs[0], completion_fn=fake_completion)[
+                "retry_count"
+            ],
+            2,
+        )
 
     # --- item 6: batch composition ----------------------------------------
 
@@ -4642,13 +5472,26 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         second = eu.completion_job_batches(jobs, batch_size=4)
 
         indices = [[int(job["request_index"]) for job in batch] for batch in first]
-        self.assertEqual(indices, [[int(job["request_index"]) for job in batch] for batch in second])
-        self.assertNotEqual(indices, [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]])
-        self.assertEqual(sorted(index for batch in indices for index in batch), list(range(16)))
-        self.assertTrue(any(len({job["item"]["seed_id"] for job in batch}) > 1 for batch in first))
+        self.assertEqual(
+            indices, [[int(job["request_index"]) for job in batch] for batch in second]
+        )
+        self.assertNotEqual(
+            indices, [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]]
+        )
+        self.assertEqual(
+            sorted(index for batch in indices for index in batch), list(range(16))
+        )
+        self.assertTrue(
+            any(len({job["item"]["seed_id"] for job in batch}) > 1 for batch in first)
+        )
 
-        other_seed = eu.completion_job_batches(jobs, batch_size=4, batch_order="shuffled", seed=1)
-        self.assertNotEqual(indices, [[int(job["request_index"]) for job in batch] for batch in other_seed])
+        other_seed = eu.completion_job_batches(
+            jobs, batch_size=4, batch_order="shuffled", seed=1
+        )
+        self.assertNotEqual(
+            indices,
+            [[int(job["request_index"]) for job in batch] for batch in other_seed],
+        )
 
     def test_batch_composition_fields_are_recorded(self):
         jobs = self._multi_seed_jobs(batch_order="shuffled")
@@ -4670,12 +5513,19 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                         ]
                     }
                 ),
-                "response_json": {"model": "m1", "choices": [{"finish_reason": "stop"}]},
+                "response_json": {
+                    "model": "m1",
+                    "choices": [{"finish_reason": "stop"}],
+                },
                 "latency_s": 0.0,
                 "error": "",
             }
 
-        records = list(eu.run_completion_jobs(jobs, max_workers=1, completion_fn=fake_completion, batch_size=4))
+        records = list(
+            eu.run_completion_jobs(
+                jobs, max_workers=1, completion_fn=fake_completion, batch_size=4
+            )
+        )
 
         self.assertEqual({row["batch_order"] for row in records}, {"shuffled"})
         by_batch = {}
@@ -4685,14 +5535,23 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
             seed_ids = {tuple(row["batch_seed_ids"]) for row in batch_rows}
             self.assertEqual(len(seed_ids), 1)
             self.assertEqual(sorted(next(iter(seed_ids))), list(next(iter(seed_ids))))
-            self.assertEqual({row["batch_variant_mix"] for row in batch_rows}, {len({r["source_modality"] for r in batch_rows})})
+            self.assertEqual(
+                {row["batch_variant_mix"] for row in batch_rows},
+                {len({r["source_modality"] for r in batch_rows})},
+            )
         self.assertTrue(any(len(row["batch_seed_ids"]) > 1 for row in records))
 
     def test_single_job_records_carry_singleton_batch_composition(self):
         jobs = self._plan()
 
         def fake_completion(**kwargs):
-            return {"ok": True, "raw_text": "{}", "response_json": {}, "latency_s": 0.0, "error": ""}
+            return {
+                "ok": True,
+                "raw_text": "{}",
+                "response_json": {},
+                "latency_s": 0.0,
+                "error": "",
+            }
 
         record = eu.run_completion_job(jobs[0], completion_fn=fake_completion)
 
@@ -4756,13 +5615,19 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         )
 
         indices = [[int(job["request_index"]) for job in batch] for batch in first]
-        self.assertEqual(indices, [[int(job["request_index"]) for job in batch] for batch in second])
+        self.assertEqual(
+            indices, [[int(job["request_index"]) for job in batch] for batch in second]
+        )
 
         grouped = eu.completion_job_batches(jobs, 16, batch_order="grouped")
-        self.assertNotEqual(indices, [[int(job["request_index"]) for job in batch] for batch in grouped])
+        self.assertNotEqual(
+            indices, [[int(job["request_index"]) for job in batch] for batch in grouped]
+        )
         # The grouped default is exactly what the ablation breaks up: 16 jobs
         # from only 4 seeds, i.e. all four variants of each seed side by side.
-        self.assertEqual({len({job["item"]["seed_id"] for job in batch}) for batch in grouped}, {4})
+        self.assertEqual(
+            {len({job["item"]["seed_id"] for job in batch}) for batch in grouped}, {4}
+        )
 
     def test_shuffled_batching_falls_back_loudly_when_seeds_are_too_few(self):
         # 4 seeds x 4 variants into batches of 8: a seed collision is unavoidable.
@@ -4785,13 +5650,18 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         planned_batches = eu.completion_job_batches(jobs, 16)
         dropped = planned_batches[7]
         done_keys = {eu.completion_record_key(job) for job in dropped}
-        pending = [job for job in jobs if eu.completion_record_key(job) not in done_keys]
+        pending = [
+            job for job in jobs if eu.completion_record_key(job) not in done_keys
+        ]
 
         resumed = eu.completion_job_batches(pending, 16, planned_jobs=jobs)
 
         self.assertEqual(len(resumed), len(planned_batches) - 1)
         self.assertEqual(
-            [sorted(eu.completion_record_key(job) for job in batch) for batch in resumed],
+            [
+                sorted(eu.completion_record_key(job) for job in batch)
+                for batch in resumed
+            ],
             [
                 sorted(eu.completion_record_key(job) for job in batch)
                 for batch in planned_batches
@@ -4800,14 +5670,23 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         )
         # Re-batching the pending subset on its own would NOT reproduce them.
         self.assertNotEqual(
-            [sorted(eu.completion_record_key(job) for job in batch) for batch in resumed],
-            [sorted(eu.completion_record_key(job) for job in batch) for batch in eu.completion_job_batches(pending, 16)],
+            [
+                sorted(eu.completion_record_key(job) for job in batch)
+                for batch in resumed
+            ],
+            [
+                sorted(eu.completion_record_key(job) for job in batch)
+                for batch in eu.completion_job_batches(pending, 16)
+            ],
         )
 
     def test_resume_drops_partially_completed_batches_to_their_pending_items(self):
         jobs = self._multi_seed_jobs(batch_order="shuffled")
         planned_batches = eu.completion_job_batches(jobs, 4)
-        done = {int(planned_batches[0][0]["request_index"]), int(planned_batches[1][1]["request_index"])}
+        done = {
+            int(planned_batches[0][0]["request_index"]),
+            int(planned_batches[1][1]["request_index"]),
+        }
         pending = [job for job in jobs if int(job["request_index"]) not in done]
 
         resumed = eu.completion_job_batches(pending, 4, planned_jobs=jobs)
@@ -4843,7 +5722,10 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                         ]
                     }
                 ),
-                "response_json": {"model": "m1", "choices": [{"finish_reason": "stop"}]},
+                "response_json": {
+                    "model": "m1",
+                    "choices": [{"finish_reason": "stop"}],
+                },
                 "latency_s": 0.0,
                 "error": "",
             }
@@ -4860,7 +5742,9 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
 
         self.assertEqual(len(records), len(pending))
         self.assertEqual(sorted(batch_sizes), [4, 4, 4])
-        self.assertEqual(len(eu.completion_job_batches(pending, 4, planned_jobs=jobs)), 3)
+        self.assertEqual(
+            len(eu.completion_job_batches(pending, 4, planned_jobs=jobs)), 3
+        )
 
     # --- item 9: batched rows keep the driver's provenance ------------------
 
@@ -4884,7 +5768,10 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                         ]
                     }
                 ),
-                "response_json": {"model": "m1", "choices": [{"finish_reason": "stop"}]},
+                "response_json": {
+                    "model": "m1",
+                    "choices": [{"finish_reason": "stop"}],
+                },
                 "latency_s": 0.0,
                 "error": "",
                 "retry_count": 2,
@@ -4898,10 +5785,14 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         self.assertEqual({row["retry_count"] for row in records}, {2})
         self.assertEqual({row["request_seed"] for row in records}, {20260518})
         # The batch request's payload sha, not a per-item recomputation.
-        self.assertEqual({row["request_payload_sha"] for row in records}, {"SHA_FROM_DRIVER"})
+        self.assertEqual(
+            {row["request_payload_sha"] for row in records}, {"SHA_FROM_DRIVER"}
+        )
 
     def test_instructor_batched_records_carry_the_driver_provenance(self):
-        jobs = self._multi_seed_jobs(structured_output="instructor", prompt_version="v2-instructor-conf01")[:2]
+        jobs = self._multi_seed_jobs(
+            structured_output="instructor", prompt_version="v2-instructor-conf01"
+        )[:2]
 
         def fake_completion(**kwargs):
             items = json.loads(kwargs["prompt"].split("Items:\n", 1)[1])
@@ -4928,12 +5819,16 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
                 "request_payload_sha": "SHA_FROM_DRIVER",
             }
 
-        records = eu.run_instructor_completion_batch(jobs, completion_fn=fake_completion)
+        records = eu.run_instructor_completion_batch(
+            jobs, completion_fn=fake_completion
+        )
 
         self.assertEqual({row["parse_status"] for row in records}, {"ok"})
         self.assertEqual({row["retry_count"] for row in records}, {2})
         self.assertEqual({row["request_seed"] for row in records}, {20260518})
-        self.assertEqual({row["request_payload_sha"] for row in records}, {"SHA_FROM_DRIVER"})
+        self.assertEqual(
+            {row["request_payload_sha"] for row in records}, {"SHA_FROM_DRIVER"}
+        )
 
     # --- item 10: the SDK must not retry behind our back --------------------
 
@@ -4954,7 +5849,9 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         FakeClient, seen = self._recording_openai_class()
 
         with mock.patch.object(eu, "OpenAI", FakeClient):
-            result = eu.chat_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3)
+            result = eu.chat_completion(
+                "http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=3
+            )
 
         self.assertTrue(result["ok"])
         self.assertEqual(seen["max_retries"], 0)
@@ -4974,10 +5871,16 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
             mock.patch.object(eu, "OpenAI", FakeClient),
             mock.patch.dict(
                 sys.modules,
-                {"instructor": mock.Mock(from_openai=lambda *_args, **_kwargs: FakeInstructorClient())},
+                {
+                    "instructor": mock.Mock(
+                        from_openai=lambda *_args, **_kwargs: FakeInstructorClient()
+                    )
+                },
             ),
         ):
-            result = eu.instructor_completion("http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=0)
+            result = eu.instructor_completion(
+                "http://x/v1", "m1", "prompt", 0.0, 1.0, max_retries=0
+            )
 
         self.assertFalse(result["ok"])
         self.assertEqual(seen["max_retries"], 0)

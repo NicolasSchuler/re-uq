@@ -62,12 +62,20 @@ def annotate_text_drift_cis(
     """
     by_group: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for score in scores:
-        key = (str(score.get("model", "")), str(score.get("task", "")), str(score.get("uq_method", "")))
+        key = (
+            str(score.get("model", "")),
+            str(score.get("task", "")),
+            str(score.get("uq_method", "")),
+        )
         by_group.setdefault(key, []).append(score)
     for row in summary_rows:
         if str(row.get("task", "")) != "task2":
             continue
-        key = (str(row.get("model", "")), str(row.get("task", "")), str(row.get("uq_method", "")))
+        key = (
+            str(row.get("model", "")),
+            str(row.get("task", "")),
+            str(row.get("uq_method", "")),
+        )
         group = by_group.get(key, [])
         if not group:
             continue
@@ -128,7 +136,9 @@ def load_registry_and_raw_rows(
     return registry_rows, raw_rows
 
 
-def annotate_summary(row: dict[str, Any], registry_row: dict[str, Any]) -> dict[str, Any]:
+def annotate_summary(
+    row: dict[str, Any], registry_row: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "run_group_id": registry_row.get("run_group_id", ""),
         "run_id": registry_row.get("run_id", ""),
@@ -140,7 +150,9 @@ def annotate_summary(row: dict[str, Any], registry_row: dict[str, Any]) -> dict[
     }
 
 
-def write_matrix_outputs(rows: list[dict[str, Any]], status_rows: list[dict[str, Any]], output_prefix: Path) -> dict[str, Path]:
+def write_matrix_outputs(
+    rows: list[dict[str, Any]], status_rows: list[dict[str, Any]], output_prefix: Path
+) -> dict[str, Path]:
     csv_path = output_prefix.with_suffix(".csv")
     md_path = output_prefix.with_suffix(".md")
     status_path = output_prefix.with_name(f"{output_prefix.name}_registry_status.csv")
@@ -154,7 +166,9 @@ def write_matrix_outputs(rows: list[dict[str, Any]], status_rows: list[dict[str,
         for field in SUMMARY_FIELDS:
             if field not in frame.columns:
                 frame[field] = ""
-        lines.append(frame.loc[:, SUMMARY_FIELDS].to_markdown(index=False, floatfmt=".3f"))
+        lines.append(
+            frame.loc[:, SUMMARY_FIELDS].to_markdown(index=False, floatfmt=".3f")
+        )
     else:
         lines.append("_No completed runs found for this run group._")
     lines.extend(["", "## Registry Status", ""])
@@ -174,7 +188,9 @@ def write_matrix_outputs(rows: list[dict[str, Any]], status_rows: list[dict[str,
         for field in display_fields:
             if field not in status_frame.columns:
                 status_frame[field] = ""
-        lines.append(status_frame.loc[:, display_fields].to_markdown(index=False, floatfmt=".3f"))
+        lines.append(
+            status_frame.loc[:, display_fields].to_markdown(index=False, floatfmt=".3f")
+        )
     else:
         lines.append("_No registry rows found._")
     lines.append("")
@@ -183,7 +199,9 @@ def write_matrix_outputs(rows: list[dict[str, Any]], status_rows: list[dict[str,
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare completed provider/model runs in a run config group.")
+    parser = argparse.ArgumentParser(
+        description="Compare completed provider/model runs in a run config group."
+    )
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--dataset")
     parser.add_argument("--variant")
@@ -204,8 +222,16 @@ def main() -> None:
 
     root = eu.project_root()
     run_config = eu.load_run_config(args.config)
-    datasets = [eu.normalize_dataset_id(args.dataset)] if args.dataset else list(run_config["datasets"])
-    variants = [eu.normalize_benchmark_variant(args.variant)] if args.variant else list(run_config["benchmark_variants"])
+    datasets = (
+        [eu.normalize_dataset_id(args.dataset)]
+        if args.dataset
+        else list(run_config["datasets"])
+    )
+    variants = (
+        [eu.normalize_benchmark_variant(args.variant)]
+        if args.variant
+        else list(run_config["benchmark_variants"])
+    )
     run_group_id = run_config["run_group_id"]
 
     for dataset_id in datasets:
@@ -222,7 +248,9 @@ def main() -> None:
                 include_smoke=args.include_smoke,
                 exclude_model_prefixes=args.exclude_model_prefix,
             )
-            benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
+            benchmark_path = eu.artifact_path(
+                root / "data/processed/benchmark_items.csv", dataset_id, variant
+            )
             benchmark = eu.read_csv_rows(benchmark_path)
             summary_rows: list[dict[str, Any]] = []
             ensemble_raw_rows: list[dict[str, Any]] = []
@@ -240,10 +268,14 @@ def main() -> None:
                 raw_rows = raw_rows_by_run_model.get(
                     (str(run_id), str(registry_row.get("model", ""))), []
                 )
-                result_benchmark = eu.benchmark_rows_with_current_raw_outputs(benchmark, raw_rows)
+                result_benchmark = eu.benchmark_rows_with_current_raw_outputs(
+                    benchmark, raw_rows
+                )
                 scores = eu.build_uq_scores(result_benchmark, raw_rows)
                 run_summary = eu.metric_summary_by_model_task_method(scores)
-                annotate_text_drift_cis(run_summary, scores, bootstrap_samples=args.bootstrap_samples)
+                annotate_text_drift_cis(
+                    run_summary, scores, bootstrap_samples=args.bootstrap_samples
+                )
                 summary_rows.extend(
                     annotate_summary(row, registry_row) for row in run_summary
                 )
@@ -263,15 +295,25 @@ def main() -> None:
                     "dataset_id": dataset_id,
                     "benchmark_variant": variant,
                 }
-                ensemble_summary = eu.metric_summary_by_model_task_method(ensemble_scores)
-                annotate_text_drift_cis(ensemble_summary, ensemble_scores, bootstrap_samples=args.bootstrap_samples)
+                ensemble_summary = eu.metric_summary_by_model_task_method(
+                    ensemble_scores
+                )
+                annotate_text_drift_cis(
+                    ensemble_summary,
+                    ensemble_scores,
+                    bootstrap_samples=args.bootstrap_samples,
+                )
                 summary_rows.extend(
                     annotate_summary(row, registry_stub) for row in ensemble_summary
                 )
 
-            output_prefix = eu.artifact_path(root / "outputs/run_matrix_summary.csv", dataset_id, variant).with_suffix("")
+            output_prefix = eu.artifact_path(
+                root / "outputs/run_matrix_summary.csv", dataset_id, variant
+            ).with_suffix("")
             paths = write_matrix_outputs(summary_rows, registry_rows, output_prefix)
-            print(f"{dataset_id}/{variant}: wrote {paths['markdown']} and {paths['csv']}")
+            print(
+                f"{dataset_id}/{variant}: wrote {paths['markdown']} and {paths['csv']}"
+            )
 
 
 if __name__ == "__main__":

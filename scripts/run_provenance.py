@@ -33,7 +33,11 @@ def sha256_text(text: str) -> str:
 
 def resolved_config_path(root: str | Path, run_id: str) -> Path:
     """Sibling of `eval_utils.run_log_path` holding the resolved composition."""
-    return Path(root) / "data/processed/logs" / f"{eu.safe_identifier(run_id)}{RESOLVED_CONFIG_SUFFIX}"
+    return (
+        Path(root)
+        / "data/processed/logs"
+        / f"{eu.safe_identifier(run_id)}{RESOLVED_CONFIG_SUFFIX}"
+    )
 
 
 def write_resolved_config(root: str | Path, run_id: str, yaml_text: str) -> str:

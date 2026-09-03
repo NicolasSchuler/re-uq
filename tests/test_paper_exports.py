@@ -176,7 +176,9 @@ class RepeatedSampleAgreementTest(unittest.TestCase):
 
     def test_score_rows_carry_stochastic_complete(self):
         benchmark = eu.build_benchmark_items(_seeds()[:1])
-        item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
+        item = next(
+            row for row in benchmark if row["source_modality"] == "nice_to_have"
+        )
         raw_rows = [
             _task2_raw(
                 item,
@@ -288,7 +290,9 @@ class CoverageAdjustedBoundsTest(unittest.TestCase):
 class LengthBloatMetricsTest(unittest.TestCase):
     def test_score_rows_carry_length_fields(self):
         benchmark = eu.build_benchmark_items(_seeds()[:1])
-        item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
+        item = next(
+            row for row in benchmark if row["source_modality"] == "nice_to_have"
+        )
         raw = _task2_raw(
             item, model="m1", run_id="r1", requirement="The system must export reports."
         )
@@ -1228,15 +1232,17 @@ class BenchmarkGroundTruthDocTest(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             output = ground_truth.main(["--output", str(Path(tmp) / "doc.md")])
             self.assertTrue(output.exists())
-            self.assertIn("# Benchmark Ground Truth", output.read_text(encoding="utf-8"))
+            self.assertIn(
+                "# Benchmark Ground Truth", output.read_text(encoding="utf-8")
+            )
 
     def test_non_first_worked_seed_uses_the_matching_shall_row(self):
         from scripts import export_benchmark_ground_truth as ground_truth
 
         root = Path(__file__).resolve().parents[1]
-        nice_seed = eu.read_csv_rows(
-            root / "data/processed/seeds_selected.csv"
-        )[1]["seed_id"]
+        nice_seed = eu.read_csv_rows(root / "data/processed/seeds_selected.csv")[1][
+            "seed_id"
+        ]
         mlm_seed = eu.read_csv_rows(
             root / "data/processed/seeds_selected_mlm_tapt.csv"
         )[1]["seed_id"]

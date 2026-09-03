@@ -138,9 +138,13 @@ class CompletedRun:
     semantic_embedding_backend: str
 
 
-def completed_runs_from_analysis_dirs(root: Path, output_root: Path) -> list[CompletedRun]:
+def completed_runs_from_analysis_dirs(
+    root: Path, output_root: Path
+) -> list[CompletedRun]:
     runs: list[CompletedRun] = []
-    for manifest_path in sorted(output_root.glob("evaluation_*/provenance_manifest.json")):
+    for manifest_path in sorted(
+        output_root.glob("evaluation_*/provenance_manifest.json")
+    ):
         analysis_dir = manifest_path.parent
         if not (analysis_dir / "uq_scores.csv").exists():
             continue
@@ -148,7 +152,9 @@ def completed_runs_from_analysis_dirs(root: Path, output_root: Path) -> list[Com
         run_id = str(provenance.get("run_id", "")).strip()
         model = str(provenance.get("model_filter", "")).strip()
         dataset_id = eu.normalize_dataset_id(provenance.get("dataset_id", ""))
-        variant = eu.normalize_benchmark_variant(provenance.get("benchmark_variant", "must"))
+        variant = eu.normalize_benchmark_variant(
+            provenance.get("benchmark_variant", "must")
+        )
         if not run_id or not model:
             continue
         runs.append(
@@ -228,7 +234,9 @@ def backend_specs_for_run(
 def existing_backend_manifests(output_root: Path) -> list[dict[str, Any]]:
     manifests: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str, str]] = set()
-    for manifest_path in sorted(output_root.glob("evaluation_*/acse_semantic_*/manifest.json")):
+    for manifest_path in sorted(
+        output_root.glob("evaluation_*/acse_semantic_*/manifest.json")
+    ):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         key = (
             str(manifest.get("dataset_id", "")),
@@ -251,19 +259,31 @@ def sample_sort_key(row: dict[str, Any]) -> tuple[int, str]:
         return 0, str(row.get("item_id", ""))
 
 
-def load_run_rows(root: Path, run: CompletedRun) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+def load_run_rows(
+    root: Path, run: CompletedRun
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
     raw_rows = [
         row
-        for row in eu.read_jsonl(eu.model_outputs_raw_path(root, run.dataset_id, run.variant))
+        for row in eu.read_jsonl(
+            eu.model_outputs_raw_path(root, run.dataset_id, run.variant)
+        )
         if str(row.get("run_id", "")) == run.run_id
         and str(row.get("model", "")) == run.model
         and str(row.get("task", "")) == "task2"
     ]
     if run.profile:
-        raw_rows = [row for row in raw_rows if str(row.get("profile_id", "")) in {"", run.profile}]
+        raw_rows = [
+            row
+            for row in raw_rows
+            if str(row.get("profile_id", "")) in {"", run.profile}
+        ]
     benchmark = {
         row["item_id"]: row
-        for row in eu.read_csv_rows(eu.artifact_path(root / "data/processed/benchmark_items.csv", run.dataset_id, run.variant))
+        for row in eu.read_csv_rows(
+            eu.artifact_path(
+                root / "data/processed/benchmark_items.csv", run.dataset_id, run.variant
+            )
+        )
     }
     return raw_rows, benchmark
 
@@ -286,9 +306,13 @@ def embedding_matrix_for_cache(
     mlx_model_name: str | None,
     batch_size: int,
 ) -> tuple[np.ndarray, str]:
-    backend_label, model_name = eu.semantic_embedding_backend_label(embedding_backend, mlx_model_name)
+    backend_label, model_name = eu.semantic_embedding_backend_label(
+        embedding_backend, mlx_model_name
+    )
     if model_name is None:
-        return eu.semantic_embedding_matrix(texts, embedding_backend=embedding_backend, mlx_model_name=mlx_model_name)
+        return eu.semantic_embedding_matrix(
+            texts, embedding_backend=embedding_backend, mlx_model_name=mlx_model_name
+        )
     batches: list[np.ndarray] = []
     for start in range(0, len(texts), max(1, int(batch_size))):
         batch, label = eu.semantic_embedding_matrix(
@@ -297,7 +321,9 @@ def embedding_matrix_for_cache(
             mlx_model_name=mlx_model_name,
         )
         if label != backend_label:
-            raise RuntimeError(f"Embedding backend changed within run: {backend_label!r} -> {label!r}")
+            raise RuntimeError(
+                f"Embedding backend changed within run: {backend_label!r} -> {label!r}"
+            )
         batches.append(batch)
     if not batches:
         return np.zeros((0, 1), dtype=float), backend_label
@@ -331,7 +357,9 @@ def deterministic_requirement(raw_rows: list[dict[str, Any]]) -> dict[str, str]:
             and str(row.get("parse_status", "")) == "ok"
             and isinstance(parsed, dict)
         ):
-            requirements[str(row.get("item_id", ""))] = str(parsed.get("requirement", ""))
+            requirements[str(row.get("item_id", ""))] = str(
+                parsed.get("requirement", "")
+            )
     return requirements
 
 
@@ -344,7 +372,9 @@ def compute_run_backend(
     embedding_batch_size: int,
     force: bool,
 ) -> dict[str, Any]:
-    backend_label, _ = eu.semantic_embedding_backend_label(embedding_backend, mlx_model_name)
+    backend_label, _ = eu.semantic_embedding_backend_label(
+        embedding_backend, mlx_model_name
+    )
     output_dir = eu.acse_semantic_cache_dir(run.analysis_dir, backend_label)
     manifest_path = output_dir / "manifest.json"
     if manifest_path.exists() and not force:
@@ -357,7 +387,9 @@ def compute_run_backend(
     if not raw_rows:
         raise ValueError(f"No Task 2 raw rows found for {run.run_id} / {run.model}.")
     if not det_scores:
-        raise ValueError(f"No deterministic Task 2 scores found in {run.analysis_dir / 'uq_scores.csv'}.")
+        raise ValueError(
+            f"No deterministic Task 2 scores found in {run.analysis_dir / 'uq_scores.csv'}."
+        )
 
     stochastic_all_by_item: dict[str, list[dict[str, Any]]] = defaultdict(list)
     valid_by_item: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -366,7 +398,9 @@ def compute_run_backend(
         if item_id not in det_scores or str(row.get("sample_kind", "")) != "stochastic":
             continue
         stochastic_all_by_item[item_id].append(row)
-        if str(row.get("parse_status", "")) == "ok" and isinstance(row.get("parsed_json"), dict):
+        if str(row.get("parse_status", "")) == "ok" and isinstance(
+            row.get("parsed_json"), dict
+        ):
             valid_by_item[item_id].append(row)
 
     ordered_samples: list[dict[str, Any]] = []
@@ -379,7 +413,9 @@ def compute_run_backend(
             sample_texts.append(eu.semantic_response_text("task2", row["parsed_json"]))
             item_indices[item_id].append(index)
     if not ordered_samples:
-        raise ValueError(f"No valid stochastic Task 2 samples found for {run.run_id} / {run.model}.")
+        raise ValueError(
+            f"No valid stochastic Task 2 samples found for {run.run_id} / {run.model}."
+        )
 
     global_embeddings, backend_label = embedding_matrix_for_cache(
         sample_texts,
@@ -436,7 +472,9 @@ def compute_run_backend(
             backend_label,
             distance_threshold=distance_threshold,
         )
-        cluster_labels = eu.acse_cluster_labels_for_embeddings(scoring_embeddings, distance_threshold)
+        cluster_labels = eu.acse_cluster_labels_for_embeddings(
+            scoring_embeddings, distance_threshold
+        )
         for index, cluster_label in zip(indices, cluster_labels, strict=True):
             sample_rows[index]["cluster_label"] = cluster_label
 
@@ -477,12 +515,22 @@ def compute_run_backend(
             "semantic_embedding_backend": backend_label,
             "semantic_distance_threshold": diagnostics["semantic_distance_threshold"],
             "semantic_cluster_count": diagnostics["semantic_cluster_count"],
-            "semantic_cluster_distribution": diagnostics["semantic_cluster_distribution"],
+            "semantic_cluster_distribution": diagnostics[
+                "semantic_cluster_distribution"
+            ],
             "semantic_cluster_entropy": diagnostics["semantic_cluster_entropy"],
-            "semantic_cluster_variation_ratio": diagnostics["semantic_cluster_variation_ratio"],
-            "semantic_dominant_cluster_share": diagnostics["semantic_dominant_cluster_share"],
-            "semantic_mean_pairwise_distance": diagnostics["semantic_mean_pairwise_distance"],
-            "semantic_dominant_cluster_mean_distance": diagnostics["semantic_dominant_cluster_mean_distance"],
+            "semantic_cluster_variation_ratio": diagnostics[
+                "semantic_cluster_variation_ratio"
+            ],
+            "semantic_dominant_cluster_share": diagnostics[
+                "semantic_dominant_cluster_share"
+            ],
+            "semantic_mean_pairwise_distance": diagnostics[
+                "semantic_mean_pairwise_distance"
+            ],
+            "semantic_dominant_cluster_mean_distance": diagnostics[
+                "semantic_dominant_cluster_mean_distance"
+            ],
             "source_statement": benchmark.get("source_statement", ""),
             "task2_requirement": deterministic_requirements.get(item_id, ""),
         }
@@ -497,11 +545,19 @@ def compute_run_backend(
         embeddings_path,
         embeddings=np.asarray(global_embeddings, dtype=np.float32),
         item_ids=np.asarray([row["item_id"] for row in sample_rows], dtype=str),
-        sample_indices=np.asarray([row["sample_index"] for row in sample_rows], dtype=str),
+        sample_indices=np.asarray(
+            [row["sample_index"] for row in sample_rows], dtype=str
+        ),
     )
-    eu.write_csv_rows(output_dir / "task2_acse_samples.csv", sample_rows, fieldnames=SAMPLE_FIELDS)
-    eu.write_csv_rows(output_dir / "task2_acse_items.csv", item_rows, fieldnames=ITEM_FIELDS)
-    eu.write_csv_rows(output_dir / "task2_acse_scores.csv", score_rows, fieldnames=ACSE_SCORE_FIELDS)
+    eu.write_csv_rows(
+        output_dir / "task2_acse_samples.csv", sample_rows, fieldnames=SAMPLE_FIELDS
+    )
+    eu.write_csv_rows(
+        output_dir / "task2_acse_items.csv", item_rows, fieldnames=ITEM_FIELDS
+    )
+    eu.write_csv_rows(
+        output_dir / "task2_acse_scores.csv", score_rows, fieldnames=ACSE_SCORE_FIELDS
+    )
     eu.write_csv_rows(
         output_dir / "task2_acse_normalized_scores.csv",
         normalized_rows,
@@ -544,15 +600,28 @@ def compute_run_backend(
             str(output_dir / "task2_acse_calibration.csv"),
         ],
     }
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return manifest
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compute backend-specific ACSE semantic caches for completed runs.")
+    parser = argparse.ArgumentParser(
+        description="Compute backend-specific ACSE semantic caches for completed runs."
+    )
     parser.add_argument("--output-root", type=Path, default=Path("outputs"))
-    parser.add_argument("--analysis-dir", type=Path, action="append", help="Limit to one or more evaluation output dirs.")
-    parser.add_argument("--backend", action="append", choices=["tfidf", eu.ACSE_PROXY_EMBEDDING_BACKEND, "mlx", "all"])
+    parser.add_argument(
+        "--analysis-dir",
+        type=Path,
+        action="append",
+        help="Limit to one or more evaluation output dirs.",
+    )
+    parser.add_argument(
+        "--backend",
+        action="append",
+        choices=["tfidf", eu.ACSE_PROXY_EMBEDDING_BACKEND, "mlx", "all"],
+    )
     parser.add_argument(
         "--mlx-model",
         default=None,
@@ -560,14 +629,20 @@ def main() -> None:
         "For legacy runs without embedding provenance, defaults to "
         f"RE_UQ_ACSE_MLX_MODEL or {eu.ACSE_MLX_DEFAULT_MODEL!r}.",
     )
-    parser.add_argument("--distance-threshold", type=float, default=eu.ACSE_PROXY_DISTANCE_THRESHOLD)
+    parser.add_argument(
+        "--distance-threshold", type=float, default=eu.ACSE_PROXY_DISTANCE_THRESHOLD
+    )
     parser.add_argument("--embedding-batch-size", type=int, default=64)
-    parser.add_argument("--force", action="store_true", help="Recompute existing backend caches.")
+    parser.add_argument(
+        "--force", action="store_true", help="Recompute existing backend caches."
+    )
     parser.add_argument("--allow-registry-mismatch", action="store_true")
     args = parser.parse_args()
 
     root = eu.project_root()
-    output_root = args.output_root if args.output_root.is_absolute() else root / args.output_root
+    output_root = (
+        args.output_root if args.output_root.is_absolute() else root / args.output_root
+    )
     if args.analysis_dir:
         all_runs = completed_runs_from_analysis_dirs(root, output_root)
         selected_dirs = {path.resolve() for path in args.analysis_dir}
@@ -575,12 +650,18 @@ def main() -> None:
     else:
         runs = completed_runs_from_analysis_dirs(root, output_root)
     if not runs:
-        raise ValueError("No completed evaluation output dirs with provenance_manifest.json and uq_scores.csv were found.")
+        raise ValueError(
+            "No completed evaluation output dirs with provenance_manifest.json and uq_scores.csv were found."
+        )
 
     manifests: list[dict[str, Any]] = []
     for run in runs:
-        if not args.allow_registry_mismatch and not registry_confirms_complete(root, run):
-            raise ValueError(f"Registry does not confirm complete run: {run.run_id} / {run.model}")
+        if not args.allow_registry_mismatch and not registry_confirms_complete(
+            root, run
+        ):
+            raise ValueError(
+                f"Registry does not confirm complete run: {run.run_id} / {run.model}"
+            )
         for backend, mlx_model_name in backend_specs_for_run(
             run, args.backend, args.mlx_model
         ):
@@ -614,7 +695,11 @@ def main() -> None:
             "stochastic_sample_rows": row["stochastic_sample_rows"],
             "embedding_shape": json.dumps(row["embedding_shape"]),
             "analysis_dir": row["analysis_dir"],
-            "artifact_dir": str(eu.acse_semantic_cache_dir(Path(row["analysis_dir"]), row["embedding_backend"])),
+            "artifact_dir": str(
+                eu.acse_semantic_cache_dir(
+                    Path(row["analysis_dir"]), row["embedding_backend"]
+                )
+            ),
         }
         for row in all_manifests
     ]

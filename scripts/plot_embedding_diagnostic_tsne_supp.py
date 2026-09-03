@@ -56,28 +56,45 @@ except ModuleNotFoundError:  # pragma: no cover
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path,
-                        default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME)
-    parser.add_argument("--diagnostic-dir", type=Path,
-                        default=Path("outputs/embedding_diagnostic"))
-    parser.add_argument("--output", type=Path,
-                        default=Path("docs/figures/embedding_diagnostic_tsne_supp.pdf"))
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME,
+    )
+    parser.add_argument(
+        "--diagnostic-dir", type=Path, default=Path("outputs/embedding_diagnostic")
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("docs/figures/embedding_diagnostic_tsne_supp.pdf"),
+    )
     parser.add_argument("--method", choices=["tsne", "pca"], default="tsne")
     parser.add_argument("--per-modality", type=int, default=850)
     parser.add_argument("--random-state", type=int, default=20260527)
     args = parser.parse_args()
 
     root = eu.project_root()
-    diagnostic_dir = args.diagnostic_dir if args.diagnostic_dir.is_absolute() else root / args.diagnostic_dir
-    manifest_path = args.manifest if args.manifest.is_absolute() else root / args.manifest
+    diagnostic_dir = (
+        args.diagnostic_dir
+        if args.diagnostic_dir.is_absolute()
+        else root / args.diagnostic_dir
+    )
+    manifest_path = (
+        args.manifest if args.manifest.is_absolute() else root / args.manifest
+    )
     output_path = args.output if args.output.is_absolute() else root / args.output
 
-    cache = np.load(diagnostic_dir / "task2_reqonly_mlx_embeddings.npz", allow_pickle=False)
+    cache = np.load(
+        diagnostic_dir / "task2_reqonly_mlx_embeddings.npz", allow_pickle=False
+    )
     reqonly = cache["embeddings"].astype(np.float32, copy=False)
     rows = manifest_rows(manifest_path, "mlx:")
     _, sample_rows = load_embeddings_and_rows(rows)
     if len(sample_rows) != reqonly.shape[0]:
-        raise ValueError(f"row/embedding mismatch: {len(sample_rows)} vs {reqonly.shape[0]}")
+        raise ValueError(
+            f"row/embedding mismatch: {len(sample_rows)} vs {reqonly.shape[0]}"
+        )
 
     # One point per distinct generated requirement (each text recurs ~17x).
     seen: set[str] = set()
@@ -94,18 +111,30 @@ def main() -> None:
     keep_local = balanced_subsample(unique_rows, args.per_modality, rng)
     global_idx = unique_global_arr[keep_local]
     sub_rows = [unique_rows[k] for k in keep_local]
-    print(f"projection subsample: {global_idx.size} points "
-          f"(strict positives: {sum(drift_status(r) == 'strict_text_oc' for r in sub_rows)})")
+    print(
+        f"projection subsample: {global_idx.size} points "
+        f"(strict positives: {sum(drift_status(r) == 'strict_text_oc' for r in sub_rows)})"
+    )
     coords = compute_projection(reqonly[global_idx], args.method, args.random_state)
 
     set_style()
     fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(7.2, 3.6), layout="constrained")
-    panel_projection(ax_a, coords, sub_rows, "source_modality",
-                     "(a) Colored by input strength", rng=rng)
-    panel_projection(ax_b, coords, sub_rows, "drift",
-                     "(b) Colored by strength increase")
-    fig.suptitle("Generated requirements (t-SNE of requirement-only embeddings)",
-                 fontsize=12.5, fontweight="bold")
+    panel_projection(
+        ax_a,
+        coords,
+        sub_rows,
+        "source_modality",
+        "(a) Colored by input strength",
+        rng=rng,
+    )
+    panel_projection(
+        ax_b, coords, sub_rows, "drift", "(b) Colored by strength increase"
+    )
+    fig.suptitle(
+        "Generated requirements (t-SNE of requirement-only embeddings)",
+        fontsize=12.5,
+        fontweight="bold",
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path)

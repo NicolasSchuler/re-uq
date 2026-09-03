@@ -111,7 +111,9 @@ def fake_completion(**kwargs: Any) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Run provider-aware benchmark experiments from a run config.")
+    parser = argparse.ArgumentParser(
+        description="Run provider-aware benchmark experiments from a run config."
+    )
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--profile")
     parser.add_argument("--model")
@@ -138,7 +140,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Print the planned job/batch/API-call counts and exit without contacting a provider.",
     )
-    parser.add_argument("--log-level", default="INFO", help="Logging level for the re_uq logger (default: INFO).")
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Logging level for the re_uq logger (default: INFO).",
+    )
     args = parser.parse_args(argv)
     eu.configure_run_logging(args.log_level)
     run_from_config(eu.load_run_config(args.config), args)
@@ -542,7 +548,9 @@ def execute_cell(matrix: MatrixRun, cell: RunCell) -> None:
     )
     eu.upsert_run_registry_row(cell.registry_path, finish_row)
     refresh_live_progress("finish", finished_at_utc=str(finish_row["finished_at_utc"]))
-    eu.logger.info("Registry status: %s at %s", finish_row["status"], cell.registry_path)
+    eu.logger.info(
+        "Registry status: %s at %s", finish_row["status"], cell.registry_path
+    )
 
 
 def run_from_config(run_config: dict[str, Any], args: RunnerArgs) -> None:

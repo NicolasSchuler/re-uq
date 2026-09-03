@@ -88,22 +88,35 @@ def embed_requirement_only(
     ).hexdigest()
     if reuse_cache and cache_path.exists():
         cached = np.load(cache_path, allow_pickle=False)
-        cached_digest = str(cached["requirements_digest"]) if "requirements_digest" in cached.files else ""
-        if int(cached["n_rows"]) == len(requirements) and cached_digest == requirements_digest:
-            print(f"[reqonly-mlx] reuse cache {cache_path} ({cached['embeddings'].shape})")
+        cached_digest = (
+            str(cached["requirements_digest"])
+            if "requirements_digest" in cached.files
+            else ""
+        )
+        if (
+            int(cached["n_rows"]) == len(requirements)
+            and cached_digest == requirements_digest
+        ):
+            print(
+                f"[reqonly-mlx] reuse cache {cache_path} ({cached['embeddings'].shape})"
+            )
             return cached["embeddings"].astype(np.float32, copy=False)
 
     unique_texts = sorted(set(requirements))
     index_of = {text: i for i, text in enumerate(unique_texts)}
-    print(f"[reqonly-mlx] embedding {len(unique_texts)} unique requirement strings "
-          f"(of {len(requirements)} rows) in batches of {batch_size}")
+    print(
+        f"[reqonly-mlx] embedding {len(unique_texts)} unique requirement strings "
+        f"(of {len(requirements)} rows) in batches of {batch_size}"
+    )
     blocks: list[np.ndarray] = []
     for start in range(0, len(unique_texts), batch_size):
         batch = unique_texts[start : start + batch_size]
         matrix, _ = eu.semantic_embedding_matrix(batch, embedding_backend="mlx")
         blocks.append(np.asarray(matrix, dtype=np.float32))
         if (start // batch_size) % 5 == 0:
-            print(f"  embedded {min(start + batch_size, len(unique_texts))}/{len(unique_texts)}")
+            print(
+                f"  embedded {min(start + batch_size, len(unique_texts))}/{len(unique_texts)}"
+            )
     unique_embeddings = np.vstack(blocks)
     row_embeddings = unique_embeddings[[index_of[text] for text in requirements]]
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,14 +131,22 @@ def embed_requirement_only(
     return row_embeddings.astype(np.float32, copy=False)
 
 
-def reduce_features(matrix: Any, n_components: int, random_state: int, sparse: bool) -> tuple[np.ndarray, float]:
+def reduce_features(
+    matrix: Any, n_components: int, random_state: int, sparse: bool
+) -> tuple[np.ndarray, float]:
     n_components = min(n_components, matrix.shape[0] - 1, matrix.shape[1])
     if sparse:
         reducer = TruncatedSVD(n_components=n_components, random_state=random_state)
     else:
-        reducer = PCA(n_components=n_components, svd_solver="randomized", random_state=random_state)
+        reducer = PCA(
+            n_components=n_components,
+            svd_solver="randomized",
+            random_state=random_state,
+        )
     reduced = reducer.fit_transform(matrix)
-    return np.asarray(reduced, dtype=np.float32), float(np.sum(reducer.explained_variance_ratio_))
+    return np.asarray(reduced, dtype=np.float32), float(
+        np.sum(reducer.explained_variance_ratio_)
+    )
 
 
 def build_feature_sets(
@@ -143,8 +164,15 @@ def build_feature_sets(
     features: dict[str, dict[str, Any]] = {}
 
     # --- MLX prefixed: cached embeddings (label leaks into the string) ---
-    reduced, var = reduce_features(cached_mlx_prefixed, n_components, random_state, sparse=False)
-    features["mlx::prefixed"] = {"X": reduced, "explained_variance": var, "backend": "mlx", "text": "prefixed"}
+    reduced, var = reduce_features(
+        cached_mlx_prefixed, n_components, random_state, sparse=False
+    )
+    features["mlx::prefixed"] = {
+        "X": reduced,
+        "explained_variance": var,
+        "backend": "mlx",
+        "text": "prefixed",
+    }
     print(f"[mlx::prefixed] {reduced.shape} explained_var={var:.3f}")
 
     # --- MLX requirement-only: re-embed the generated wording alone ---
@@ -155,17 +183,35 @@ def build_feature_sets(
         reuse_cache=reuse_cache,
     )
     reduced, var = reduce_features(reqonly, n_components, random_state, sparse=False)
-    features["mlx::reqonly"] = {"X": reduced, "explained_variance": var, "backend": "mlx", "text": "reqonly"}
+    features["mlx::reqonly"] = {
+        "X": reduced,
+        "explained_variance": var,
+        "backend": "mlx",
+        "text": "reqonly",
+    }
     print(f"[mlx::reqonly] {reduced.shape} explained_var={var:.3f}")
     del reqonly
 
     # --- TF-IDF char n-gram: prefixed vs requirement-only ---
     for tag, corpus in (("prefixed", semantic_texts), ("reqonly", requirements)):
-        vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), lowercase=True)
-        sparse_matrix = vectorizer.fit_transform([text if text else "<empty response>" for text in corpus])
-        reduced, var = reduce_features(sparse_matrix, n_components, random_state, sparse=True)
-        features[f"tfidf::{tag}"] = {"X": reduced, "explained_variance": var, "backend": "tfidf", "text": tag}
-        print(f"[tfidf::{tag}] vocab={len(vectorizer.vocabulary_)} svd={reduced.shape} explained_var={var:.3f}")
+        vectorizer = TfidfVectorizer(
+            analyzer="char_wb", ngram_range=(3, 5), lowercase=True
+        )
+        sparse_matrix = vectorizer.fit_transform(
+            [text if text else "<empty response>" for text in corpus]
+        )
+        reduced, var = reduce_features(
+            sparse_matrix, n_components, random_state, sparse=True
+        )
+        features[f"tfidf::{tag}"] = {
+            "X": reduced,
+            "explained_variance": var,
+            "backend": "tfidf",
+            "text": tag,
+        }
+        print(
+            f"[tfidf::{tag}] vocab={len(vectorizer.vocabulary_)} svd={reduced.shape} explained_var={var:.3f}"
+        )
 
     return features
 
@@ -178,19 +224,27 @@ def run_grid(
     n_splits: int,
     random_state: int,
 ) -> list[dict[str, Any]]:
-    source_modalities = np.asarray([str(row.get("source_modality", "")) for row in sample_rows], dtype=object)
+    source_modalities = np.asarray(
+        [str(row.get("source_modality", "")) for row in sample_rows], dtype=object
+    )
     fold_rows: list[dict[str, Any]] = []
     for feature_key, payload in features.items():
         X_full = payload["X"]
         for group_mode in ("seed", "item"):
             groups_full = group_values(sample_rows, group_mode)
-            scopes: list[tuple[str, np.ndarray]] = [("global", np.ones(len(sample_rows), dtype=bool))]
+            scopes: list[tuple[str, np.ndarray]] = [
+                ("global", np.ones(len(sample_rows), dtype=bool))
+            ]
             for modality in WITHIN_SCOPES:
-                scopes.append((f"source_modality={modality}", source_modalities == modality))
+                scopes.append(
+                    (f"source_modality={modality}", source_modalities == modality)
+                )
             for scope_name, mask in scopes:
                 targets = GLOBAL_TARGETS if scope_name == "global" else WITHIN_TARGETS
                 X_scope = X_full[mask]
-                rows_scope = [row for row, keep in zip(sample_rows, mask, strict=True) if keep]
+                rows_scope = [
+                    row for row, keep in zip(sample_rows, mask, strict=True) if keep
+                ]
                 groups_scope = groups_full[mask]
                 for target in targets:
                     y = target_values(rows_scope, target)
@@ -216,17 +270,27 @@ def run_grid(
                                 }
                             )
                             fold_rows.append(row)
-            print(f"[grid] {feature_key} group={group_mode}: cumulative fold rows={len(fold_rows)}")
+            print(
+                f"[grid] {feature_key} group={group_mode}: cumulative fold rows={len(fold_rows)}"
+            )
     return fold_rows
 
 
 def summarize_grid(fold_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_cell: dict[tuple, list[dict[str, Any]]] = {}
     for row in fold_rows:
-        key = (row["feature_key"], row["group_mode"], row["scope"], row["target"], row["model"])
+        key = (
+            row["feature_key"],
+            row["group_mode"],
+            row["scope"],
+            row["target"],
+            row["model"],
+        )
         by_cell.setdefault(key, []).append(row)
     summary: list[dict[str, Any]] = []
-    for (feature_key, group_mode, scope, target, model), rows in sorted(by_cell.items()):
+    for (feature_key, group_mode, scope, target, model), rows in sorted(
+        by_cell.items()
+    ):
         base = summarize(rows)[0]
         backend, text_variant = feature_key.split("::")
         auprc = base.get("average_precision_macro_mean", "")
@@ -257,25 +321,43 @@ def summarize_grid(fold_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME)
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/embedding_diagnostic"))
-    parser.add_argument("--models", nargs="+", default=["hgb", "logreg"], choices=["hgb", "logreg"])
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME,
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, default=Path("outputs/embedding_diagnostic")
+    )
+    parser.add_argument(
+        "--models", nargs="+", default=["hgb", "logreg"], choices=["hgb", "logreg"]
+    )
     parser.add_argument("--pca-components", type=int, default=128)
     parser.add_argument("--n-splits", type=int, default=3)
     parser.add_argument("--mlx-batch", type=int, default=256)
     parser.add_argument("--random-state", type=int, default=20260527)
-    parser.add_argument("--no-cache", action="store_true", help="force re-embedding requirement-only text")
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="force re-embedding requirement-only text",
+    )
     args = parser.parse_args()
 
     root = eu.project_root()
-    manifest_path = args.manifest if args.manifest.is_absolute() else root / args.manifest
-    output_dir = args.output_dir if args.output_dir.is_absolute() else root / args.output_dir
+    manifest_path = (
+        args.manifest if args.manifest.is_absolute() else root / args.manifest
+    )
+    output_dir = (
+        args.output_dir if args.output_dir.is_absolute() else root / args.output_dir
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     rows = manifest_rows(manifest_path, "mlx:")
     cached_mlx_prefixed, sample_rows = load_embeddings_and_rows(rows)
     add_probe_labels(sample_rows)
-    print(f"loaded {len(sample_rows)} samples; cached mlx prefixed {cached_mlx_prefixed.shape}")
+    print(
+        f"loaded {len(sample_rows)} samples; cached mlx prefixed {cached_mlx_prefixed.shape}"
+    )
 
     features = build_feature_sets(
         sample_rows,
@@ -300,21 +382,32 @@ def main() -> None:
     eu.write_csv_rows(output_dir / "probe_grid_folds.csv", fold_rows)
     eu.write_csv_rows(output_dir / "probe_grid_summary.csv", summary)
     (output_dir / "probe_grid_summary.md").write_text(
-        eu.markdown_table(summary, (list(summary[0]) if summary else [])) + "\n", encoding="utf-8"
+        eu.markdown_table(summary, (list(summary[0]) if summary else [])) + "\n",
+        encoding="utf-8",
     )
     manifest = {
         "n_samples": len(sample_rows),
         "models": args.models,
         "pca_components": args.pca_components,
         "n_splits": args.n_splits,
-        "explained_variance": {key: payload["explained_variance"] for key, payload in features.items()},
+        "explained_variance": {
+            key: payload["explained_variance"] for key, payload in features.items()
+        },
         "global_targets": GLOBAL_TARGETS,
         "within_targets": WITHIN_TARGETS,
         "within_scopes": WITHIN_SCOPES,
         "random_state": args.random_state,
     }
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"output_dir": str(output_dir), "summary_rows": len(summary), **manifest}, indent=2, sort_keys=True))
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(
+        json.dumps(
+            {"output_dir": str(output_dir), "summary_rows": len(summary), **manifest},
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

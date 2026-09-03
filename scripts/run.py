@@ -47,7 +47,9 @@ def dispatch(cfg: DictConfig) -> None:
     tasks = eu.normalize_task_filter(str(cfg.task))
     if tasks == ["task3"]:
         if not args.source_run_id:
-            raise ValueError("task=task3 requires source_run_id=<complete task2 run id>.")
+            raise ValueError(
+                "task=task3 requires source_run_id=<complete task2 run id>."
+            )
         task3_runner.run_from_config(run_config, args)
         return
     experiment_runner.run_from_config(run_config, args)

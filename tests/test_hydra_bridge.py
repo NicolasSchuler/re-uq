@@ -575,9 +575,7 @@ class HydraMultirunSmokeTest(unittest.TestCase):
             def fake_embedding_matrix(
                 texts, embedding_backend=None, mlx_model_name=None
             ):
-                observed_embedding_args.append(
-                    (embedding_backend, mlx_model_name)
-                )
+                observed_embedding_args.append((embedding_backend, mlx_model_name))
                 return np.ones((len(texts), 2), dtype=float), expected_backend
 
             with (
@@ -606,9 +604,7 @@ class HydraMultirunSmokeTest(unittest.TestCase):
                 {("mlx", "mlx-community/Qwen3-Embedding-4B-4bit-DWQ")},
             )
             analysis_provenance = json.loads(
-                (analysis_dir / "provenance_manifest.json").read_text(
-                    encoding="utf-8"
-                )
+                (analysis_dir / "provenance_manifest.json").read_text(encoding="utf-8")
             )
             self.assertEqual(
                 analysis_provenance["semantic_embedding_backend"], expected_backend

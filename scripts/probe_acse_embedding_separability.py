@@ -87,25 +87,49 @@ def sample_text_fields(row: dict[str, Any]) -> dict[str, Any]:
 def add_probe_labels(rows: list[dict[str, Any]]) -> None:
     for row in rows:
         fields = sample_text_fields(row)
-        row["deterministic_strict_text_overcommit"] = "1" if eu.is_truthy_strict(row.get("strict_text_overcommit", "")) else "0"
-        row["deterministic_broad_text_overcommit"] = "1" if eu.is_truthy_strict(row.get("text_overcommit", "")) else "0"
-        row["sample_strict_text_overcommit"] = "1" if eu.is_truthy_strict(fields.get("strict_text_overcommit", "")) else "0"
-        row["sample_broad_text_overcommit"] = "1" if eu.is_truthy_strict(fields.get("text_overcommit", "")) else "0"
+        row["deterministic_strict_text_overcommit"] = (
+            "1" if eu.is_truthy_strict(row.get("strict_text_overcommit", "")) else "0"
+        )
+        row["deterministic_broad_text_overcommit"] = (
+            "1" if eu.is_truthy_strict(row.get("text_overcommit", "")) else "0"
+        )
+        row["sample_strict_text_overcommit"] = (
+            "1"
+            if eu.is_truthy_strict(fields.get("strict_text_overcommit", ""))
+            else "0"
+        )
+        row["sample_broad_text_overcommit"] = (
+            "1" if eu.is_truthy_strict(fields.get("text_overcommit", "")) else "0"
+        )
 
 
 def target_values(rows: list[dict[str, Any]], target: str) -> np.ndarray:
     if target in BINARY_TARGETS:
-        return np.asarray([1 if eu.is_truthy_strict(row.get(target, "")) else 0 for row in rows], dtype=int)
+        return np.asarray(
+            [1 if eu.is_truthy_strict(row.get(target, "")) else 0 for row in rows],
+            dtype=int,
+        )
     if target in MULTICLASS_TARGETS:
-        return np.asarray([clean_label(row.get(target, "")) for row in rows], dtype=object)
+        return np.asarray(
+            [clean_label(row.get(target, "")) for row in rows], dtype=object
+        )
     raise ValueError(f"Unknown target: {target}")
 
 
 def group_values(rows: list[dict[str, Any]], mode: str) -> np.ndarray:
     if mode == "seed":
-        return np.asarray([f"{row.get('dataset_id')}::{row.get('seed_id')}" for row in rows], dtype=object)
+        return np.asarray(
+            [f"{row.get('dataset_id')}::{row.get('seed_id')}" for row in rows],
+            dtype=object,
+        )
     if mode == "item":
-        return np.asarray([f"{row.get('dataset_id')}::{row.get('benchmark_variant')}::{row.get('item_id')}" for row in rows], dtype=object)
+        return np.asarray(
+            [
+                f"{row.get('dataset_id')}::{row.get('benchmark_variant')}::{row.get('item_id')}"
+                for row in rows
+            ],
+            dtype=object,
+        )
     raise ValueError(f"Unknown group mode: {mode}")
 
 
@@ -143,26 +167,40 @@ def positive_rate(y: np.ndarray) -> float:
     return float(np.mean(y.astype(int)))
 
 
-def multiclass_auroc(y_true: np.ndarray, probabilities: np.ndarray, classes: np.ndarray) -> float:
+def multiclass_auroc(
+    y_true: np.ndarray, probabilities: np.ndarray, classes: np.ndarray
+) -> float:
     if len(classes) < 2:
         return math.nan
     present_classes = np.unique(y_true)
     if len(present_classes) < len(classes):
         return math.nan
     try:
-        return float(roc_auc_score(y_true, probabilities, labels=classes, multi_class="ovr", average="macro"))
+        return float(
+            roc_auc_score(
+                y_true,
+                probabilities,
+                labels=classes,
+                multi_class="ovr",
+                average="macro",
+            )
+        )
     except ValueError:
         return math.nan
 
 
-def multiclass_average_precision(y_true: np.ndarray, probabilities: np.ndarray, classes: np.ndarray) -> float:
+def multiclass_average_precision(
+    y_true: np.ndarray, probabilities: np.ndarray, classes: np.ndarray
+) -> float:
     if len(classes) < 2:
         return math.nan
     if len(np.unique(y_true)) < len(classes):
         return math.nan
     try:
         binary_true = label_binarize(y_true, classes=classes)
-        return float(average_precision_score(binary_true, probabilities, average="macro"))
+        return float(
+            average_precision_score(binary_true, probabilities, average="macro")
+        )
     except ValueError:
         return math.nan
 
@@ -188,25 +226,45 @@ def fold_metrics(
         encoder = LabelEncoder()
         y = encoder.fit_transform(y_raw)
         class_labels = np.arange(len(encoder.classes_))
-    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    splitter = StratifiedGroupKFold(
+        n_splits=n_splits, shuffle=True, random_state=random_state
+    )
     rows: list[dict[str, Any]] = []
-    for fold_index, (train_index, test_index) in enumerate(splitter.split(X, y, groups=groups)):
+    for fold_index, (train_index, test_index) in enumerate(
+        splitter.split(X, y, groups=groups)
+    ):
         estimator = make_estimator(model_name, random_state + fold_index)
         estimator.fit(X[train_index], y[train_index])
         pred = estimator.predict(X[test_index])
         probabilities = estimator.predict_proba(X[test_index])
         y_test = y[test_index]
         if target in BINARY_TARGETS:
-            positive_prob = probabilities[:, list(estimator.classes_).index(1)] if 1 in estimator.classes_ else np.zeros(len(test_index))
-            auroc = float(roc_auc_score(y_test, positive_prob)) if len(np.unique(y_test)) == 2 else math.nan
-            auprc = float(average_precision_score(y_test, positive_prob)) if len(np.unique(y_test)) == 2 else math.nan
+            positive_prob = (
+                probabilities[:, list(estimator.classes_).index(1)]
+                if 1 in estimator.classes_
+                else np.zeros(len(test_index))
+            )
+            auroc = (
+                float(roc_auc_score(y_test, positive_prob))
+                if len(np.unique(y_test)) == 2
+                else math.nan
+            )
+            auprc = (
+                float(average_precision_score(y_test, positive_prob))
+                if len(np.unique(y_test)) == 2
+                else math.nan
+            )
             prevalence = positive_rate(y_test)
             macro_auroc = auroc
         else:
-            probability_matrix = np.zeros((len(test_index), len(class_labels)), dtype=float)
+            probability_matrix = np.zeros(
+                (len(test_index), len(class_labels)), dtype=float
+            )
             for local_col, class_id in enumerate(estimator.classes_):
                 probability_matrix[:, int(class_id)] = probabilities[:, local_col]
-            auprc = multiclass_average_precision(y_test, probability_matrix, class_labels)
+            auprc = multiclass_average_precision(
+                y_test, probability_matrix, class_labels
+            )
             macro_auroc = multiclass_auroc(y_test, probability_matrix, class_labels)
             prevalence = math.nan
         rows.append(
@@ -219,14 +277,21 @@ def fold_metrics(
                 "n_test": len(test_index),
                 "n_groups_train": len(np.unique(groups[train_index])),
                 "n_groups_test": len(np.unique(groups[test_index])),
-                "class_distribution_test": json.dumps(dict(Counter(str(value) for value in y_raw[test_index])), sort_keys=True),
+                "class_distribution_test": json.dumps(
+                    dict(Counter(str(value) for value in y_raw[test_index])),
+                    sort_keys=True,
+                ),
                 "positive_rate_test": finite_metric(prevalence),
                 "accuracy": float(accuracy_score(y_test, pred)),
                 "balanced_accuracy": float(balanced_accuracy_score(y_test, pred)),
-                "macro_f1": float(f1_score(y_test, pred, average="macro", zero_division=0)),
+                "macro_f1": float(
+                    f1_score(y_test, pred, average="macro", zero_division=0)
+                ),
                 "auroc_macro": finite_metric(macro_auroc),
                 "average_precision_macro": finite_metric(auprc),
-                "baseline_average_precision": finite_metric(prevalence if target in BINARY_TARGETS else math.nan),
+                "baseline_average_precision": finite_metric(
+                    prevalence if target in BINARY_TARGETS else math.nan
+                ),
             }
         )
     return rows
@@ -244,7 +309,9 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for row in rows:
-        grouped.setdefault((str(row["scope"]), str(row["target"]), str(row["model"])), []).append(row)
+        grouped.setdefault(
+            (str(row["scope"]), str(row["target"]), str(row["model"])), []
+        ).append(row)
     summary_rows: list[dict[str, Any]] = []
     for (scope, target, model), group_rows in sorted(grouped.items()):
         output = {
@@ -261,8 +328,12 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 if value == "":
                     continue
                 values.append(float(value))
-            output[f"{metric}_mean"] = finite_metric(float(np.mean(values)) if values else math.nan)
-            output[f"{metric}_std"] = finite_metric(float(np.std(values, ddof=1)) if len(values) > 1 else math.nan)
+            output[f"{metric}_mean"] = finite_metric(
+                float(np.mean(values)) if values else math.nan
+            )
+            output[f"{metric}_std"] = finite_metric(
+                float(np.std(values, ddof=1)) if len(values) > 1 else math.nan
+            )
         summary_rows.append(output)
     return summary_rows
 
@@ -280,14 +351,26 @@ def filtered_scope(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run grouped supervised probes on cached ACSE embeddings.")
-    parser.add_argument("--manifest", type=Path, default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME)
+    parser = argparse.ArgumentParser(
+        description="Run grouped supervised probes on cached ACSE embeddings."
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("outputs") / eu.ACSE_SEMANTIC_MANIFEST_FILENAME,
+    )
     parser.add_argument("--backend-prefix", default="mlx:")
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/acse_embedding_separability_probe"))
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("outputs/acse_embedding_separability_probe"),
+    )
     parser.add_argument("--targets", nargs="+", default=DEFAULT_TARGETS)
     parser.add_argument("--within-targets", nargs="+", default=DEFAULT_WITHIN_TARGETS)
     parser.add_argument("--extra-scopes", nargs="*", default=[])
-    parser.add_argument("--models", nargs="+", default=["logreg", "hgb"], choices=["logreg", "hgb"])
+    parser.add_argument(
+        "--models", nargs="+", default=["logreg", "hgb"], choices=["logreg", "hgb"]
+    )
     parser.add_argument("--n-splits", type=int, default=3)
     parser.add_argument("--group-mode", choices=["seed", "item"], default="seed")
     parser.add_argument("--pca-components", type=int, default=128)
@@ -295,19 +378,30 @@ def main() -> None:
     args = parser.parse_args()
 
     root = eu.project_root()
-    manifest_path = args.manifest if args.manifest.is_absolute() else root / args.manifest
-    output_dir = args.output_dir if args.output_dir.is_absolute() else root / args.output_dir
+    manifest_path = (
+        args.manifest if args.manifest.is_absolute() else root / args.manifest
+    )
+    output_dir = (
+        args.output_dir if args.output_dir.is_absolute() else root / args.output_dir
+    )
     rows = manifest_rows(manifest_path, args.backend_prefix)
     embeddings, sample_rows = load_embeddings_and_rows(rows)
     add_probe_labels(sample_rows)
 
     pca_components = min(args.pca_components, embeddings.shape[0], embeddings.shape[1])
-    pca = PCA(n_components=pca_components, svd_solver="randomized", random_state=args.random_state)
+    pca = PCA(
+        n_components=pca_components,
+        svd_solver="randomized",
+        random_state=args.random_state,
+    )
     features = pca.fit_transform(embeddings)
 
     fold_rows: list[dict[str, Any]] = []
     scopes = ["global"]
-    scopes.extend(f"dataset_variant={value}" for value in sorted({row["dataset_variant"] for row in sample_rows}))
+    scopes.extend(
+        f"dataset_variant={value}"
+        for value in sorted({row["dataset_variant"] for row in sample_rows})
+    )
     scopes.extend(args.extra_scopes)
     for scope in scopes:
         X_scope, rows_scope = filtered_scope(features, sample_rows, scope)
@@ -339,7 +433,11 @@ def main() -> None:
     summary_path = output_dir / "summary.csv"
     eu.write_csv_rows(fold_path, fold_rows)
     eu.write_csv_rows(summary_path, summary_rows)
-    (output_dir / "summary.md").write_text(eu.markdown_table(summary_rows, (list(summary_rows[0]) if summary_rows else [])) + "\n", encoding="utf-8")
+    (output_dir / "summary.md").write_text(
+        eu.markdown_table(summary_rows, (list(summary_rows[0]) if summary_rows else []))
+        + "\n",
+        encoding="utf-8",
+    )
     manifest = {
         "backend_prefix": args.backend_prefix,
         "embedding_backend_rows": len(rows),
@@ -354,10 +452,26 @@ def main() -> None:
         "n_splits": args.n_splits,
         "group_mode": args.group_mode,
         "random_state": args.random_state,
-        "artifacts": [str(fold_path), str(summary_path), str(output_dir / "summary.md")],
+        "artifacts": [
+            str(fold_path),
+            str(summary_path),
+            str(output_dir / "summary.md"),
+        ],
     }
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"output_dir": str(output_dir), "summary_rows": len(summary_rows), **manifest}, indent=2, sort_keys=True))
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(
+        json.dumps(
+            {
+                "output_dir": str(output_dir),
+                "summary_rows": len(summary_rows),
+                **manifest,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

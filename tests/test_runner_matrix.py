@@ -244,7 +244,9 @@ class RunnerMatrixTest(unittest.TestCase):
                     eu.run_events_path(self.root, dataset_id, variant, smoke=True)
                 )
                 progress = eu.read_csv_rows(
-                    eu.run_progress_live_path(self.root, dataset_id, variant, smoke=True)
+                    eu.run_progress_live_path(
+                        self.root, dataset_id, variant, smoke=True
+                    )
                 )
                 cell_run_ids = {
                     row["run_id"] for row in self._registry_rows(dataset_id, variant)
@@ -306,9 +308,7 @@ class RunnerWarningEventTest(unittest.TestCase):
                 ),
                 redirect_stdout(io.StringIO()),
             ):
-                runner.run_from_config(
-                    eu.load_run_config(config_path), _runner_args()
-                )
+                runner.run_from_config(eu.load_run_config(config_path), _runner_args())
 
             events = eu.read_jsonl(eu.run_events_path(root, "nice", "must", smoke=True))
             warnings = [e for e in events if e.get("event_type") == "warning"]

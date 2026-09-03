@@ -13,7 +13,9 @@ from typing import Any
 
 try:
     import eval_utils as eu
-except ModuleNotFoundError:  # pragma: no cover - exercised when imported as package in tests
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - exercised when imported as package in tests
     from scripts import eval_utils as eu
 
 
@@ -37,15 +39,21 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def build_external_probe_rows(root: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+def build_external_probe_rows(
+    root: Path,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Return blinded external-probe inputs plus the local gold key."""
     config = eu.load_config(root / "config.example.json")
     pilot_seed_count = int(config["project"]["pilot_seed_count"])
 
     benchmark_rows = eu.read_csv_rows(root / "data/processed/benchmark_items.csv")
-    weak_probe_rows = eu.read_csv_rows(root / "data/processed/weak_modality_probe_items.csv")
+    weak_probe_rows = eu.read_csv_rows(
+        root / "data/processed/weak_modality_probe_items.csv"
+    )
 
-    pilot_seed_ids = sorted({row["seed_id"] for row in benchmark_rows})[:pilot_seed_count]
+    pilot_seed_ids = sorted({row["seed_id"] for row in benchmark_rows})[
+        :pilot_seed_count
+    ]
     selected: list[dict[str, str]] = []
 
     for row in benchmark_rows:
@@ -215,7 +223,9 @@ def readme_markdown() -> str:
     )
 
 
-def export_external_probe_bundle(root: Path, output_dir: Path, *, dry_run: bool = False) -> list[Path]:
+def export_external_probe_bundle(
+    root: Path, output_dir: Path, *, dry_run: bool = False
+) -> list[Path]:
     """Export the blind input bundle, or report target paths without writing."""
     inputs, key = build_external_probe_rows(root)
 
@@ -264,14 +274,25 @@ def export_external_probe_bundle(root: Path, output_dir: Path, *, dry_run: bool 
 
 def main(argv: Sequence[str] | None = None) -> None:
     """CLI entry point for exporting or dry-running the external probe bundle."""
-    parser = argparse.ArgumentParser(description="Export the blind Task 2 input bundle for external AI-service probes.")
-    parser.add_argument("--root", type=Path, default=eu.project_root(), help="Repository root. Defaults to this checkout.")
+    parser = argparse.ArgumentParser(
+        description="Export the blind Task 2 input bundle for external AI-service probes."
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=eu.project_root(),
+        help="Repository root. Defaults to this checkout.",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
         help=f"Output directory. Defaults to outputs/{OUTPUT_DIR_NAME} under --root.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Validate inputs and show target files without writing.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate inputs and show target files without writing.",
+    )
     args = parser.parse_args(argv)
 
     root = args.root.resolve()
