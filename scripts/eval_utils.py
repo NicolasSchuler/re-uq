@@ -22,7 +22,7 @@ import tempfile
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cache
 from itertools import batched, pairwise
@@ -1560,7 +1560,7 @@ def run_id_matches_prefix(
 
 
 @contextlib.contextmanager
-def file_lock(path: str | Path):
+def file_lock(path: str | Path) -> Iterator[None]:
     """Advisory exclusive lock on a sidecar ``<path>.lock`` file.
 
     Concurrent runners share the per-dataset raw JSONL and registry CSVs, so
@@ -9151,7 +9151,9 @@ def headline_risk_ci_fields(
         if task == "task1":
             metric_name = f"unsupported_mandatory_acceptance_{suffix}"
 
-            def metric(sample_rows, threshold=threshold):
+            def metric(
+                sample_rows: list[dict[str, Any]], threshold: float = threshold
+            ) -> float:
                 return unsupported_mandatory_acceptance_rate(sample_rows, threshold)
 
             _, low, high = bootstrap_seed_metric(rows, metric, iterations=iterations)
@@ -9236,7 +9238,9 @@ def text_over_commitment_ci_fields(
             fields[f"{metric_name}_ci_high"] = ""
             continue
 
-        def metric(sample_rows, strict=strict):
+        def metric(
+            sample_rows: list[dict[str, Any]], strict: bool = strict
+        ) -> float:
             return text_strengthening_rate(sample_rows, strict=strict)
 
         point, low, high = bootstrap_seed_metric(

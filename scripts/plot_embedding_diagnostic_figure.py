@@ -34,6 +34,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -145,7 +146,14 @@ DRIFT_STYLE = {
 SOURCE_LEGEND_ORDER = ["mandatory", "recommended", "optional", "nice_to_have"]
 
 
-def panel_projection(ax, coords, rows, color_field: str, title: str, rng: np.random.Generator | None = None) -> None:
+def panel_projection(
+    ax: Axes,
+    coords: np.ndarray,
+    rows: list[dict[str, Any]],
+    color_field: str,
+    title: str,
+    rng: np.random.Generator | None = None,
+) -> None:
     if color_field == "source_modality":
         keys = np.asarray([str(row.get("source_modality", "")) for row in rows], dtype=object)
         # single scatter in shuffled order so no input level systematically occludes another
@@ -189,7 +197,16 @@ def panel_projection(ax, coords, rows, color_field: str, title: str, rng: np.ran
         spine.set_linewidth(0.8)
 
 
-def auroc_cell(summary, *, backend, text, group, scope, target, model="hgb") -> float:
+def auroc_cell(
+    summary: list[dict[str, Any]],
+    *,
+    backend: str,
+    text: str,
+    group: str,
+    scope: str,
+    target: str,
+    model: str = "hgb",
+) -> float:
     for row in summary:
         if (
             row["feature_backend"] == backend
@@ -203,7 +220,7 @@ def auroc_cell(summary, *, backend, text, group, scope, target, model="hgb") -> 
     return float("nan")
 
 
-def style_detection_axis(ax) -> None:
+def style_detection_axis(ax: Axes) -> None:
     """Shared 'detection score' x-axis: 0.5 = coin flip, 1.0 = perfect."""
     ax.set_xlim(0.5, 1.02)
     ax.axvline(0.5, ls="--", lw=0.9, color="#0f172a", zorder=0)
@@ -213,7 +230,9 @@ def style_detection_axis(ax) -> None:
     ax.tick_params(axis="y", length=0)
 
 
-def hbar_detection(ax, labels, values, colors) -> np.ndarray:
+def hbar_detection(
+    ax: Axes, labels: list[str], values: list[float], colors: list[str]
+) -> np.ndarray:
     y = np.arange(len(labels))[::-1]
     for yi, val, color in zip(y, values, colors, strict=True):
         if np.isnan(val):
@@ -226,7 +245,9 @@ def hbar_detection(ax, labels, values, colors) -> np.ndarray:
     return y
 
 
-def panel_readout(ax, summary, group_mode: str, model: str) -> None:
+def panel_readout(
+    ax: Axes, summary: list[dict[str, Any]], group_mode: str, model: str
+) -> None:
     """(c) What can be read off the generated text, by gradient-boosted trees."""
     def within_mean(backend: str) -> float:
         return float(np.nanmean([

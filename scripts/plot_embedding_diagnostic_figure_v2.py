@@ -33,6 +33,7 @@ import argparse
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
 _MPLCONFIGDIR = Path(tempfile.gettempdir()) / "re_uq_matplotlib"
 _MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
@@ -124,7 +125,9 @@ def set_style() -> None:
     )
 
 
-def resolve_bars(summary, specs) -> list[dict]:
+def resolve_bars(
+    summary: list[dict[str, Any]], specs: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     out = []
     for spec in specs:
         value = auroc_cell(
@@ -144,7 +147,11 @@ def resolve_bars(summary, specs) -> list[dict]:
     return out
 
 
-def draw(context, target, output_path: Path) -> None:
+def draw(
+    context: list[dict[str, Any]],
+    target: list[dict[str, Any]],
+    output_path: Path,
+) -> None:
     set_style()
     fig, ax = plt.subplots(figsize=(6.5, 2.95))
 
