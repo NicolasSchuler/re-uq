@@ -35,7 +35,10 @@ except ModuleNotFoundError:  # pragma: no cover
     from scripts import eval_utils as eu
 
 try:
-    from plot_acse_global_embedding_projection import load_embeddings_and_rows, manifest_rows
+    from plot_acse_global_embedding_projection import (
+        load_embeddings_and_rows,
+        manifest_rows,
+    )
     from probe_acse_embedding_separability import (
         add_probe_labels,
         fold_metrics,
@@ -44,7 +47,10 @@ try:
         target_values,
     )
 except ModuleNotFoundError:  # pragma: no cover
-    from scripts.plot_acse_global_embedding_projection import load_embeddings_and_rows, manifest_rows
+    from scripts.plot_acse_global_embedding_projection import (
+        load_embeddings_and_rows,
+        manifest_rows,
+    )
     from scripts.probe_acse_embedding_separability import (
         add_probe_labels,
         fold_metrics,

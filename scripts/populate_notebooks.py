@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 from pathlib import Path
 from textwrap import dedent
-from typing import Sequence
 
 import nbformat as nbf
-
 
 ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK_DIR = ROOT / "notebooks"

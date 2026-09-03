@@ -15,11 +15,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from scripts import aggregate_paper_headline_metrics as agg
-from scripts import compare_run_matrix as compare_matrix
-from scripts import eval_utils as eu
-from scripts import export_paper_tables as export
-from scripts import generate_evaluation_analysis as analysis_cli
+from scripts import (
+    aggregate_paper_headline_metrics as agg,
+    compare_run_matrix as compare_matrix,
+    eval_utils as eu,
+    export_paper_tables as export,
+    generate_evaluation_analysis as analysis_cli,
+)
 
 
 def _seeds():

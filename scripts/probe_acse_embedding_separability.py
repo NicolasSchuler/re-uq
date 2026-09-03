@@ -30,9 +30,15 @@ except ModuleNotFoundError:  # pragma: no cover
     from scripts import eval_utils as eu
 
 try:
-    from plot_acse_global_embedding_projection import load_embeddings_and_rows, manifest_rows
+    from plot_acse_global_embedding_projection import (
+        load_embeddings_and_rows,
+        manifest_rows,
+    )
 except ModuleNotFoundError:  # pragma: no cover
-    from scripts.plot_acse_global_embedding_projection import load_embeddings_and_rows, manifest_rows
+    from scripts.plot_acse_global_embedding_projection import (
+        load_embeddings_and_rows,
+        manifest_rows,
+    )
 
 
 BINARY_TARGETS = {

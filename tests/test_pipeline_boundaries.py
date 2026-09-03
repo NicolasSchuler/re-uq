@@ -19,12 +19,14 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
     from tests.helpers import raw_record
 
-from scripts import eval_utils as eu
-from scripts import evaluate_external_ai_probe as external_eval
-from scripts import export_external_ai_probe as external_export
-from scripts import populate_notebooks
-from scripts import run_task3_verification_from_config as task3_cli
-from scripts import show_run_progress
+from scripts import (
+    eval_utils as eu,
+    evaluate_external_ai_probe as external_eval,
+    export_external_ai_probe as external_export,
+    populate_notebooks,
+    run_task3_verification_from_config as task3_cli,
+    show_run_progress,
+)
 
 
 def seed_rows(count=1):

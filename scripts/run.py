@@ -31,10 +31,12 @@ try:
     import run_experiment_from_config as experiment_runner
     import run_task3_verification_from_config as task3_runner
 except ModuleNotFoundError:  # pragma: no cover
-    from scripts import eval_utils as eu
-    from scripts import hydra_bridge as hb
-    from scripts import run_experiment_from_config as experiment_runner
-    from scripts import run_task3_verification_from_config as task3_runner
+    from scripts import (
+        eval_utils as eu,
+        hydra_bridge as hb,
+        run_experiment_from_config as experiment_runner,
+        run_task3_verification_from_config as task3_runner,
+    )
 
 
 def dispatch(cfg: DictConfig) -> None:

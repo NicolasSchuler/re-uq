@@ -6,7 +6,6 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 CONFIDENCE_SCALE_0_1 = "0_1"
 INSTRUCTOR_OUTPUT_CONTRACT_VERSION = "instructor_v2_confidence_0_1"
 PROMPT_OUTPUT_CONTRACT_VERSION = "prompt_v2_confidence_0_1"

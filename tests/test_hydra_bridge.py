@@ -20,11 +20,13 @@ import numpy as np
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
-from scripts import compute_acse_semantic_artifacts as semantic_cache
-from scripts import eval_utils as eu
-from scripts import generate_evaluation_analysis as analysis_cli
-from scripts import hydra_bridge as hb
-from scripts import run_provenance as rp
+from scripts import (
+    compute_acse_semantic_artifacts as semantic_cache,
+    eval_utils as eu,
+    generate_evaluation_analysis as analysis_cli,
+    hydra_bridge as hb,
+    run_provenance as rp,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONF_DIR = REPO_ROOT / "conf"

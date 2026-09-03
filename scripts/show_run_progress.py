@@ -127,7 +127,7 @@ def print_progress(
     *,
     model: str | None = None,
     profile_id: str | None = None,
-    reader: "RawRowReader | None" = None,
+    reader: RawRowReader | None = None,
 ) -> None:
     benchmark_path = eu.artifact_path(
         root / "data/processed/benchmark_items.csv", dataset_id, variant

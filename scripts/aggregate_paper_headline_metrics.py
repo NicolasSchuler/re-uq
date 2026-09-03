@@ -74,8 +74,7 @@ try:
     import eval_utils as eu
     import export_paper_tables
 except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
-    from scripts import eval_utils as eu
-    from scripts import export_paper_tables
+    from scripts import eval_utils as eu, export_paper_tables
 
 
 CELL_KEYS = ("dataset", "variant")

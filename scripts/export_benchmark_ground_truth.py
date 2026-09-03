@@ -97,7 +97,7 @@ def _dataset_section(
     lines.append(f"| `seed_id` | `{worked_seed_id}` |")
     lines.append(f"| `source_dataset` | `{seed.get('source_dataset', '')}` |")
     lines.append("| `original_requirement` | " + _inline(str(seed.get("original_requirement", ""))) + " |")
-    lines.append(f"| `capability_text_final` | " + _inline(str(seed.get("capability_text_final", ""))) + " |")
+    lines.append("| `capability_text_final` | " + _inline(str(seed.get("capability_text_final", ""))) + " |")
     lines.append("")
     lines.append("The capability clause is the *content* that must survive every transformation "
                  "unchanged; only its modal force varies.")

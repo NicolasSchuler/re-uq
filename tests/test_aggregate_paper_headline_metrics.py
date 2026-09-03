@@ -14,7 +14,6 @@ from contextlib import redirect_stdout
 
 from scripts import aggregate_paper_headline_metrics as agg
 
-
 # Synthetic fixtures mirroring the shipped per-cell snapshot columns and values.
 TASK2_ROWS = [
     {

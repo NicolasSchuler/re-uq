@@ -7,8 +7,9 @@ import csv
 import json
 import random
 import textwrap
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 try:
     import eval_utils as eu

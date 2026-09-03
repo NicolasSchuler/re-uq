@@ -31,6 +31,7 @@ dev = [
     "coverage[toml]>=7",
     "ipykernel>=6.29.0",
     "jupyterlab>=4.2.0",
+    "ruff>=0.16.5",
 ]
 
 [tool.uv]
@@ -43,3 +44,49 @@ source = ["scripts"]
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+
+[tool.ruff]
+# Matches the ruff formatter default; long lines are the formatter's job, so
+# E501 is deliberately not selected below.
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "A",    # flake8-builtins
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "DTZ",  # flake8-datetimez
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "ISC",  # flake8-implicit-str-concat
+    "N",    # pep8-naming
+    "PERF", # perflint
+    "PIE",  # flake8-pie
+    "PTH",  # flake8-use-pathlib
+    "RET",  # flake8-return
+    "RUF",  # ruff-specific
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+    "UP",   # pyupgrade
+    "W",    # pycodestyle warnings
+]
+ignore = [
+    "E501",   # line length is enforced by the formatter
+    "RUF001", # ambiguous unicode in strings: the prompts use typographic quotes
+    "SIM108", # ternaries are not always clearer than if/else here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# These modules must set MPLCONFIGDIR/XDG_CACHE_HOME before matplotlib is
+# imported, so their third-party imports cannot all sit at the top of the file.
+"scripts/eval_utils.py" = ["E402"]
+"scripts/plot_*.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["scripts", "tests"]
+combine-as-imports = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"

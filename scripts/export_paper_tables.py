@@ -33,8 +33,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 try:
     import eval_utils as eu

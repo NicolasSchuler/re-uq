@@ -13,15 +13,15 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 try:
     import eval_utils as eu
     import run_provenance as rp
 except ModuleNotFoundError:  # pragma: no cover
-    from scripts import eval_utils as eu
-    from scripts import run_provenance as rp
+    from scripts import eval_utils as eu, run_provenance as rp
 
 
 def source_run_prefix(variant: str) -> str:

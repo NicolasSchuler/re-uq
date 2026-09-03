@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -125,9 +125,9 @@ def evaluate_outputs(output_path: Path, gold_key_path: Path) -> tuple[pd.DataFra
         merged[column] = text_frame[column]
 
     validation = {
-        "output_rows": int(len(outputs)),
-        "gold_rows": int(len(gold)),
-        "parse_errors": int(len(parse_errors)),
+        "output_rows": len(outputs),
+        "gold_rows": len(gold),
+        "parse_errors": len(parse_errors),
         "duplicate_ids": duplicate_ids,
         "missing_ids": missing_ids,
         "extra_ids": extra_ids,
@@ -168,14 +168,14 @@ def source_condition_summary(scored: pd.DataFrame) -> pd.DataFrame:
 def overall_summary(scored: pd.DataFrame) -> dict[str, Any]:
     weak = scored[scored["task2_gold_modality"].eq("nice_to_have")]
     return {
-        "n": int(len(scored)),
+        "n": len(scored),
         "accuracy": float(scored["correct"].mean()),
         "overcommit_rate": float(scored["overcommit"].mean()),
         "undercommit_rate": float(scored["undercommit"].mean()),
         "high_conf_overcommit_80": float(scored["high_conf_overcommit_80"].mean()),
         "high_conf_overcommit_90": float(scored["high_conf_overcommit_90"].mean()),
         "mean_confidence": float(scored["confidence_num"].mean()),
-        "weak_n": int(len(weak)),
+        "weak_n": len(weak),
         "weak_accuracy": float(weak["correct"].mean()),
         "weak_overcommit_rate": float(weak["overcommit"].mean()),
         "weak_high_conf_overcommit_80": float(weak["high_conf_overcommit_80"].mean()),
@@ -356,7 +356,7 @@ def main() -> None:
     scored, validation = evaluate_outputs(args.outputs_jsonl, args.gold_key)
     validation["prompt_version"] = args.prompt_version
     validation["prompt_sha256"] = eu.sha256_file(args.prompt_path) if args.prompt_path.exists() else ""
-    validation["evaluated_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    validation["evaluated_at_utc"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     if not validation["prompt_sha256"]:
         validation["paper_ready_blockers"] = [*validation.get("paper_ready_blockers", []), "missing_prompt_hash"]
         validation["paper_ready"] = False

@@ -8,12 +8,11 @@ points and notebooks should stay thin wrappers around these helpers.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import contextlib
 import fcntl
-import json
 import hashlib
 import heapq
+import json
 import logging
 import math
 import os
@@ -23,9 +22,11 @@ import tempfile
 import time
 import uuid
 from collections import Counter
-from functools import lru_cache
+from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import cache
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
 try:
     from scripts import structured_outputs as so
@@ -56,10 +57,8 @@ from sklearn.metrics import (
 )
 from sklearn.metrics.pairwise import cosine_similarity
 
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 
 MODALITIES = ["mandatory", "recommended", "optional", "nice_to_have"]
 TASK3_RELATIONS = ["preserves", "strengthens", "weakens", "content_changed"]
@@ -1581,11 +1580,10 @@ def append_jsonl(path: str | Path, row: dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(row, ensure_ascii=True, sort_keys=True) + "\n"
-    with file_lock(path):
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
+    with file_lock(path), path.open("a", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def atomic_write_text(path: str | Path, text: str) -> None:
@@ -3933,7 +3931,7 @@ BATCH_WRAPPER_PROBE_ITEM = {
 }
 
 
-@lru_cache(maxsize=None)
+@cache
 def batch_prompt_wrapper_sha(task: str) -> str:
     """SHA-256 of the batch prompt wrapper for ``task``.
 
@@ -5530,7 +5528,7 @@ def label_from_parsed(task: str, parsed: dict[str, Any]) -> str:
 
 def label_distribution(labels: list[str], label_order: list[str]) -> dict[str, float]:
     if not labels:
-        return {label: 0.0 for label in label_order}
+        return dict.fromkeys(label_order, 0.0)
     counts = Counter(labels)
     total = sum(counts.values())
     return {label: counts.get(label, 0) / total for label in label_order}
@@ -6658,7 +6656,7 @@ def is_parse_failure_status(status: Any) -> bool:
 
 def parse_status_histogram(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
     """Categorized parse-status counts with every known category always present."""
-    histogram = {status: 0 for status in PARSE_STATUS_CATEGORIES}
+    histogram = dict.fromkeys(PARSE_STATUS_CATEGORIES, 0)
     histogram["other"] = 0
     for row in raw_rows:
         status = str(row.get("parse_status", "")).strip()
@@ -8330,7 +8328,7 @@ def empty_text_modality_summary_metrics() -> dict[str, float | str]:
         for metric in TEXT_MODALITY_COVERAGE_METRICS
         for suffix in TEXT_MODALITY_COVERAGE_SUFFIXES
     ]
-    return {key: "" for key in keys}
+    return dict.fromkeys(keys, "")
 
 
 def _coverage_adjusted_bounds(

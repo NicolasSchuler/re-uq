@@ -1,6 +1,6 @@
+import io
 import json
 import math
-import io
 import sys
 import tempfile
 import unittest
@@ -15,15 +15,17 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
     from tests.helpers import raw_record
 
-from scripts import eval_utils as eu
-from scripts import compare_run_matrix as compare_matrix
-from scripts import evaluate_external_ai_probe as external_eval
-from scripts import generate_evaluation_analysis as analysis_cli
-from scripts import plot_acse_global_embedding_projection as acse_global_projection
-from scripts import run_experiment_from_config as run_config_cli
-from scripts import run_task3_verification_from_config as task3_cli
-from scripts import show_run_progress
-from scripts import structured_outputs as so
+from scripts import (
+    compare_run_matrix as compare_matrix,
+    eval_utils as eu,
+    evaluate_external_ai_probe as external_eval,
+    generate_evaluation_analysis as analysis_cli,
+    plot_acse_global_embedding_projection as acse_global_projection,
+    run_experiment_from_config as run_config_cli,
+    run_task3_verification_from_config as task3_cli,
+    show_run_progress,
+    structured_outputs as so,
+)
 
 
 def export_report_seeds():
@@ -1024,7 +1026,7 @@ class EvalUtilsTest(unittest.TestCase):
         # (b) task1 even split -> weaker "no".
         self.assertEqual(eu.majority_label({"yes": 0.5, "no": 0.5}, ["yes", "no"]), "no")
         # (c) uniform 4-way tie -> weakest modality.
-        uniform = {label: 0.25 for label in modalities}
+        uniform = dict.fromkeys(modalities, 0.25)
         self.assertEqual(eu.majority_label(uniform, modalities), "nice_to_have")
         # (d) no-tie cases resolve to the true maximum regardless of order.
         self.assertEqual(

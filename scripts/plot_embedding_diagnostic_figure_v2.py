@@ -49,7 +49,10 @@ try:
     from plot_embedding_diagnostic_figure import as_float, auroc_cell, read_summary
 except ModuleNotFoundError:  # pragma: no cover
     from scripts import eval_utils as eu
-    from scripts.plot_embedding_diagnostic_figure import as_float, auroc_cell, read_summary
+    from scripts.plot_embedding_diagnostic_figure import (
+        auroc_cell,
+        read_summary,
+    )
 
 # --- Bar specification -------------------------------------------------------
 # Each bar names exactly one row of probe_grid_summary.csv, so provenance is

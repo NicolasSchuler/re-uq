@@ -18,8 +18,7 @@ try:
     import eval_utils as eu
     import run_provenance as rp
 except ModuleNotFoundError:  # pragma: no cover
-    from scripts import eval_utils as eu
-    from scripts import run_provenance as rp
+    from scripts import eval_utils as eu, run_provenance as rp
 
 
 def run_prefix(mode: str, variant: str) -> str:
