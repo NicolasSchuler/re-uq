@@ -323,7 +323,7 @@ def plot_selected_samples(
     if not selected_ids:
         return
     cols = 2
-    rows = int(math.ceil(len(selected_ids) / cols))
+    rows = math.ceil(len(selected_ids) / cols)
     if components == 3:
         fig = plt.figure(figsize=(12, max(4.2, rows * 4.1)), constrained_layout=True)
         axes_array = np.asarray(

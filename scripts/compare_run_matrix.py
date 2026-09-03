@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -225,21 +226,27 @@ def main() -> None:
             benchmark = eu.read_csv_rows(benchmark_path)
             summary_rows: list[dict[str, Any]] = []
             ensemble_raw_rows: list[dict[str, Any]] = []
+            # One pass over the raw rows (~70k per cell) instead of rescanning
+            # them once per completed run.
+            raw_rows_by_run_model: dict[tuple[str, str], list[dict[str, Any]]] = (
+                defaultdict(list)
+            )
+            for row in all_raw_rows:
+                key = (str(row.get("run_id", "")), str(row.get("model", "")))
+                raw_rows_by_run_model[key].append(row)
 
             for registry_row in complete_rows:
                 run_id = registry_row["run_id"]
-                raw_rows = [
-                    row
-                    for row in all_raw_rows
-                    if str(row.get("run_id", "")) == str(run_id)
-                    and str(row.get("model", "")) == str(registry_row.get("model", ""))
-                ]
+                raw_rows = raw_rows_by_run_model.get(
+                    (str(run_id), str(registry_row.get("model", ""))), []
+                )
                 result_benchmark = eu.benchmark_rows_with_current_raw_outputs(benchmark, raw_rows)
                 scores = eu.build_uq_scores(result_benchmark, raw_rows)
                 run_summary = eu.metric_summary_by_model_task_method(scores)
                 annotate_text_drift_cis(run_summary, scores, bootstrap_samples=args.bootstrap_samples)
-                for row in run_summary:
-                    summary_rows.append(annotate_summary(row, registry_row))
+                summary_rows.extend(
+                    annotate_summary(row, registry_row) for row in run_summary
+                )
                 ensemble_raw_rows.extend(raw_rows)
 
             ensemble_scores = eu.build_run_group_ensemble_disagreement_scores(
@@ -258,8 +265,9 @@ def main() -> None:
                 }
                 ensemble_summary = eu.metric_summary_by_model_task_method(ensemble_scores)
                 annotate_text_drift_cis(ensemble_summary, ensemble_scores, bootstrap_samples=args.bootstrap_samples)
-                for row in ensemble_summary:
-                    summary_rows.append(annotate_summary(row, registry_stub))
+                summary_rows.extend(
+                    annotate_summary(row, registry_stub) for row in ensemble_summary
+                )
 
             output_prefix = eu.artifact_path(root / "outputs/run_matrix_summary.csv", dataset_id, variant).with_suffix("")
             paths = write_matrix_outputs(summary_rows, registry_rows, output_prefix)

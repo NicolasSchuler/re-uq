@@ -76,6 +76,10 @@ ignore = [
     "E501",   # line length is enforced by the formatter
     "RUF001", # ambiguous unicode in strings: the prompts use typographic quotes
     "SIM108", # ternaries are not always clearer than if/else here
+    # Fires on small-N record builders (4 modalities, 4 probe templates, ...)
+    # where folding a multi-line dict literal into a comprehension costs more
+    # readability than the loop overhead is worth.
+    "PERF401",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -83,6 +87,9 @@ ignore = [
 # imported, so their third-party imports cannot all sit at the top of the file.
 "scripts/eval_utils.py" = ["E402"]
 "scripts/plot_*.py" = ["E402"]
+# This module builds a markdown document, so long prose wrapped across adjacent
+# string literals inside list literals is the point, not a missing comma.
+"scripts/export_benchmark_ground_truth.py" = ["ISC004"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["scripts", "tests"]

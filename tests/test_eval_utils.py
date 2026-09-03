@@ -109,20 +109,20 @@ class EvalUtilsTest(unittest.TestCase):
             },
         ]
         benchmark = eu.build_benchmark_items(seeds)
-        kwargs = dict(
-            tasks=["task1"],
-            model="m1",
-            host="http://localhost:1234/v1",
-            run_id="full-1",
-            prompt_version="v1",
-            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
-            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
-            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
-            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
-            max_tokens=64,
-            timeout_s=30,
-            api_key_env="LOCAL_OPENAI_API_KEY",
-        )
+        kwargs = {
+            "tasks": ["task1"],
+            "model": "m1",
+            "host": "http://localhost:1234/v1",
+            "run_id": "full-1",
+            "prompt_version": "v1",
+            "task1_template": eu.load_prompt("prompts/mandatory_entailment.txt"),
+            "task2_template": eu.load_prompt("prompts/modality_extraction.txt"),
+            "deterministic": {"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            "stochastic": {"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            "max_tokens": 64,
+            "timeout_s": 30,
+            "api_key_env": "LOCAL_OPENAI_API_KEY",
+        }
         kwargs.update(overrides)
         return eu.planned_completion_jobs(
             [row for row in benchmark if row["source_modality"] == "mandatory"],
@@ -526,15 +526,17 @@ class EvalUtilsTest(unittest.TestCase):
 
         self.assertEqual(parsed.confidence, 0.95)
         for bad_confidence in ["0.95", -0.1, 1.1, 95]:
-            with self.subTest(confidence=bad_confidence):
-                with self.assertRaises(ValidationError):
-                    so.Task2Response.model_validate(
-                        {
-                            "requirement": "The system MAY export reports.",
-                            "modality": "optional",
-                            "confidence": bad_confidence,
-                        }
-                    )
+            with (
+                self.subTest(confidence=bad_confidence),
+                self.assertRaises(ValidationError),
+            ):
+                so.Task2Response.model_validate(
+                    {
+                        "requirement": "The system MAY export reports.",
+                        "modality": "optional",
+                        "confidence": bad_confidence,
+                    }
+                )
 
     def test_confidence_probability_handles_legacy_and_instructor_rows(self):
         legacy = {"parsed_json": {"confidence": 90.0}}
@@ -857,7 +859,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(len(selected), 2)
         self.assertEqual({row["source_dataset"] for row in candidates}, {"mlm_tapt"})
         self.assertIn("source_corpus", candidates[0])
-        pure = [row for row in candidates if row["source_corpus"] == "beta_PURE"][0]
+        pure = next(row for row in candidates if row["source_corpus"] == "beta_PURE")
         self.assertEqual(pure["auto_include"], "no")
         self.assertIn("excluded_source", pure["auto_exclusion_reason"])
 
@@ -1215,7 +1217,7 @@ class EvalUtilsTest(unittest.TestCase):
         benchmark = eu.build_benchmark_items(
             export_report_seeds()
         )
-        item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
         raw_rows = [
             {
                 "run_id": "r1-default",
@@ -1251,7 +1253,7 @@ class EvalUtilsTest(unittest.TestCase):
     def test_weak_modality_probe_summary_counts_overcommitment(self):
         seeds = export_report_seeds()
         items = eu.build_weak_modality_probe_items(seeds)
-        item = [row for row in items if row["template_id"] == "useful_if"][0]
+        item = next(row for row in items if row["template_id"] == "useful_if")
         raw_record = eu.build_raw_record(
             run_id="weak-probe-r1",
             model="m1",
@@ -1286,7 +1288,7 @@ class EvalUtilsTest(unittest.TestCase):
     def test_weak_modality_probe_summary_uses_instructor_confidence_scale(self):
         seeds = export_report_seeds()
         items = eu.build_weak_modality_probe_items(seeds)
-        item = [row for row in items if row["template_id"] == "useful_if"][0]
+        item = next(row for row in items if row["template_id"] == "useful_if")
         raw_record = {
             "run_id": "weak-probe-r1",
             "model": "m1",
@@ -1315,8 +1317,8 @@ class EvalUtilsTest(unittest.TestCase):
         benchmark = eu.build_benchmark_items(
             export_report_seeds()
         )
-        optional_item = [row for row in benchmark if row["source_modality"] == "optional"][0]
-        nice_item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
+        optional_item = next(row for row in benchmark if row["source_modality"] == "optional")
+        nice_item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
         scores = [
             {
                 "model": "m1",
@@ -1377,7 +1379,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_duplicate_completed_rows_score_once_from_the_latest_ok_row(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
-        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "mandatory")
         rows = [
             self._task2_raw_row(item, "The system may export reports."),
             self._task2_raw_row(item, "The system must export reports."),
@@ -1392,7 +1394,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_a_failed_row_followed_by_an_ok_retry_scores_once(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
-        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "mandatory")
         failed = self._task2_raw_row(item, "", parse_status="invalid_json", parsed_json=None)
         rows = [failed, self._task2_raw_row(item, "The system must export reports.")]
 
@@ -1408,8 +1410,8 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_dedupe_keeps_distinct_requests_and_runs_apart(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
-        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
-        other_item = [row for row in benchmark if row["source_modality"] == "optional"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "mandatory")
+        other_item = next(row for row in benchmark if row["source_modality"] == "optional")
         rows = [
             self._task2_raw_row(item, "a"),
             self._task2_raw_row(item, "b", run_id="r2"),
@@ -1422,13 +1424,13 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(len(eu.dedupe_raw_rows(rows)), len(rows))
         # Order of the survivors follows first appearance.
         self.assertEqual(
-            [row["parsed_json"]["requirement"] for row in eu.dedupe_raw_rows(rows + [self._task2_raw_row(item, "z")])],
+            [row["parsed_json"]["requirement"] for row in eu.dedupe_raw_rows([*rows, self._task2_raw_row(item, "z")])],
             ["z", "b", "c", "d", "e", "f"],
         )
 
     def test_duplicate_rows_do_not_inflate_run_progress(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
-        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "mandatory")
         rows = [self._task2_raw_row(item, "a"), self._task2_raw_row(item, "b")]
 
         progress = eu.run_progress_summary(benchmark, rows, expected_stochastic_samples=0)
@@ -1439,7 +1441,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_duplicate_task2_rows_build_one_task3_item(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
-        item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
         rows = [
             self._task2_raw_row(item, "The system may export reports."),
             self._task2_raw_row(item, "The system must export reports."),
@@ -1453,7 +1455,7 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_stochastic_completeness_counts_samples_that_were_never_written(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
-        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "mandatory")
         rows = [
             self._task2_raw_row(
                 item,
@@ -1491,7 +1493,7 @@ class EvalUtilsTest(unittest.TestCase):
                 }
             ]
         )
-        item = [row for row in benchmark if row["source_modality"] == "mandatory"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "mandatory")
         raw = {
             "run_id": "r1",
             "model": "m1",
@@ -1524,7 +1526,7 @@ class EvalUtilsTest(unittest.TestCase):
         benchmark = eu.build_benchmark_items(
             export_report_seeds()
         )
-        source_item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
+        source_item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
         task2_raw = [
             {
                 "run_id": "full-r1",
@@ -1677,7 +1679,7 @@ class EvalUtilsTest(unittest.TestCase):
         by_method = {row["uq_method"]: row for row in summary}
 
         self.assertEqual({row["task"] for row in scores}, {"task3"})
-        verbalized_score = [row for row in scores if row["uq_method"] == "verbalized_confidence"][0]
+        verbalized_score = next(row for row in scores if row["uq_method"] == "verbalized_confidence")
         self.assertEqual(verbalized_score["confidence"], 0.9)
         self.assertEqual(by_method["verbalized_confidence"]["accuracy"], 0.0)
         self.assertEqual(by_method["verbalized_confidence"]["f1_or_macro_f1"], 0.0)
@@ -1777,7 +1779,7 @@ class EvalUtilsTest(unittest.TestCase):
         benchmark = eu.build_benchmark_items(
             export_report_seeds()
         )
-        optional_item = [row for row in benchmark if row["source_modality"] == "optional"][0]
+        optional_item = next(row for row in benchmark if row["source_modality"] == "optional")
         raw_rows = [
             raw_record(
                 optional_item,
@@ -4097,20 +4099,20 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         return eu.build_benchmark_items(export_report_seeds())
 
     def _plan(self, **overrides):
-        kwargs = dict(
-            tasks=["task2"],
-            model="m1",
-            host="http://localhost:8000/v1",
-            run_id="full-1",
-            prompt_version="v2-conf01",
-            task1_template=eu.load_prompt("prompts/mandatory_entailment.txt"),
-            task2_template=eu.load_prompt("prompts/modality_extraction.txt"),
-            deterministic={"temperature": 0.0, "top_p": 1.0, "samples": 1},
-            stochastic={"temperature": 0.7, "top_p": 1.0, "samples": 0},
-            max_tokens=64,
-            timeout_s=30,
-            api_key_env="LOCAL_OPENAI_API_KEY",
-        )
+        kwargs = {
+            "tasks": ["task2"],
+            "model": "m1",
+            "host": "http://localhost:8000/v1",
+            "run_id": "full-1",
+            "prompt_version": "v2-conf01",
+            "task1_template": eu.load_prompt("prompts/mandatory_entailment.txt"),
+            "task2_template": eu.load_prompt("prompts/modality_extraction.txt"),
+            "deterministic": {"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            "stochastic": {"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            "max_tokens": 64,
+            "timeout_s": 30,
+            "api_key_env": "LOCAL_OPENAI_API_KEY",
+        }
         kwargs.update(overrides)
         rows = kwargs.pop("benchmark_rows", self._benchmark_items())
         return eu.planned_completion_jobs(rows, **kwargs)
@@ -4398,15 +4400,15 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         self.assertEqual(record["request_payload_sha"], again["request_payload_sha"])
 
     def test_job_config_sha_covers_extra_body_and_new_inputs(self):
-        base = dict(
-            prompt="p",
-            prompt_version="v2-conf01",
-            temperature=0.0,
-            top_p=1.0,
-            max_tokens=64,
-            structured_output="json_object",
-            json_mode=True,
-        )
+        base = {
+            "prompt": "p",
+            "prompt_version": "v2-conf01",
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "max_tokens": 64,
+            "structured_output": "json_object",
+            "json_mode": True,
+        }
         baseline = eu.compute_job_config_sha(**base)
 
         self.assertNotEqual(baseline, eu.compute_job_config_sha(**base, extra_body={"thinking": {"type": "disabled"}}))
@@ -4417,15 +4419,15 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         self.assertEqual(baseline, eu.compute_job_config_sha(**base))
 
     def test_job_config_sha_covers_the_batching_setup(self):
-        base = dict(
-            prompt="p",
-            prompt_version="v2-conf01",
-            temperature=0.0,
-            top_p=1.0,
-            max_tokens=64,
-            structured_output="json_object",
-            json_mode=True,
-        )
+        base = {
+            "prompt": "p",
+            "prompt_version": "v2-conf01",
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "max_tokens": 64,
+            "structured_output": "json_object",
+            "json_mode": True,
+        }
         baseline = eu.compute_job_config_sha(**base)
         batched = eu.compute_job_config_sha(**base, task="task2", batch_size=16)
 

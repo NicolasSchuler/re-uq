@@ -292,7 +292,7 @@ def main() -> None:
     parser.add_argument("--task3-run-id")
     parser.add_argument(
         "--task3-audit-mode",
-        choices=eu.TASK3_AUDIT_MODES + [eu.LEGACY_TASK3_AUDIT_MODE],
+        choices=[*eu.TASK3_AUDIT_MODES, eu.LEGACY_TASK3_AUDIT_MODE],
         default=eu.OFFICIAL_TASK3_AUDIT_MODE,
     )
     parser.add_argument("--model")

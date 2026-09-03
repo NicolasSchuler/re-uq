@@ -122,9 +122,11 @@ class StructuredOutputsTest(unittest.TestCase):
         ]
 
         for model, payload in invalid_cases:
-            with self.subTest(model=model.__name__, payload=payload):
-                with self.assertRaises(ValidationError):
-                    model.model_validate(payload)
+            with (
+                self.subTest(model=model.__name__, payload=payload),
+                self.assertRaises(ValidationError),
+            ):
+                model.model_validate(payload)
 
     def test_batch_models_validate_request_index_and_items(self):
         payload = {
@@ -183,9 +185,11 @@ class StructuredOutputsTest(unittest.TestCase):
             ("task2", extra_envelope),
             ("task3", extra_item),
         ]:
-            with self.subTest(task=task):
-                with self.assertRaises(ValidationError):
-                    so.validated_payload_for_task(task, payload, batched=True)
+            with (
+                self.subTest(task=task),
+                self.assertRaises(ValidationError),
+            ):
+                so.validated_payload_for_task(task, payload, batched=True)
 
     def test_validated_json_and_model_lookup_are_task_specific(self):
         text = json.dumps(

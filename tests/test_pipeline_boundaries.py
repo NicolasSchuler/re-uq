@@ -306,7 +306,7 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
 class AggregationBoundaryTest(unittest.TestCase):
     def test_task2_prompt_sensitivity_denominator_ignores_non_task2_rows(self):
         benchmark = eu.build_benchmark_items(seed_rows())
-        item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
         raw_rows = [
             raw_record(
                 item,

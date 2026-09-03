@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -797,7 +798,19 @@ def export_tables(
         raw_rows = cell.pop("raw_rows")
         det_rows = task2_deterministic_rows(scores)
         consistency = stochastic_rows_by_method(scores, "modality_consistency")
-        cell_models = sorted({str(row.get("model", "")) for row in det_rows})
+        # Index the deterministic rows once; the per-model and per-modality
+        # slices below would otherwise rescan them models * (1 + 4) times.
+        rows_by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        rows_by_model_modality: dict[tuple[str, str], list[dict[str, Any]]] = (
+            defaultdict(list)
+        )
+        for row in det_rows:
+            model = str(row.get("model", ""))
+            rows_by_model[model].append(row)
+            rows_by_model_modality[
+                (model, str(row.get("source_modality", "")))
+            ].append(row)
+        cell_models = sorted(rows_by_model)
         task2_rows.append(
             task2_snapshot_row(dataset, variant, len(cell_models), det_rows, raw_rows)
         )
@@ -807,17 +820,12 @@ def export_tables(
 
         items_per_model = cell["n_benchmark_items"]
         for model in cell_models:
-            model_rows = [row for row in det_rows if str(row.get("model", "")) == model]
-            pooled_by_model.setdefault(model, []).extend(model_rows)
+            pooled_by_model.setdefault(model, []).extend(rows_by_model[model])
             pooled_items_by_model[model] = (
                 pooled_items_by_model.get(model, 0) + items_per_model
             )
             for modality in eu.MODALITIES:
-                modality_rows = [
-                    row
-                    for row in model_rows
-                    if str(row.get("source_modality", "")) == modality
-                ]
+                modality_rows = rows_by_model_modality.get((model, modality), [])
                 if not modality_rows:
                     continue
                 per_model_rows.append(

@@ -176,7 +176,7 @@ class RepeatedSampleAgreementTest(unittest.TestCase):
 
     def test_score_rows_carry_stochastic_complete(self):
         benchmark = eu.build_benchmark_items(_seeds()[:1])
-        item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
         raw_rows = [
             _task2_raw(
                 item,
@@ -211,7 +211,7 @@ class RepeatedSampleAgreementTest(unittest.TestCase):
 
     def test_min_valid_samples_drops_thin_stochastic_groups(self):
         benchmark = eu.build_benchmark_items(_seeds()[:1])
-        item = [row for row in benchmark if row["source_modality"] == "optional"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "optional")
         raw_rows = [
             _task2_raw(
                 item,
@@ -288,7 +288,7 @@ class CoverageAdjustedBoundsTest(unittest.TestCase):
 class LengthBloatMetricsTest(unittest.TestCase):
     def test_score_rows_carry_length_fields(self):
         benchmark = eu.build_benchmark_items(_seeds()[:1])
-        item = [row for row in benchmark if row["source_modality"] == "nice_to_have"][0]
+        item = next(row for row in benchmark if row["source_modality"] == "nice_to_have")
         raw = _task2_raw(
             item, model="m1", run_id="r1", requirement="The system must export reports."
         )
@@ -357,7 +357,7 @@ class LengthBloatMetricsTest(unittest.TestCase):
         summary = eu.metric_summary_by_model_task_method(
             eu.build_uq_scores(benchmark, raw_rows)
         )
-        row = [entry for entry in summary if entry["task"] == "task2"][0]
+        row = next(entry for entry in summary if entry["task"] == "task2")
         for field in [
             "mean_requirement_word_count",
             "mean_length_ratio",
@@ -386,7 +386,7 @@ class RunMatrixCiTest(unittest.TestCase):
         scores = eu.build_uq_scores(benchmark, raw_rows)
         summary = eu.metric_summary_by_model_task_method(scores)
         compare_matrix.annotate_text_drift_cis(summary, scores, bootstrap_samples=25)
-        row = [entry for entry in summary if entry["task"] == "task2"][0]
+        row = next(entry for entry in summary if entry["task"] == "task2")
         self.assertGreater(row["strict_text_over_commitment_n_numerator"], 0)
         self.assertEqual(
             row["strict_text_over_commitment_n_denominator"], len(benchmark)
@@ -874,11 +874,11 @@ class ExportPaperTablesTest(unittest.TestCase):
             self.assertEqual(
                 {row["source_modality"] for row in per_model}, set(eu.MODALITIES)
             )
-            weak_m1 = [
+            weak_m1 = next(
                 row
                 for row in per_model
                 if row["model"] == "m1" and row["source_modality"] == "nice_to_have"
-            ][0]
+            )
             self.assertEqual(
                 weak_m1["strict_strengthening_n"],
                 weak_m1["strict_strengthening_denominator"],

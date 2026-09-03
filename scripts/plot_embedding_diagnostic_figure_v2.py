@@ -46,7 +46,7 @@ import numpy as np
 
 try:
     import eval_utils as eu
-    from plot_embedding_diagnostic_figure import as_float, auroc_cell, read_summary
+    from plot_embedding_diagnostic_figure import auroc_cell, read_summary
 except ModuleNotFoundError:  # pragma: no cover
     from scripts import eval_utils as eu
     from scripts.plot_embedding_diagnostic_figure import (
@@ -64,36 +64,36 @@ except ModuleNotFoundError:  # pragma: no cover
 # source_modality probe scores 0.96 only because the modality word is literally
 # prepended to the text, so we deliberately report the honest 0.84/0.73 instead.
 CONTEXT_BARS = [
-    dict(label="Input commitment level", decimals=2,
-         backend="mlx", text="reqonly", group="item", scope="global",
-         target="source_modality"),
-    dict(label="Source dataset", decimals=2,
-         backend="mlx", text="reqonly", group="item", scope="global",
-         target="dataset_variant"),
+    {"label": "Input commitment level", "decimals": 2,
+         "backend": "mlx", "text": "reqonly", "group": "item", "scope": "global",
+         "target": "source_modality"},
+    {"label": "Source dataset", "decimals": 2,
+         "backend": "mlx", "text": "reqonly", "group": "item", "scope": "global",
+         "target": "dataset_variant"},
 ]
 
 # Strengthening bars come from the exact configuration the paper's Table 1
 # reports: neural embedding, label-prefixed string, seed-grouped CV, one-shot
 # (deterministic) strengthening target. These must match Table 1 to the digit.
 TARGET_BARS = [
-    dict(label="Global classifier\n(all inputs pooled)", decimals=3, expect=0.822,
-         backend="mlx", text="prefixed", group="seed", scope="global",
-         target="deterministic_strict_text_overcommit"),
-    dict(label="Within recommended-only inputs", decimals=3, expect=0.519,
-         backend="mlx", text="prefixed", group="seed",
-         scope="source_modality=recommended",
-         target="deterministic_strict_text_overcommit"),
-    dict(label="Within optional-only inputs", decimals=3, expect=0.582,
-         backend="mlx", text="prefixed", group="seed",
-         scope="source_modality=optional",
-         target="deterministic_strict_text_overcommit"),
+    {"label": "Global classifier\n(all inputs pooled)", "decimals": 3, "expect": 0.822,
+         "backend": "mlx", "text": "prefixed", "group": "seed", "scope": "global",
+         "target": "deterministic_strict_text_overcommit"},
+    {"label": "Within recommended-only inputs", "decimals": 3, "expect": 0.519,
+         "backend": "mlx", "text": "prefixed", "group": "seed",
+         "scope": "source_modality=recommended",
+         "target": "deterministic_strict_text_overcommit"},
+    {"label": "Within optional-only inputs", "decimals": 3, "expect": 0.582,
+         "backend": "mlx", "text": "prefixed", "group": "seed",
+         "scope": "source_modality=optional",
+         "target": "deterministic_strict_text_overcommit"},
     # Weak-intent-only is a looser test (there "strengthened" nearly coincides
     # with "contains any modal word"); shown so the within-level check is not
     # cherry-picked to two strata. Mandatory-only is undefined (no stronger level).
-    dict(label="Within weak-intent inputs", decimals=3, expect=0.600,
-         backend="mlx", text="prefixed", group="seed",
-         scope="source_modality=nice_to_have",
-         target="deterministic_strict_text_overcommit"),
+    {"label": "Within weak-intent inputs", "decimals": 3, "expect": 0.600,
+         "backend": "mlx", "text": "prefixed", "group": "seed",
+         "scope": "source_modality=nice_to_have",
+         "target": "deterministic_strict_text_overcommit"},
 ]
 
 # Colour-blind-safe: neutral slate-blue for context, one orange accent for the

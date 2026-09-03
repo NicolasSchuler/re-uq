@@ -150,7 +150,7 @@ def run_args_namespace(
     logging_cfg = dict(raw.get("logging") or {})
     dataset = raw.get("dataset") or {}
     variant = raw.get("variant") or {}
-    namespace = SimpleNamespace(
+    return SimpleNamespace(
         config=None,
         profile=str(raw["profile"]["profile_id"]),
         model=str(model) if model else None,
@@ -183,7 +183,6 @@ def run_args_namespace(
         resolved_config_yaml=resolved_yaml,
         resolved_config_sha=rp.sha256_text(resolved_yaml) if resolved_yaml else "",
     )
-    return namespace
 
 
 # =============================================================================

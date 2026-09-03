@@ -253,7 +253,7 @@ def panel_readout(ax, summary, group_mode: str, model: str) -> None:
     y = hbar_detection(ax, labels, values, colors)
     mid = (y[2] + y[3]) / 2.0
     ax.annotate("", xy=(0.5 + 0.001, y[3] - 0.33), xytext=(0.5 + 0.001, y[2] + 0.33),
-                arrowprops=dict(arrowstyle="-", lw=0.0))
+                arrowprops={"arrowstyle": "-", "lw": 0.0})
     ax.text(max(strengthen_emb, strengthen_kw) + 0.05, mid, "≈ coin flip\n(neither works)",
             va="center", ha="left", fontsize=10.5, color="#D55E00", fontstyle="italic")
     style_detection_axis(ax)
