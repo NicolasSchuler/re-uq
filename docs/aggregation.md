@@ -252,6 +252,49 @@ The RNG seed is fixed at `20260518` (`BOOTSTRAP_SEED` in
 `scripts/export_paper_tables.py` and `scripts/compare_run_matrix.py`), so the
 intervals are reproducible.
 
+### The per-model RQ table
+
+`outputs/paper_per_model_rq_table.csv` carries every quantity the manuscript's
+per-model tables print, so a rate and the interval beside it always share a
+denominator. Three row kinds, keyed on the same `"all"` sentinels the per-model
+headline uses:
+
+| `model` | `dataset` / `variant` | what it pools |
+| --- | --- | --- |
+| a model id | `all` / `all` | that model over the four cells (table body rows, `*ModelsRange` macros) |
+| `all` | a cell | every model in that cell (`*Range` macros) |
+| `all` | `all` / `all` | everything (the pooled headline macros and the All-models row) |
+
+The model x cell interior is deliberately not written: no table or macro reads
+it, and each additional slice costs a full bootstrap.
+
+Denominators, per metric family:
+
+- **Task 1** -- `task1_unsupported_acceptance_90` divides acceptances at
+  p >= 0.90 by the Task 1 items whose source is *not* mandatory (`y_true == 0`).
+- **Task 2** -- strict and broad strengthening divide by the answers with a
+  readable text modality; `task2_no_cue` divides the unreadable ones by all
+  answers.
+- **Weak intent** -- reported twice. `task2_weak_strict_strengthening` counts
+  every strict strengthening of a `nice_to_have` source;
+  `task2_weak_strict_high_conf_90` additionally requires confidence >= 0.90 and
+  is the `\numWeakStrict` headline. The two coincide only pooled.
+- **RQ2** -- the high-confidence share and the sample agreement divide by the
+  strict-strengthened answers; agreement further requires a complete stochastic
+  group, and the excluded count is reported beside it.
+- **AUROC** -- meaning variation and verbalized confidence are scored as
+  *uncertainty* against the strict label, so a higher score must mean more
+  strengthening. A degenerate label set yields a blank cell, not a 0.5.
+- **Task 3** -- the blind-check rates divide by the strict-strengthened answers
+  that actually received a verdict; `task3_strict_unaudited_n` reports the rest
+  rather than shrinking the denominator silently. The verdicts are clustered on
+  the *audited* Task 2 request, not on the audit's own request.
+
+Task 3 audits are selected by pinning each model to the audit whose registry
+`notes` name the Task 2 run already chosen for that model, and their items are
+recomputed from the Task 2 raw rows; an audit of a different generation, or of
+another model's answers, is an error.
+
 Entry points, and the columns each writes:
 
 - `cluster_ci_fields` (`scripts/eval_utils.py`, Section 10) — the shared shape:

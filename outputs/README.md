@@ -22,6 +22,7 @@ When in doubt, final paper claims should come from `outputs/evaluation_<dataset>
 | --- | --- |
 | `paper_per_model_modality_table.csv` / `.md` | Per-model breakdown by source modality condition: label accuracy, strict and broad text strengthening, high-confidence share, answer length. |
 | `paper_per_model_headline.csv` / `.md` | One row per model, with seed-clustered 95% CIs on strict and broad strengthening. Strict strengthening ranges from 0.3% (`glm-4.7`) to 16.9% (`kit.gemma4-31b-it`). |
+| `paper_per_model_rq_table.csv` / `.md` | Every RQ1/RQ2/RQ3 quantity per model, per cell, and pooled: Task 1 acceptance, strict/broad/no-cue strengthening, weak intent (gated and ungated), high-confidence share, sample agreement, the meaning-variation and verbalized-confidence AUROCs, and the blind-check rates -- each with counts and both cluster intervals. Source of `tab:rq1` and `tab:rq23`; see [`docs/aggregation.md`](../docs/aggregation.md) section 6. |
 | `paper_headline_bootstrap_ci.csv` | Pooled headline intervals: strict [8.2%, 9.0%], broad [13.2%, 14.4%]. |
 | `paper_snapshot_provenance.json` | Contributing run ids, input file SHA-256 hashes, aggregation mode (pooled vs macro-of-cells), exporter version. |
 | `*_regenerated.csv` | Per-cell snapshots re-derived from the raw outputs, written next to the shipped file so the two can be diffed. Pass `--overwrite-snapshots` to replace the shipped file instead. The shipped snapshots currently match their regenerated counterparts bit for bit. |

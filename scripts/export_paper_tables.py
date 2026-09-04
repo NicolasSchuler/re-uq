@@ -1835,12 +1835,8 @@ def export_tables(
         # The cohort split the manuscript prints as separate table groups. The
         # numbers exporter reads its row order from here, so a rerun with a
         # different cohort needs no code change.
-        "models_hosted": [
-            model for model in sorted(rq_rows_by_model) if model not in local_cohort
-        ],
-        "models_local": [
-            model for model in sorted(rq_rows_by_model) if model in local_cohort
-        ],
+        "models_hosted": _cohort_order(rq_rows_by_model, models, local_cohort, False),
+        "models_local": _cohort_order(rq_rows_by_model, models, local_cohort, True),
         "exclude_model_prefixes": exclude_model_prefixes,
         "task3_audit_mode": task3_audit_mode if include_task3 else "",
         "bootstrap_samples": bootstrap_samples,
@@ -1879,6 +1875,22 @@ def export_tables(
             "provenance": provenance_path,
         },
     }
+
+
+def _cohort_order(
+    present: Iterable[str],
+    requested: Iterable[str],
+    local_cohort: set[str],
+    local: bool,
+) -> list[str]:
+    """Models that ran, in the order the caller asked for them.
+
+    The requested cohort is the paper's row order; anything that ran but was
+    not named (a `--models`-less run) follows, sorted.
+    """
+    scored = [model for model in present if (model in local_cohort) is local]
+    named = [model for model in requested if model in scored]
+    return named + sorted(model for model in scored if model not in set(named))
 
 
 def _items_for_modality(items_per_model: int) -> int:

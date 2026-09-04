@@ -88,15 +88,16 @@ HEADLINE_METRICS = "paper_headline_metrics.csv"
 HEADLINE_BOOTSTRAP_CI = "paper_headline_bootstrap_ci.csv"
 PER_MODEL_HEADLINE = "paper_per_model_headline.csv"
 MODALITY_TABLE = "paper_per_model_modality_table.csv"
-TASK1_CONTROL = "paper_task1_control_metrics.csv"
+# Task 1, the detector AUROCs and the blind-audit rates used to come from
+# `paper_task1_control_metrics.csv`, `paper_task3_blind_audit_metrics.csv`,
+# `blind_task3_model_summary.csv`, `blind_task3_analysis_summary.csv`,
+# `paper_uq_text_drift_metrics_overall.csv` and the two
+# `acse_text_drift_uncertainty_*` files -- static 2026-05 snapshots that no
+# code in this repository writes, so a rerun could not refresh them. They are
+# replaced by the generated per-model RQ table.
+PER_MODEL_RQ = "paper_per_model_rq_table.csv"
 TASK2_TEXT_DRIFT = "paper_task2_text_drift_metrics.csv"
 CONFIDENCE_STABILITY = "paper_text_drift_confidence_and_stability.csv"
-BLIND_AUDIT = "paper_task3_blind_audit_metrics.csv"
-BLIND_MODEL_SUMMARY = "blind_task3_model_summary.csv"
-BLIND_ANALYSIS_SUMMARY = "blind_task3_analysis_summary.csv"
-UQ_TEXT_DRIFT_OVERALL = "paper_uq_text_drift_metrics_overall.csv"
-ACSE_SUMMARY = "acse_text_drift_uncertainty_summary.csv"
-ACSE_BY_MODEL = "acse_text_drift_uncertainty_by_model.csv"
 PROBE_GRID = "embedding_diagnostic/probe_grid_summary.csv"
 SNAPSHOT_PROVENANCE = "paper_snapshot_provenance.json"
 
@@ -131,13 +132,6 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "strict_strengthening_denominator",
         "mean_requirement_word_count",
     ),
-    TASK1_CONTROL: (
-        "dataset",
-        "variant",
-        "n",
-        "accuracy",
-        "unsupported_mandatory_acceptance_90",
-    ),
     TASK2_TEXT_DRIFT: (
         "dataset",
         "variant",
@@ -153,27 +147,29 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "strict_text_oc_conf_ge_90",
         "strict_text_oc_unanimous_modality_samples",
     ),
-    BLIND_AUDIT: (
-        "dataset",
-        "variant",
-        "strict_gold_strengthening_n",
-        "strict_strengthening_recall",
-        "strict_false_preserve_rate",
-    ),
-    BLIND_MODEL_SUMMARY: (
-        "dataset",
-        "variant",
+    PER_MODEL_RQ: (
         "model",
+        "dataset",
+        "variant",
         "task1_n",
-        "task1_unsupported_mandatory_acceptance_90",
-        "task2_weak_strict_text_strengthening_90",
-        "task3_strict_strengthened_n",
-        "task3_strict_strengthening_recall",
+        "task1_accuracy",
+        "task1_unsupported_acceptance_90_rate",
+        "task2_n_readable",
+        "task2_strict_strengthening_n",
+        "task2_strict_strengthening_rate",
+        "task2_broad_strengthening_rate",
+        "task2_weak_n_readable",
+        "task2_weak_strict_strengthening_rate",
+        "task2_weak_strict_high_conf_90_n",
+        "task2_weak_strict_high_conf_90_denominator",
+        "task2_weak_strict_high_conf_90_rate",
+        "task2_strict_high_conf_90_rate",
+        "task2_strict_agreement_rate",
+        "task2_meaning_variation_auroc",
+        "task2_verbalized_confidence_auroc",
+        "task3_strict_flagged_rate",
+        "task3_strict_called_preserved_rate",
     ),
-    BLIND_ANALYSIS_SUMMARY: ("dataset", "variant"),
-    UQ_TEXT_DRIFT_OVERALL: ("uq_method", "strict_text_oc_auroc"),
-    ACSE_SUMMARY: ("dataset", "variant", "strict_text_oc_auroc"),
-    ACSE_BY_MODEL: ("dataset", "variant", "model", "strict_text_oc_auroc"),
     PROBE_GRID: (
         "feature_backend",
         "text_variant",
@@ -333,17 +329,45 @@ def model_key(model_id: str) -> str:
     return key
 
 
+#: Characters a raw model id can carry that LaTeX would otherwise eat. Local
+#: ids look like `qwen/qwen3.5-9b`, so an unescaped label breaks the build.
+LATEX_ESCAPES = {
+    "\\": r"\textbackslash{}",
+    "&": r"\&",
+    "%": r"\%",
+    "$": r"\$",
+    "#": r"\#",
+    "_": r"\_",
+    "{": r"\{",
+    "}": r"\}",
+    "~": r"\textasciitilde{}",
+    "^": r"\textasciicircum{}",
+}
+
+
+def latex_escape(text: str) -> str:
+    return "".join(LATEX_ESCAPES.get(character, character) for character in text)
+
+
 def model_label(model_id: str) -> str:
-    """Display label for the per-model table; unknown ids are used as-is."""
-    return MODEL_LABELS.get(model_id, model_id)
+    """Display label for the per-model tables; unknown ids are escaped as-is."""
+    label = MODEL_LABELS.get(model_id)
+    return label if label is not None else latex_escape(model_id)
 
 
-def order_models(models: Iterable[str]) -> list[str]:
-    """Hosted cohort first (in its pinned order), then any other model by id."""
+def order_models(models: Iterable[str], cohort: Sequence[str] = ()) -> list[str]:
+    """Hosted cohort first (in `cohort` order), then any other model by id.
+
+    `cohort` comes from `paper_snapshot_provenance.json`, which the tables
+    exporter writes with the cohort it actually selected, so changing the models
+    of a rerun needs no code change here. It falls back to the pinned default
+    cohort only when the provenance file predates that field.
+    """
     present = list(dict.fromkeys(models))
-    cohort = [model for model in export_paper_tables.DEFAULT_MODELS if model in present]
-    extra = sorted(model for model in present if model not in set(cohort))
-    return cohort + extra
+    order = list(cohort) or list(export_paper_tables.DEFAULT_MODELS)
+    hosted = [model for model in order if model in present]
+    extra = sorted(model for model in present if model not in set(hosted))
+    return hosted + extra
 
 
 # --- Formatting --------------------------------------------------------------
@@ -427,13 +451,6 @@ def _pooled(pairs: Iterable[tuple[float, float]], label: str) -> float:
     return numerator / denominator
 
 
-def _macro_over(values: Iterable[float], label: str) -> float:
-    usable = [value for value in values if math.isfinite(value)]
-    if not usable:
-        raise PaperNumbersError(f"{label}: no finite values to average")
-    return sum(usable) / len(usable)
-
-
 def _cell_id(row: Mapping[str, Any]) -> tuple[str, str]:
     return (str(row["dataset"]), str(row["variant"]))
 
@@ -482,6 +499,26 @@ class Artifacts:
                 raise PaperNumbersError(f"{name}: no data rows")
             self.rows[name] = rows
 
+        self.hosted_models, self.local_models = self._cohort_split()
+
+    def _cohort_split(self) -> tuple[list[str], list[str]]:
+        """Hosted and local model ids, as the tables exporter recorded them.
+
+        Read from `paper_snapshot_provenance.json` rather than hardcoded, so a
+        rerun with a different cohort needs no change here. Older provenance
+        files have neither field and fall back to the pinned default cohort.
+        """
+        path = self.outputs_dir / SNAPSHOT_PROVENANCE
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return [], []
+        if not isinstance(payload, Mapping):
+            return [], []
+        hosted = [str(model) for model in payload.get("models_hosted", []) or []]
+        local = [str(model) for model in payload.get("models_local", []) or []]
+        return hosted, local
+
     def __getitem__(self, name: str) -> list[dict[str, str]]:
         return self.rows[name]
 
@@ -503,6 +540,56 @@ class Artifacts:
             if path.stat().st_mtime > stamp
         ]
         return provenance, newer
+
+
+class RqTable:
+    """Row lookup for the generated per-model RQ table.
+
+    Three row kinds, all keyed on the same two ``"all"`` sentinels the
+    per-model headline already uses: one per model (pooled over cells), one per
+    cell (pooled over models), and one grand row. Every RQ1/RQ2/RQ3 macro reads
+    one of them, so a rate and the range printed beside it can never come from
+    different denominators.
+    """
+
+    def __init__(self, rows: Sequence[Mapping[str, Any]]) -> None:
+        self.by_model: dict[str, Mapping[str, Any]] = {}
+        self.by_cell: dict[tuple[str, str], Mapping[str, Any]] = {}
+        self.grand: Mapping[str, Any] | None = None
+        for row in rows:
+            model, dataset, variant = (
+                str(row["model"]),
+                str(row["dataset"]),
+                str(row["variant"]),
+            )
+            if model != "all" and (dataset, variant) == ("all", "all"):
+                self.by_model[model] = row
+            elif model == "all" and (dataset, variant) != ("all", "all"):
+                self.by_cell[(dataset, variant)] = row
+            elif (model, dataset, variant) == ("all", "all", "all"):
+                self.grand = row
+        if self.grand is None or not self.by_model or not self.by_cell:
+            raise PaperNumbersError(
+                f"{PER_MODEL_RQ}: expected per-model rows, per-cell rows and one "
+                "pooled row (model=dataset=variant='all')"
+            )
+
+    def pooled(self, column: str) -> float:
+        return _number(self.grand or {}, column, PER_MODEL_RQ)
+
+    def over_cells(self, column: str) -> list[float]:
+        return [_number(row, column, PER_MODEL_RQ) for row in self.by_cell.values()]
+
+    def over_models(self, column: str) -> list[float]:
+        return [_number(row, column, PER_MODEL_RQ) for row in self.by_model.values()]
+
+    def cell(self, cell: tuple[str, str], column: str) -> float:
+        row = self.by_cell.get(cell)
+        if row is None:
+            raise PaperNumbersError(
+                f"{PER_MODEL_RQ}: cell {_cell_name(cell)} is absent"
+            )
+        return _number(row, column, PER_MODEL_RQ)
 
 
 def _one(rows: Sequence[Mapping[str, Any]], label: str) -> Mapping[str, Any]:
@@ -746,26 +833,11 @@ def _headline_rate(artifacts: Artifacts, key: str) -> HeadlineRate:
     )
 
 
-def _weak_source(artifacts: Artifacts) -> tuple[str, list[dict[str, str]]]:
-    """The snapshot carrying the conf>=0.90 weak-intent column, preferring Task 2."""
-    for name in (TASK2_TEXT_DRIFT, BLIND_ANALYSIS_SUMMARY):
-        rows = artifacts[name]
-        if WEAK_HEADLINE_COLUMN in artifacts.columns(name) and all(
-            str(row.get(WEAK_HEADLINE_COLUMN, "")).strip() for row in rows
-        ):
-            return name, rows
-    raise PaperNumbersError(
-        f"column {WEAK_HEADLINE_COLUMN!r} is absent (or blank) in both "
-        f"{TASK2_TEXT_DRIFT} and {BLIND_ANALYSIS_SUMMARY}; one of them must carry "
-        "the weak-intent headline"
-    )
-
-
 def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
     modality = artifacts[MODALITY_TABLE]
     by_cell = _group(modality, _cell_id)
     by_model = _group(modality, lambda row: str(row["model"]))
-    models = order_models(by_model)
+    models = order_models(by_model, artifacts.hosted_models + artifacts.local_models)
 
     cell_stats = {
         cell: Strengthening(rows, f"{MODALITY_TABLE} {_cell_name(cell)}")
@@ -776,41 +848,14 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         for model, rows in by_model.items()
     }
 
-    task1 = artifacts[TASK1_CONTROL]
-    accuracy_pairs = [
-        (
-            _number(row, "accuracy", TASK1_CONTROL) * _number(row, "n", TASK1_CONTROL),
-            _number(row, "n", TASK1_CONTROL),
-        )
-        for row in task1
-    ]
-    upgrade_pairs = [
-        (
-            _number(row, "unsupported_mandatory_acceptance_90", TASK1_CONTROL)
-            * _number(row, "n", TASK1_CONTROL),
-            _number(row, "n", TASK1_CONTROL),
-        )
-        for row in task1
-    ]
-    blind_models = _group(artifacts[BLIND_MODEL_SUMMARY], lambda row: str(row["model"]))
-    upgrade_by_model = [
-        _pooled(
-            [
-                (
-                    _number(
-                        row,
-                        "task1_unsupported_mandatory_acceptance_90",
-                        BLIND_MODEL_SUMMARY,
-                    )
-                    * _number(row, "task1_n", BLIND_MODEL_SUMMARY),
-                    _number(row, "task1_n", BLIND_MODEL_SUMMARY),
-                )
-                for row in rows
-            ],
-            f"{BLIND_MODEL_SUMMARY} {model} task1 upgrade",
-        )
-        for model, rows in blind_models.items()
-    ]
+    rq = RqTable(artifacts[PER_MODEL_RQ])
+    upgrade_by_model = rq.over_models("task1_unsupported_acceptance_90_rate")
+    weak_models = rq.over_models("task2_weak_strict_high_conf_90_rate")
+    weak_rate = rq.cell(WEAK_HEADLINE_CELL, "task2_weak_strict_high_conf_90_rate")
+    weak_numerator = rq.cell(WEAK_HEADLINE_CELL, "task2_weak_strict_high_conf_90_n")
+    weak_denominator = rq.cell(
+        WEAK_HEADLINE_CELL, "task2_weak_strict_high_conf_90_denominator"
+    )
 
     task2 = artifacts[TASK2_TEXT_DRIFT]
     label_pairs = [
@@ -870,42 +915,7 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         cell_stats,
     )
     _cross_check_per_model(artifacts, warnings, model_stats)
-
-    weak_source_name, weak_rows = _weak_source(artifacts)
-    weak_by_cell = {
-        _cell_id(row): _number(row, WEAK_HEADLINE_COLUMN, weak_source_name)
-        for row in weak_rows
-    }
-    if WEAK_HEADLINE_CELL not in weak_by_cell:
-        raise PaperNumbersError(
-            f"{weak_source_name}: the weak-intent headline cell "
-            f"{_cell_name(WEAK_HEADLINE_CELL)} is absent, so "
-            "\\numWeakStrict cannot be derived"
-        )
-    weak_rate = weak_by_cell[WEAK_HEADLINE_CELL]
-    weak_denominator = sum(
-        _number(row, "strict_strengthening_denominator", MODALITY_TABLE)
-        for row in by_cell[WEAK_HEADLINE_CELL]
-        if str(row["source_modality"]) == "nice_to_have"
-    )
-    weak_models = [
-        _pooled(
-            [
-                (
-                    _number(
-                        row,
-                        "task2_weak_strict_text_strengthening_90",
-                        BLIND_MODEL_SUMMARY,
-                    )
-                    * _weak_denominator(modality, model, _cell_id(row)),
-                    _weak_denominator(modality, model, _cell_id(row)),
-                )
-                for row in rows
-            ],
-            f"{BLIND_MODEL_SUMMARY} {model} weak strict",
-        )
-        for model, rows in blind_models.items()
-    ]
+    _cross_check_rq_table(artifacts, warnings, rq, strict, broad)
 
     weak_words = _pooled(
         [
@@ -943,29 +953,30 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
     macros = [
         Macro(
             "numTaskOneAcc",
-            fmt_percent(_pooled(accuracy_pairs, "Task 1 accuracy")),
-            "pooled over cells, item-weighted",
+            fmt_percent(rq.pooled("task1_accuracy")),
+            "pooled over cells and models",
         ),
         Macro(
             "numTaskOneAccRange",
             fmt_range(
-                [_number(row, "accuracy", TASK1_CONTROL) for row in task1],
-                fmt_percent,
-                "Task 1 accuracy range",
+                rq.over_cells("task1_accuracy"), fmt_percent, "Task 1 accuracy range"
             ),
         ),
         Macro(
             "numTaskOneUpgrade",
-            fmt_percent(_pooled(upgrade_pairs, "Task 1 upgrade")),
+            fmt_percent(rq.pooled("task1_unsupported_acceptance_90_rate")),
             "unsupported mandatory acceptance, conf >= 0.90",
+        ),
+        Macro(
+            "numTaskOneUpgradeCI",
+            f"{fmt_percent(rq.pooled('task1_unsupported_acceptance_90_ci_low'))}--"
+            f"{fmt_percent(rq.pooled('task1_unsupported_acceptance_90_ci_high'))}",
+            cluster_note(str(rq.grand.get("task1_ci_cluster_field", ""))),
         ),
         Macro(
             "numTaskOneUpgradeRange",
             fmt_range(
-                [
-                    _number(row, "unsupported_mandatory_acceptance_90", TASK1_CONTROL)
-                    for row in task1
-                ],
+                rq.over_cells("task1_unsupported_acceptance_90_rate"),
                 fmt_percent,
                 "Task 1 upgrade range",
             ),
@@ -973,7 +984,7 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         Macro(
             "numTaskOneUpgradeModels",
             fmt_range(upgrade_by_model, fmt_percent, "Task 1 upgrade by model"),
-            f"per model, pooled over cells ({BLIND_MODEL_SUMMARY})",
+            f"per model, pooled over cells ({PER_MODEL_RQ})",
         ),
         Macro(
             "numLabelAcc", fmt_percent(_pooled(label_pairs, "Task 2 label accuracy"))
@@ -1066,11 +1077,13 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         Macro(
             "numWeakStrictRange",
             fmt_range(
-                list(weak_by_cell.values()), fmt_percent, "weak strict over cells"
+                rq.over_cells("task2_weak_strict_high_conf_90_rate"),
+                fmt_percent,
+                "weak strict over cells",
             ),
             "over cells",
         ),
-        Macro("numWeakStrictNum", fmt_count(weak_rate * weak_denominator)),
+        Macro("numWeakStrictNum", fmt_count(weak_numerator)),
         Macro("numWeakStrictDen", fmt_count(weak_denominator), "readable weak answers"),
         Macro(
             "numWeakStrictModelsRange",
@@ -1109,19 +1122,6 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
     return macros
 
 
-def _weak_denominator(
-    modality: Sequence[Mapping[str, Any]], model: str, cell: tuple[str, str]
-) -> float:
-    """Readable weak-intent answers for one model in one cell."""
-    return sum(
-        _number(row, "strict_strengthening_denominator", MODALITY_TABLE)
-        for row in modality
-        if str(row["model"]) == model
-        and _cell_id(row) == cell
-        and str(row["source_modality"]) == "nice_to_have"
-    )
-
-
 def _cross_check_headlines(
     artifacts: Artifacts,
     warnings: list[str],
@@ -1158,6 +1158,39 @@ def _cross_check_headlines(
             )
 
 
+def _cross_check_rq_table(
+    artifacts: Artifacts,
+    warnings: list[str],
+    rq: RqTable,
+    strict: HeadlineRate,
+    broad: HeadlineRate,
+) -> None:
+    """The two generated headline paths must agree on the same numbers.
+
+    `paper_headline_bootstrap_ci.csv` and the RQ table's pooled row are written
+    by the same exporter run from the same score rows, so a disagreement means
+    one of the two slices is wrong -- worth a warning rather than a silent
+    preference for whichever the macro happens to read.
+    """
+    for label, headline, column in (
+        ("strict", strict, "task2_strict_strengthening"),
+        ("broad", broad, "task2_broad_strengthening"),
+    ):
+        pooled = rq.pooled(f"{column}_rate")
+        if math.isfinite(pooled) and abs(pooled - headline.value) > 1e-9:
+            warnings.append(
+                f"{PER_MODEL_RQ}: pooled {label} strengthening {pooled:.6f} "
+                f"disagrees with {HEADLINE_BOOTSTRAP_CI} {headline.value:.6f}"
+            )
+        declared = round(rq.pooled(f"{column}_denominator"))
+        if declared != headline.n_denominator:
+            warnings.append(
+                f"{PER_MODEL_RQ}: pooled {label} denominator {declared} disagrees "
+                f"with {HEADLINE_BOOTSTRAP_CI} {headline.n_denominator}"
+            )
+    _ = artifacts
+
+
 def _cross_check_per_model(
     artifacts: Artifacts,
     warnings: list[str],
@@ -1180,84 +1213,80 @@ def _cross_check_per_model(
 
 
 def _rq2_block(artifacts: Artifacts) -> list[Macro]:
-    confidence = artifacts[CONFIDENCE_STABILITY]
-    high_conf = [
-        _number(row, "strict_text_oc_conf_ge_90", CONFIDENCE_STABILITY)
-        for row in confidence
-    ]
-    unanimous = [
-        _number(row, "strict_text_oc_unanimous_modality_samples", CONFIDENCE_STABILITY)
-        for row in confidence
-    ]
-    high_conf_models = [
-        _number(row, "strict_high_conf_share_90", PER_MODEL_HEADLINE)
-        for row in artifacts[PER_MODEL_HEADLINE]
-    ]
+    """Signal macros. Every rate is the pooled one, with its clustered CI.
 
-    acse_cells = [
-        _number(row, "strict_text_oc_auroc", ACSE_SUMMARY)
-        for row in artifacts[ACSE_SUMMARY]
-    ]
-    acse_by_model = _group(artifacts[ACSE_BY_MODEL], lambda row: str(row["model"]))
-    acse_models = [
-        _macro_over(
-            [_number(row, "strict_text_oc_auroc", ACSE_BY_MODEL) for row in rows],
-            f"{ACSE_BY_MODEL} {model}",
-        )
-        for model, rows in acse_by_model.items()
-    ]
-
-    verbalized = _one(
-        [
-            row
-            for row in artifacts[UQ_TEXT_DRIFT_OVERALL]
-            if str(row["uq_method"]) == "verbalized_confidence"
-        ],
-        f"{UQ_TEXT_DRIFT_OVERALL}: uq_method=verbalized_confidence",
-    )
-
+    These used to be unweighted macros over the four cells, taken from static
+    snapshots. The RQ table computes them over the same rows the bootstrap
+    resamples, so the pooled value and the range beside it share a denominator.
+    """
+    rq = RqTable(artifacts[PER_MODEL_RQ])
+    cluster = cluster_note(str(rq.grand.get("task2_ci_cluster_field", "")))
     return [
         Macro(
             "numHighConfShare",
-            fmt_percent(_macro_over(high_conf, "high-confidence share")),
-            "unweighted macro over cells (docs/aggregation.md section 5)",
+            fmt_percent(rq.pooled("task2_strict_high_conf_90_rate")),
+            cluster,
+        ),
+        Macro(
+            "numHighConfShareCI",
+            f"{fmt_percent(rq.pooled('task2_strict_high_conf_90_ci_low'))}--"
+            f"{fmt_percent(rq.pooled('task2_strict_high_conf_90_ci_high'))}",
         ),
         Macro(
             "numHighConfShareRange",
-            fmt_range(high_conf, fmt_percent, "high-confidence share over cells"),
+            fmt_range(
+                rq.over_cells("task2_strict_high_conf_90_rate"),
+                fmt_percent,
+                "high-confidence share over cells",
+            ),
             "over cells",
         ),
         Macro(
             "numHighConfModelsRange",
             fmt_range(
-                high_conf_models, fmt_percent, "high-confidence share over models"
+                rq.over_models("task2_strict_high_conf_90_rate"),
+                fmt_percent,
+                "high-confidence share over models",
             ),
             "over models",
         ),
         Macro(
             "numSampleAgreement",
-            fmt_percent(_macro_over(unanimous, "repeated-sample agreement")),
+            fmt_percent(rq.pooled("task2_strict_agreement_rate")),
+            "unanimous repeated samples, complete groups only",
         ),
         Macro(
             "numMeaningVarAUROC",
-            fmt_auroc(_macro_over(acse_cells, "meaning-variation AUROC")),
-            "macro over cells; an AUROC has no pooled form",
+            fmt_auroc(rq.pooled("task2_meaning_variation_auroc")),
+            cluster,
+        ),
+        Macro(
+            "numMeaningVarAUROCCI",
+            f"{fmt_auroc(rq.pooled('task2_meaning_variation_auroc_ci_low'))}--"
+            f"{fmt_auroc(rq.pooled('task2_meaning_variation_auroc_ci_high'))}",
         ),
         Macro(
             "numMeaningVarAUROCRange",
-            fmt_range(acse_cells, fmt_auroc, "meaning-variation AUROC over cells"),
+            fmt_range(
+                rq.over_cells("task2_meaning_variation_auroc"),
+                fmt_auroc,
+                "meaning-variation AUROC over cells",
+            ),
             "over cells",
         ),
         Macro(
             "numMeaningVarAUROCModels",
-            fmt_range(acse_models, fmt_auroc, "meaning-variation AUROC over models"),
-            "over models, macro over each model's cells",
+            fmt_range(
+                rq.over_models("task2_meaning_variation_auroc"),
+                fmt_auroc,
+                "meaning-variation AUROC over models",
+            ),
+            "over models",
         ),
         Macro(
             "numVerbConfAUROC",
-            fmt_auroc(
-                _number(verbalized, "strict_text_oc_auroc", UQ_TEXT_DRIFT_OVERALL)
-            ),
+            fmt_auroc(rq.pooled("task2_verbalized_confidence_auroc")),
+            "verbalized confidence as a strengthening detector",
         ),
     ]
 
@@ -1311,33 +1340,7 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
         for condition in ("recommended", "optional", "nice_to_have")
     }
 
-    audit = artifacts[BLIND_AUDIT]
-    recall = [_number(row, "strict_strengthening_recall", BLIND_AUDIT) for row in audit]
-    preserve = [
-        _number(row, "strict_false_preserve_rate", BLIND_AUDIT) for row in audit
-    ]
-    blind_models = _group(artifacts[BLIND_MODEL_SUMMARY], lambda row: str(row["model"]))
-    recall_models = [
-        _pooled(
-            [
-                (
-                    _number(
-                        row, "task3_strict_strengthening_recall", BLIND_MODEL_SUMMARY
-                    )
-                    * _number(row, "task3_strict_strengthened_n", BLIND_MODEL_SUMMARY),
-                    _number(row, "task3_strict_strengthened_n", BLIND_MODEL_SUMMARY),
-                )
-                for row in rows
-                if math.isfinite(
-                    _number(
-                        row, "task3_strict_strengthening_recall", BLIND_MODEL_SUMMARY
-                    )
-                )
-            ],
-            f"{BLIND_MODEL_SUMMARY} {model} blind recall",
-        )
-        for model, rows in blind_models.items()
-    ]
+    rq = RqTable(artifacts[PER_MODEL_RQ])
 
     def auroc(row: Mapping[str, Any]) -> str:
         return fmt_auroc(_number(row, "auroc_mean", PROBE_GRID))
@@ -1362,28 +1365,194 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
         ),
         Macro(
             "numBlindRecall",
-            fmt_percent(_macro_over(recall, "blind strict recall")),
-            "strict gold strengthening, macro over cells",
+            fmt_percent(rq.pooled("task3_strict_flagged_rate")),
+            cluster_note(str(rq.grand.get("task3_ci_cluster_field", ""))),
+        ),
+        Macro(
+            "numBlindRecallCI",
+            f"{fmt_percent(rq.pooled('task3_strict_flagged_ci_low'))}--"
+            f"{fmt_percent(rq.pooled('task3_strict_flagged_ci_high'))}",
         ),
         Macro(
             "numBlindRecallRange",
-            fmt_range(recall, fmt_percent, "blind strict recall over cells"),
+            fmt_range(
+                rq.over_cells("task3_strict_flagged_rate"),
+                fmt_percent,
+                "blind strict recall over cells",
+            ),
             "over cells",
         ),
         Macro(
             "numBlindRecallModelsRange",
-            fmt_range(recall_models, fmt_percent, "blind strict recall over models"),
+            fmt_range(
+                rq.over_models("task3_strict_flagged_rate"),
+                fmt_percent,
+                "blind strict recall over models",
+            ),
             "per model, pooled over cells",
         ),
         Macro(
             "numBlindMissed",
-            fmt_percent(_macro_over(preserve, "blind strict false preserve")),
+            fmt_percent(rq.pooled("task3_strict_called_preserved_rate")),
             "strict-strengthened answers called preserved",
         ),
         Macro(
             "numBlindMissedRange",
-            fmt_range(preserve, fmt_percent, "blind false preserve over cells"),
+            fmt_range(
+                rq.over_cells("task3_strict_called_preserved_rate"),
+                fmt_percent,
+                "blind false preserve over cells",
+            ),
             "over cells",
+        ),
+    ]
+
+
+def fmt_pct_ci(rate: float, low: float, high: float) -> str:
+    """``8.6 [7.6, 9.6]``, or ``8.6 ---`` for a degenerate interval.
+
+    The dash case is tested on the *formatted* bounds, not the raw floats: an
+    interval that collapses to within a rounding step would otherwise print as
+    ``[0.0, 0.0]``, which reads like a measured width rather than none. A rate
+    that does not exist at all (no rows) prints a bare dash.
+    """
+    if not math.isfinite(rate):
+        return "---"
+    value = fmt_percent(rate)
+    if not (math.isfinite(low) and math.isfinite(high)):
+        return f"{value} ---"
+    low_text, high_text = fmt_percent(low), fmt_percent(high)
+    if low_text == high_text:
+        return f"{value} ---"
+    return f"{value} [{low_text}, {high_text}]"
+
+
+def fmt_auroc_ci(value: float, low: float, high: float) -> str:
+    """``0.768 [0.742, 0.791]``, with the same degenerate and absent cases."""
+    if not math.isfinite(value):
+        return "---"
+    text = fmt_auroc(value)
+    if not (math.isfinite(low) and math.isfinite(high)):
+        return f"{text} ---"
+    low_text, high_text = fmt_auroc(low), fmt_auroc(high)
+    if low_text == high_text:
+        return f"{text} ---"
+    return f"{text} [{low_text}, {high_text}]"
+
+
+def render_grouped_table_body(
+    hosted_rows: Sequence[str],
+    local_rows: Sequence[str],
+    all_row: str,
+    n_columns: int,
+) -> str:
+    r"""Everything between a table's header rule and its bottom rule.
+
+    Hosted models, then local models (a `\placeholder` row while none have
+    run), then the pooled row after an inner rule. Shared by all three per-model
+    tables so their bodies cannot drift apart.
+    """
+    group = f"\\multicolumn{{{n_columns}}}{{@{{}}l}}"
+    placeholder = " & ".join(
+        [r"\placeholder{model}"] + [r"\placeholder{}"] * (n_columns - 1)
+    )
+    lines = [f"{group}{{\\textit{{Hosted}}}} \\\\", *hosted_rows]
+    lines += [
+        r"\addlinespace[0.3em]",
+        f"{group}{{\\textit{{Local (llama.cpp)}}}} \\\\",
+        *(local_rows or [placeholder + r" \\"]),
+        r"\midrule",
+        all_row,
+    ]
+    return "\n".join(lines)
+
+
+def _rq_table_rows(rq: RqTable, models: Sequence[str]) -> tuple[list[str], list[str]]:
+    """The `tab:rq1` and `tab:rq23` cells for each of `models`, in table order."""
+    rq_one: list[str] = []
+    rq_two_three: list[str] = []
+    for model in models:
+        row = rq.by_model.get(model)
+        if row is None:
+            raise PaperNumbersError(f"{PER_MODEL_RQ}: model {model} has no pooled row")
+        rq_one.append(_rq_one_row(model_label(model), row))
+        rq_two_three.append(_rq_two_three_row(model_label(model), row))
+    return rq_one, rq_two_three
+
+
+def _rate_cell(row: Mapping[str, Any], name: str) -> str:
+    return fmt_pct_ci(
+        _number(row, f"{name}_rate", PER_MODEL_RQ),
+        _number(row, f"{name}_ci_low", PER_MODEL_RQ),
+        _number(row, f"{name}_ci_high", PER_MODEL_RQ),
+    )
+
+
+def _rq_one_row(label: str, row: Mapping[str, Any]) -> str:
+    """Model | Task 1 N, rate | Task 2 N, strict, broad | weak N, strict."""
+    columns = [
+        label,
+        fmt_count(
+            _number(row, "task1_unsupported_acceptance_90_denominator", PER_MODEL_RQ)
+        ),
+        _rate_cell(row, "task1_unsupported_acceptance_90"),
+        fmt_count(_number(row, "task2_n_readable", PER_MODEL_RQ)),
+        _rate_cell(row, "task2_strict_strengthening"),
+        _rate_cell(row, "task2_broad_strengthening"),
+        fmt_count(_number(row, "task2_weak_n_readable", PER_MODEL_RQ)),
+        _rate_cell(row, "task2_weak_strict_strengthening"),
+    ]
+    return " & ".join(columns) + r" \\"
+
+
+def _rq_two_three_row(label: str, row: Mapping[str, Any]) -> str:
+    """Model | strengthened N | confidence | meaning variation | blind check."""
+    columns = [
+        label,
+        fmt_count(_number(row, "task2_strict_strengthening_n", PER_MODEL_RQ)),
+        _rate_cell(row, "task2_strict_high_conf_90"),
+        fmt_auroc_ci(
+            _number(row, "task2_meaning_variation_auroc", PER_MODEL_RQ),
+            _number(row, "task2_meaning_variation_auroc_ci_low", PER_MODEL_RQ),
+            _number(row, "task2_meaning_variation_auroc_ci_high", PER_MODEL_RQ),
+        ),
+        _rate_cell(row, "task3_strict_flagged"),
+        _rate_cell(row, "task3_strict_called_preserved"),
+    ]
+    return " & ".join(columns) + r" \\"
+
+
+def _rq_table_blocks(artifacts: Artifacts) -> list[Macro]:
+    """The two RQ table bodies, hosted then local then the pooled row."""
+    rq = RqTable(artifacts[PER_MODEL_RQ])
+    hosted = order_models(
+        [model for model in rq.by_model if model not in set(artifacts.local_models)],
+        artifacts.hosted_models,
+    )
+    local = order_models(
+        [model for model in rq.by_model if model in set(artifacts.local_models)],
+        artifacts.local_models,
+    )
+    hosted_one, hosted_two_three = _rq_table_rows(rq, hosted)
+    local_one, local_two_three = _rq_table_rows(rq, local)
+    grand = rq.grand or {}
+    return [
+        Macro(
+            "numTableRqOneRows",
+            render_grouped_table_body(
+                hosted_one, local_one, _rq_one_row("All models", grand), 8
+            ),
+            "tab:rq1 body",
+        ),
+        Macro(
+            "numTableRqTwoThreeRows",
+            render_grouped_table_body(
+                hosted_two_three,
+                local_two_three,
+                _rq_two_three_row("All models", grand),
+                6,
+            ),
+            "tab:rq23 body",
         ),
     ]
 
@@ -1391,7 +1560,7 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
 def _per_model_blocks(artifacts: Artifacts) -> tuple[list[Macro], list[Macro], str]:
     modality = artifacts[MODALITY_TABLE]
     by_model = _group(modality, lambda row: str(row["model"]))
-    models = order_models(by_model)
+    models = order_models(by_model, artifacts.hosted_models + artifacts.local_models)
 
     pooled: list[Macro] = []
     conditions: list[Macro] = []
@@ -1452,6 +1621,7 @@ def build_blocks(
             "Per-model table body (Table 3)",
             [Macro("numTableThreeRows", table_body, "rows only, hosted cohort first")],
         ),
+        ("RQ table bodies (tab:rq1, tab:rq23)", _rq_table_blocks(artifacts)),
     ]
     return blocks, warnings
 

@@ -79,6 +79,35 @@ BLIND_MODEL = {
     ("kit.gemma4-31b-it", ("nice", "shall")): (0.0, 0.60, 100, 0.9),
 }
 
+# (model, cell) -> (task1 upgrade rate, blind strict recall).
+RQ_MODEL = {
+    ("glm-5.1", ("mlm_tapt", "must")): (0.02, 0.5),
+    ("glm-5.1", ("nice", "shall")): (0.04, 0.4),
+    ("kit.gemma4-31b-it", ("mlm_tapt", "must")): (0.0, 0.7),
+    ("kit.gemma4-31b-it", ("nice", "shall")): (0.0, 0.9),
+}
+# cell -> shares that vary by cell, so a pooled value and the range beside it
+# are different numbers in the fixture too.
+CELL_SHARES = {
+    ("mlm_tapt", "must"): {
+        "task1_accuracy": 0.99,
+        "high_conf": 0.99,
+        "agreement": 0.65,
+        "meaning_variation_auroc": 0.70,
+        "verbalized_confidence_auroc": 0.76,
+        "called_preserved": 0.44,
+    },
+    ("nice", "shall"): {
+        "task1_accuracy": 0.97,
+        "high_conf": 0.97,
+        "agreement": 0.61,
+        "meaning_variation_auroc": 0.80,
+        "verbalized_confidence_auroc": 0.82,
+        "called_preserved": 0.48,
+    },
+}
+TASK1_ITEMS_PER_CELL = 1000
+
 DETERMINISTIC = "deterministic_strict_text_overcommit"
 SAMPLED = "sample_strict_text_overcommit"
 
@@ -114,13 +143,32 @@ PROBE_ROWS = [
 ]
 
 
+#: A model the fixture has no hand-written counts for (a local model, say)
+#: reuses this cohort member's, so tests can add one without a second table.
+FALLBACK_FIXTURE_MODEL = "kit.gemma4-31b-it"
+
+
+def _coverage(model: str, cell: tuple[str, str]) -> int:
+    return COVERAGE.get((model, cell), COVERAGE[(FALLBACK_FIXTURE_MODEL, cell)])
+
+
+def _strengthening(model: str, cell: tuple[str, str]) -> dict[str, tuple[int, int]]:
+    return STRENGTHENING.get(
+        (model, cell), STRENGTHENING[(FALLBACK_FIXTURE_MODEL, cell)]
+    )
+
+
+def _rq_model(model: str, cell: tuple[str, str]) -> tuple[float, float]:
+    return RQ_MODEL.get((model, cell), RQ_MODEL[(FALLBACK_FIXTURE_MODEL, cell)])
+
+
 def _modality_rows(models: list[str]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for model in models:
         for cell in CELLS:
-            denominator = COVERAGE[(model, cell)]
+            denominator = _coverage(model, cell)
             for condition in CONDITIONS:
-                strict_n, broad_n = STRENGTHENING[(model, cell)][condition]
+                strict_n, broad_n = _strengthening(model, cell)[condition]
                 rows.append(
                     {
                         "model": model,
@@ -150,8 +198,8 @@ def _per_model_headline_rows(models: list[str]) -> list[dict[str, object]]:
         for cell in CELLS:
             for condition in CONDITIONS:
                 items += N_ITEMS_PER_ROW
-                denominator += COVERAGE[(model, cell)]
-                strict, broad = STRENGTHENING[(model, cell)][condition]
+                denominator += _coverage(model, cell)
+                strict, broad = _strengthening(model, cell)[condition]
                 strict_n += strict
                 broad_n += broad
         rows.append(
@@ -168,6 +216,145 @@ def _per_model_headline_rows(models: list[str]) -> list[dict[str, object]]:
                 "strict_high_conf_share_90": high_conf.get(model, 1.0),
             }
         )
+    return rows
+
+
+def _cell_counts(model, cell):
+    """(strict, broad, readable, weak strict, weak readable) for one model-cell."""
+    coverage = _coverage(model, cell)
+    counts = _strengthening(model, cell)
+    strict = sum(strict_n for strict_n, _ in counts.values())
+    broad = sum(broad_n for _, broad_n in counts.values())
+    return (
+        strict,
+        broad,
+        coverage * len(CONDITIONS),
+        counts["nice_to_have"][0],
+        coverage,
+    )
+
+
+def _weighted(pairs):
+    """Item-weighted mean of (value, weight) pairs, 0.0 when nothing weighs."""
+    total = sum(weight for _, weight in pairs)
+    return sum(value * weight for value, weight in pairs) / total if total else 0.0
+
+
+def _rq_row(model, dataset, variant, models, cells):
+    """One row of the per-model RQ table, derived from the modality fixture.
+
+    Counts come from `STRENGTHENING`/`COVERAGE`, so the pooled row agrees with
+    `paper_headline_bootstrap_ci.csv` and the exporter's cross-check stays
+    silent; the cell-varying shares come from `CELL_SHARES`.
+    """
+    counts = [(m, cell, _cell_counts(m, cell)) for m in models for cell in cells]
+    strict = sum(cell_counts[0] for _, _, cell_counts in counts)
+    broad = sum(cell_counts[1] for _, _, cell_counts in counts)
+    readable = sum(cell_counts[2] for _, _, cell_counts in counts)
+    weak_strict = sum(cell_counts[3] for _, _, cell_counts in counts)
+    weak_readable = sum(cell_counts[4] for _, _, cell_counts in counts)
+    task1_items = TASK1_ITEMS_PER_CELL * len(models) * len(cells)
+
+    def by_cell(key, weight_index):
+        return _weighted(
+            [
+                (CELL_SHARES[cell][key], cell_counts[weight_index])
+                for _, cell, cell_counts in counts
+            ]
+        )
+
+    row = {
+        "model": model,
+        "dataset": dataset,
+        "variant": variant,
+        "n_models_pooled": len(models),
+        "n_cells_pooled": len(cells),
+        "bootstrap_samples": 1000,
+        "bootstrap_seed": 20260518,
+        "task1_ci_cluster_field": "batch_id",
+        "task2_ci_cluster_field": "batch_id",
+        "task3_ci_cluster_field": "batch_id",
+        "task1_n": task1_items,
+        "task1_accuracy": _weighted(
+            [
+                (CELL_SHARES[cell]["task1_accuracy"], TASK1_ITEMS_PER_CELL)
+                for _, cell, _ in counts
+            ]
+        ),
+        "task2_n": readable,
+        "task2_n_readable": readable,
+        "task2_weak_n": weak_readable,
+        "task2_weak_n_readable": weak_readable,
+        "task3_n": strict,
+        "task3_strict_joined_n": strict,
+        "task3_strict_unaudited_n": 0,
+        "task2_strict_agreement_incomplete_excluded": 0,
+    }
+    for name, key in (
+        ("task2_meaning_variation_auroc", "meaning_variation_auroc"),
+        ("task2_verbalized_confidence_auroc", "verbalized_confidence_auroc"),
+    ):
+        value = by_cell(key, 2)
+        row.update(
+            {
+                name: value,
+                f"{name}_n": readable,
+                f"{name}_n_positive": strict,
+                f"{name}_ci_low": value - 0.03,
+                f"{name}_ci_high": value + 0.03,
+                f"{name}_seed_ci_low": value - 0.02,
+                f"{name}_seed_ci_high": value + 0.02,
+            }
+        )
+
+    upgrade = _weighted(
+        [(_rq_model(m, cell)[0], TASK1_ITEMS_PER_CELL) for m, cell, _ in counts]
+    )
+    recall = _weighted(
+        [(_rq_model(m, cell)[1], cell_counts[0]) for m, cell, cell_counts in counts]
+    )
+    rates = {
+        "task1_unsupported_acceptance_90": (
+            round(upgrade * task1_items),
+            task1_items,
+        ),
+        "task2_no_cue": (0, readable),
+        "task2_strict_strengthening": (strict, readable),
+        "task2_broad_strengthening": (broad, readable),
+        "task2_weak_strict_strengthening": (weak_strict, weak_readable),
+        "task2_weak_strict_high_conf_90": (weak_strict, weak_readable),
+        "task2_strict_high_conf_90": (by_cell("high_conf", 0) * strict, strict),
+        "task2_strict_agreement": (by_cell("agreement", 0) * strict, strict),
+        "task3_strict_flagged": (recall * strict, strict),
+        "task3_strict_called_preserved": (
+            by_cell("called_preserved", 0) * strict,
+            strict,
+        ),
+    }
+    for name, (numerator, denominator) in rates.items():
+        rate = numerator / denominator if denominator else ""
+        row.update(
+            {
+                f"{name}_n": round(numerator),
+                f"{name}_denominator": denominator,
+                f"{name}_rate": rate,
+                f"{name}_ci_low": max(0.0, rate - 0.01) if rate != "" else "",
+                f"{name}_ci_high": min(1.0, rate + 0.01) if rate != "" else "",
+                f"{name}_seed_ci_low": max(0.0, rate - 0.005) if rate != "" else "",
+                f"{name}_seed_ci_high": min(1.0, rate + 0.005) if rate != "" else "",
+            }
+        )
+    return row
+
+
+def _rq_rows(models):
+    """Per-model rows, per-cell rows, and the pooled row."""
+    rows = [_rq_row(model, "all", "all", [model], CELLS) for model in models]
+    rows += [
+        _rq_row("all", dataset, variant, models, [(dataset, variant)])
+        for dataset, variant in CELLS
+    ]
+    rows.append(_rq_row("all", "all", "all", models, CELLS))
     return rows
 
 
@@ -236,25 +423,6 @@ def write_fixture(outputs_dir: Path, models: list[str] | None = None) -> None:
         ],
     )
     eu.write_csv_rows(
-        outputs_dir / exporter.TASK1_CONTROL,
-        [
-            {
-                "dataset": "mlm_tapt",
-                "variant": "must",
-                "n": 1000,
-                "accuracy": 0.99,
-                "unsupported_mandatory_acceptance_90": 0.01,
-            },
-            {
-                "dataset": "nice",
-                "variant": "shall",
-                "n": 1000,
-                "accuracy": 0.97,
-                "unsupported_mandatory_acceptance_90": 0.03,
-            },
-        ],
-    )
-    eu.write_csv_rows(
         outputs_dir / exporter.TASK2_TEXT_DRIFT,
         [
             {
@@ -294,100 +462,7 @@ def write_fixture(outputs_dir: Path, models: list[str] | None = None) -> None:
             },
         ],
     )
-    eu.write_csv_rows(
-        outputs_dir / exporter.BLIND_AUDIT,
-        [
-            {
-                "dataset": "mlm_tapt",
-                "variant": "must",
-                "strict_gold_strengthening_n": 400,
-                "strict_strengthening_recall": 0.6,
-                "strict_false_preserve_rate": 0.2,
-            },
-            {
-                "dataset": "nice",
-                "variant": "shall",
-                "strict_gold_strengthening_n": 200,
-                "strict_strengthening_recall": 0.4,
-                "strict_false_preserve_rate": 0.5,
-            },
-        ],
-    )
-    eu.write_csv_rows(
-        outputs_dir / exporter.BLIND_MODEL_SUMMARY,
-        [
-            {
-                "dataset": cell[0],
-                "variant": cell[1],
-                "model": model,
-                "task1_n": 500,
-                "task1_unsupported_mandatory_acceptance_90": upgrade,
-                "task2_weak_strict_text_strengthening_90": weak,
-                "task3_strict_strengthened_n": gold,
-                "task3_strict_strengthening_recall": recall,
-            }
-            for (model, cell), (upgrade, weak, gold, recall) in BLIND_MODEL.items()
-            if model in models
-        ],
-    )
-    eu.write_csv_rows(
-        outputs_dir / exporter.BLIND_ANALYSIS_SUMMARY,
-        [
-            {
-                "dataset": "mlm_tapt",
-                "variant": "must",
-                "weak_strict_text_strengthening_90": "30.0%",
-            },
-            {
-                "dataset": "nice",
-                "variant": "shall",
-                "weak_strict_text_strengthening_90": "25.0%",
-            },
-        ],
-    )
-    eu.write_csv_rows(
-        outputs_dir / exporter.UQ_TEXT_DRIFT_OVERALL,
-        [
-            {"uq_method": "acse_semantic_entropy", "strict_text_oc_auroc": 0.7685},
-            {"uq_method": "verbalized_confidence", "strict_text_oc_auroc": 0.78758},
-        ],
-    )
-    eu.write_csv_rows(
-        outputs_dir / exporter.ACSE_SUMMARY,
-        [
-            {"dataset": "mlm_tapt", "variant": "must", "strict_text_oc_auroc": 0.80},
-            {"dataset": "nice", "variant": "shall", "strict_text_oc_auroc": 0.70},
-        ],
-    )
-    eu.write_csv_rows(
-        outputs_dir / exporter.ACSE_BY_MODEL,
-        [
-            {
-                "dataset": "mlm_tapt",
-                "variant": "must",
-                "model": "glm-5.1",
-                "strict_text_oc_auroc": 0.80,
-            },
-            {
-                "dataset": "nice",
-                "variant": "shall",
-                "model": "glm-5.1",
-                "strict_text_oc_auroc": 0.70,
-            },
-            {
-                "dataset": "mlm_tapt",
-                "variant": "must",
-                "model": "kit.gemma4-31b-it",
-                "strict_text_oc_auroc": 0.90,
-            },
-            {
-                "dataset": "nice",
-                "variant": "shall",
-                "model": "kit.gemma4-31b-it",
-                "strict_text_oc_auroc": "nan",
-            },
-        ],
-    )
+    eu.write_csv_rows(outputs_dir / exporter.PER_MODEL_RQ, _rq_rows(models))
     eu.write_csv_rows(
         outputs_dir / exporter.PROBE_GRID,
         [
@@ -403,6 +478,12 @@ def write_fixture(outputs_dir: Path, models: list[str] | None = None) -> None:
             }
             for backend, variant, group, scope, target, auroc, auprc in PROBE_ROWS
         ],
+    )
+
+    # Written last: `stale_provenance` compares mtimes against this file.
+    eu.write_json(
+        outputs_dir / exporter.SNAPSHOT_PROVENANCE,
+        {"models_hosted": exporter.order_models(models), "models_local": []},
     )
 
 
@@ -485,32 +566,33 @@ class HeadlineMacroTest(ExporterFixtureTest):
         macros, _ = self.export()
         self.assertEqual(macros["numTaskOneAcc"], "98.0")
         self.assertEqual(macros["numTaskOneAccRange"], "97.0--99.0")
-        self.assertEqual(macros["numTaskOneUpgrade"], "2.0")
-        self.assertEqual(macros["numTaskOneUpgradeRange"], "1.0--3.0")
+        self.assertEqual(macros["numTaskOneUpgrade"], "1.5")
+        self.assertEqual(macros["numTaskOneUpgradeCI"], "0.5--2.5")
+        self.assertEqual(macros["numTaskOneUpgradeRange"], "1.0--2.0")
         self.assertEqual(macros["numTaskOneUpgradeModels"], "0.0--3.0")
         self.assertEqual(macros["numLabelAcc"], "100.0")
         self.assertEqual(macros["numLabelStrengthening"], "0.0")
 
     def test_weak_intent_headline_uses_the_named_cell(self) -> None:
         macros, _ = self.export()
-        self.assertEqual(macros["numWeakStrict"], "30.0")
-        self.assertEqual(macros["numWeakStrictRange"], "25.0--30.0")
+        self.assertEqual(macros["numWeakStrict"], "38.9")
+        self.assertEqual(macros["numWeakStrictRange"], "30.0--38.9")
         self.assertEqual(macros["numWeakStrictDen"], "3600")
-        self.assertEqual(macros["numWeakStrictNum"], "1080")
+        self.assertEqual(macros["numWeakStrictNum"], "1400")
         # Per model, pooled over cells by the readable weak denominator.
-        self.assertEqual(macros["numWeakStrictModelsRange"], "27.6--55.0")
+        self.assertEqual(macros["numWeakStrictModelsRange"], "27.6--40.0")
 
     def test_uncertainty_and_detector_macros(self) -> None:
         macros, _ = self.export()
-        self.assertEqual(macros["numHighConfShare"], "95.0")
-        self.assertEqual(macros["numHighConfShareRange"], "90.0--100.0")
-        self.assertEqual(macros["numHighConfModelsRange"], "90.0--100.0")
-        self.assertEqual(macros["numSampleAgreement"], "100.0")
-        self.assertEqual(macros["numMeaningVarAUROC"], "0.750")
+        # Pooled over the rows the bootstrap resamples, not a macro over cells.
+        self.assertEqual(macros["numHighConfShare"], "98.1")
+        self.assertEqual(macros["numHighConfShareRange"], "97.0--99.0")
+        self.assertEqual(macros["numHighConfModelsRange"], "97.8--98.4")
+        self.assertEqual(macros["numSampleAgreement"], "63.3")
+        self.assertEqual(macros["numMeaningVarAUROC"], "0.751")
         self.assertEqual(macros["numMeaningVarAUROCRange"], "0.700--0.800")
-        # kit.gemma4-31b-it has one nan cell; it is skipped, not propagated.
-        self.assertEqual(macros["numMeaningVarAUROCModels"], "0.750--0.900")
-        self.assertEqual(macros["numVerbConfAUROC"], "0.788")
+        self.assertEqual(macros["numMeaningVarAUROCModels"], "0.750--0.753")
+        self.assertEqual(macros["numVerbConfAUROC"], "0.791")
         self.assertEqual(macros["numEmbGlobalAUROC"], "0.700")
         self.assertEqual(macros["numEmbGlobalAUPRC"], "0.170")
         self.assertEqual(macros["numEmbSampledAUROC"], "0.744")
@@ -524,11 +606,12 @@ class HeadlineMacroTest(ExporterFixtureTest):
 
     def test_blind_audit_macros(self) -> None:
         macros, _ = self.export()
-        self.assertEqual(macros["numBlindRecall"], "50.0")
-        self.assertEqual(macros["numBlindRecallRange"], "40.0--60.0")
-        self.assertEqual(macros["numBlindMissed"], "35.0")
-        self.assertEqual(macros["numBlindMissedRange"], "20.0--50.0")
-        self.assertEqual(macros["numBlindRecallModelsRange"], "46.7--76.7")
+        self.assertEqual(macros["numBlindRecall"], "61.9")
+        self.assertEqual(macros["numBlindRecallCI"], "60.9--62.9")
+        self.assertEqual(macros["numBlindRecallRange"], "60.0--63.4")
+        self.assertEqual(macros["numBlindMissed"], "45.7")
+        self.assertEqual(macros["numBlindMissedRange"], "44.0--48.0")
+        self.assertEqual(macros["numBlindRecallModelsRange"], "44.2--76.3")
 
     def test_requirement_word_counts(self) -> None:
         macros, _ = self.export()
@@ -671,10 +754,10 @@ class OutputShapeTest(ExporterFixtureTest):
 
 class ValidationTest(ExporterFixtureTest):
     def test_missing_artifact_fails_closed(self) -> None:
-        (self.outputs / exporter.ACSE_SUMMARY).unlink()
+        (self.outputs / exporter.PER_MODEL_RQ).unlink()
         with self.assertRaises(SystemExit) as caught:
             self.run_exporter()
-        self.assertIn(exporter.ACSE_SUMMARY, str(caught.exception))
+        self.assertIn(exporter.PER_MODEL_RQ, str(caught.exception))
         self.assertFalse(self.output.exists())
 
     def test_missing_column_fails_closed(self) -> None:
@@ -687,24 +770,26 @@ class ValidationTest(ExporterFixtureTest):
         self.assertIn(exporter.MODALITY_TABLE, message)
         self.assertIn("strict_strengthening_denominator", message)
 
-    def test_missing_weak_column_in_both_sources_fails_closed(self) -> None:
+    def test_missing_rq_column_fails_closed(self) -> None:
         _drop_column(
-            self.outputs / exporter.BLIND_ANALYSIS_SUMMARY,
-            "weak_strict_text_strengthening_90",
+            self.outputs / exporter.PER_MODEL_RQ,
+            "task2_weak_strict_high_conf_90_rate",
         )
         with self.assertRaises(SystemExit) as caught:
             self.run_exporter()
-        self.assertIn("weak_strict_text_strengthening_90", str(caught.exception))
+        self.assertIn("task2_weak_strict_high_conf_90_rate", str(caught.exception))
 
-    def test_weak_column_in_the_task2_snapshot_is_preferred(self) -> None:
-        path = self.outputs / exporter.TASK2_TEXT_DRIFT
-        rows = eu.read_csv_rows(path)
-        for row, value in zip(rows, ["0.4", "0.2"], strict=True):
-            row["weak_strict_text_strengthening_90"] = value
+    def test_rq_table_without_a_pooled_row_fails_closed(self) -> None:
+        path = self.outputs / exporter.PER_MODEL_RQ
+        rows = [
+            row
+            for row in eu.read_csv_rows(path)
+            if (row["model"], row["dataset"]) != ("all", "all")
+        ]
         eu.write_csv_rows(path, rows)
-        macros, _ = self.export()
-        self.assertEqual(macros["numWeakStrict"], "40.0")
-        self.assertEqual(macros["numWeakStrictRange"], "20.0--40.0")
+        with self.assertRaises(SystemExit) as caught:
+            self.run_exporter()
+        self.assertIn("pooled row", str(caught.exception))
 
     def test_ambiguous_probe_selection_fails_closed(self) -> None:
         path = self.outputs / exporter.PROBE_GRID
@@ -716,8 +801,12 @@ class ValidationTest(ExporterFixtureTest):
         self.assertIn(exporter.PROBE_GRID, str(caught.exception))
 
     def test_missing_headline_cell_fails_closed(self) -> None:
-        path = self.outputs / exporter.BLIND_ANALYSIS_SUMMARY
-        rows = [row for row in eu.read_csv_rows(path) if row["dataset"] != "mlm_tapt"]
+        path = self.outputs / exporter.PER_MODEL_RQ
+        rows = [
+            row
+            for row in eu.read_csv_rows(path)
+            if not (row["model"] == "all" and row["dataset"] == "mlm_tapt")
+        ]
         eu.write_csv_rows(path, rows)
         with self.assertRaises(SystemExit) as caught:
             self.run_exporter()
@@ -900,3 +989,98 @@ class BenchmarkDesignCrossCheckTest(ExporterFixtureTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RqTableMacroTest(ExporterFixtureTest):
+    """`\\numTableRqOneRows` / `\\numTableRqTwoThreeRows`: the two table bodies."""
+
+    def _rows(self, body: str) -> list[str]:
+        return [line.strip() for line in body.splitlines() if line.strip()]
+
+    def test_rq_one_body_has_the_manuscript_column_order(self) -> None:
+        macros, _ = self.export()
+        rows = self._rows(macros["numTableRqOneRows"])
+
+        self.assertEqual(rows[0], r"\multicolumn{8}{@{}l}{\textit{Hosted}} \\")
+        self.assertEqual(
+            rows[1],
+            "GLM-5.1 & 2000 & 3.0 [2.0, 4.0] & 13,600 & 11.3 [10.3, 12.3] & "
+            r"20.6 [19.6, 21.6] & 3400 & 27.6 [26.6, 28.6] \\",
+        )
+        # Model, Task 1 N and rate, readable N, strict, broad, weak N, weak strict.
+        for row in rows[1:2] + rows[-1:]:
+            self.assertEqual(row.count("&"), 7)
+        self.assertTrue(rows[-1].startswith("All models &"))
+        self.assertEqual(rows[-2], r"\midrule")
+
+    def test_rq_two_three_body_has_the_manuscript_column_order(self) -> None:
+        macros, _ = self.export()
+        rows = self._rows(macros["numTableRqTwoThreeRows"])
+
+        self.assertEqual(rows[0], r"\multicolumn{6}{@{}l}{\textit{Hosted}} \\")
+        # Model, strengthened N, confidence, AUROC, flagged, called preserved.
+        self.assertEqual(rows[1].count("&"), 5)
+        self.assertIn("0.7", rows[1])
+        self.assertTrue(rows[-1].startswith("All models &"))
+
+    def test_hosted_order_follows_the_recorded_cohort(self) -> None:
+        write_fixture(self.outputs, models=["kit.gemma4-31b-it", "glm-5.1"])
+        eu.write_json(
+            self.outputs / exporter.SNAPSHOT_PROVENANCE,
+            {"models_hosted": ["kit.gemma4-31b-it", "glm-5.1"], "models_local": []},
+        )
+        macros, _ = self.export()
+        rows = self._rows(macros["numTableRqOneRows"])
+
+        # The provenance order wins over the pinned default cohort.
+        self.assertTrue(rows[1].startswith("Gemma-4-31B &"), rows[1])
+        self.assertTrue(rows[2].startswith("GLM-5.1 &"), rows[2])
+
+    def test_local_models_are_their_own_group_with_escaped_labels(self) -> None:
+        models = ["glm-5.1", "qwen/qwen3.5-9b"]
+        write_fixture(self.outputs, models=models)
+        eu.write_json(
+            self.outputs / exporter.SNAPSHOT_PROVENANCE,
+            {"models_hosted": ["glm-5.1"], "models_local": ["qwen/qwen3.5-9b"]},
+        )
+        macros, _ = self.export()
+        rows = self._rows(macros["numTableRqOneRows"])
+
+        self.assertTrue(rows[1].startswith("GLM-5.1 &"))
+        self.assertEqual(
+            rows[3], r"\multicolumn{8}{@{}l}{\textit{Local (llama.cpp)}} \\"
+        )
+        self.assertTrue(rows[4].startswith("qwen/qwen3.5-9b &"), rows[4])
+        self.assertNotIn(r"\placeholder", macros["numTableRqOneRows"])
+
+    def test_local_group_is_a_placeholder_row_until_a_local_model_runs(self) -> None:
+        macros, _ = self.export()
+        rows = self._rows(macros["numTableRqOneRows"])
+
+        placeholder = next(row for row in rows if r"\placeholder" in row)
+        self.assertEqual(placeholder.count("&"), 7)
+        self.assertTrue(placeholder.startswith(r"\placeholder{model}"))
+
+    def test_degenerate_and_absent_intervals_render_a_dash(self) -> None:
+        self.assertEqual(exporter.fmt_pct_ci(0.086, 0.076, 0.096), "8.6 [7.6, 9.6]")
+        self.assertEqual(exporter.fmt_pct_ci(0.0, 0.0, 0.0), "0.0 ---")
+        # Bounds that differ by less than the printed precision are not a width.
+        self.assertEqual(exporter.fmt_pct_ci(0.5, 0.50001, 0.50004), "50.0 ---")
+        self.assertEqual(exporter.fmt_pct_ci(float("nan"), 0.0, 1.0), "---")
+        self.assertEqual(
+            exporter.fmt_auroc_ci(0.7685, 0.742, 0.791), "0.768 [0.742, 0.791]"
+        )
+        self.assertEqual(exporter.fmt_auroc_ci(float("nan"), 0.0, 1.0), "---")
+
+    def test_pooled_rates_are_cross_checked_against_the_headline_snapshot(self) -> None:
+        path = self.outputs / exporter.PER_MODEL_RQ
+        rows = eu.read_csv_rows(path)
+        for row in rows:
+            if (row["model"], row["dataset"]) == ("all", "all"):
+                row["task2_strict_strengthening_rate"] = "0.42"
+        eu.write_csv_rows(path, rows)
+
+        _, printed = self.export()
+
+        self.assertIn("disagrees with", printed)
+        self.assertIn(exporter.HEADLINE_BOOTSTRAP_CI, printed)
