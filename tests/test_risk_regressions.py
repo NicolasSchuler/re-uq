@@ -266,7 +266,7 @@ class ExpectedStochasticSampleContractTest(unittest.TestCase):
             eu.append_jsonl(self.root / "data/processed/model_outputs_raw.jsonl", raw)
 
     def test_analysis_cli_counts_a_never_written_sample_as_incomplete(self) -> None:
-        """Known bug: the CLI records the expected count but does not score with it."""
+        """A sample the run never wrote is 4/5, not 4/4: the plan sets the denominator."""
         output_dir = self.root / "outputs/analysis"
         argv = [
             "generate_evaluation_analysis.py",
@@ -303,27 +303,8 @@ class ExpectedStochasticSampleContractTest(unittest.TestCase):
         self.assertEqual(consistency["total_n"], "5")
         self.assertEqual(consistency["stochastic_complete"], "False")
 
-    def test_run_matrix_counts_a_never_written_sample_as_incomplete(self) -> None:
-        """Known bug: matrix comparison also omits the configured sample count."""
-        eu.write_csv_rows(
-            self.root / "data/processed/run_registry.csv",
-            [
-                {
-                    "run_id": "full-1",
-                    "run_group_id": "group-1",
-                    "provider_id": "provider-1",
-                    "profile_id": "profile-1",
-                    "model": "model-1",
-                    "dataset_id": "nice",
-                    "benchmark_variant": "must",
-                    "status": "complete",
-                    "expected_stochastic_samples": 5,
-                }
-            ],
-            fieldnames=eu.RUN_REGISTRY_FIELDS,
-        )
-        config_path = self.root / "run_config.json"
-        config_path.write_text(
+    def _write_config(self, samples: int = 5) -> None:
+        (self.root / "run_config.json").write_text(
             json.dumps(
                 {
                     "run_group_id": "group-1",
@@ -332,7 +313,7 @@ class ExpectedStochasticSampleContractTest(unittest.TestCase):
                     "stochastic": {
                         "temperature": 0.7,
                         "top_p": 1.0,
-                        "samples": 5,
+                        "samples": samples,
                     },
                     "profiles": [
                         {
@@ -348,10 +329,31 @@ class ExpectedStochasticSampleContractTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+
+    def _write_registry(self, expected_stochastic_samples: object) -> None:
+        eu.write_csv_rows(
+            self.root / "data/processed/run_registry.csv",
+            [
+                {
+                    "run_id": "full-1",
+                    "run_group_id": "group-1",
+                    "provider_id": "provider-1",
+                    "profile_id": "profile-1",
+                    "model": "model-1",
+                    "dataset_id": "nice",
+                    "benchmark_variant": "must",
+                    "status": "complete",
+                    "expected_stochastic_samples": expected_stochastic_samples,
+                }
+            ],
+            fieldnames=eu.RUN_REGISTRY_FIELDS,
+        )
+
+    def _run_matrix(self) -> None:
         argv = [
             "compare_run_matrix.py",
             "--config",
-            str(config_path),
+            str(self.root / "run_config.json"),
             "--bootstrap-samples",
             "1",
         ]
@@ -363,6 +365,43 @@ class ExpectedStochasticSampleContractTest(unittest.TestCase):
             redirect_stdout(io.StringIO()),
         ):
             compare_matrix.main()
+
+    def test_a_run_executed_under_another_plan_is_not_silently_rescored(self) -> None:
+        """Judging a 3-sample run against a 5-sample config blanks its agreement."""
+        self._write_registry(3)
+        self._write_config()
+
+        with self.assertRaises(compare_matrix.SamplingPlanMismatchError) as caught:
+            self._run_matrix()
+
+        self.assertIn("3 stochastic sample(s)", str(caught.exception))
+        self.assertIn("declares 5", str(caught.exception))
+
+    def test_a_run_recording_no_plan_falls_back_and_says_so(self) -> None:
+        """Every archived row predates the column, so this must keep working."""
+        self._write_registry("")
+        self._write_config()
+
+        with self.assertLogs(eu.LOGGER_NAME, level="WARNING") as logs:
+            self._run_matrix()
+
+        self.assertTrue(
+            any("expected_stochastic_samples" in message for message in logs.output),
+            logs.output,
+        )
+        rows = eu.read_csv_rows(self.root / "outputs/run_matrix_summary.csv")
+        consistency = next(
+            row
+            for row in rows
+            if row["model"] == "model-1" and row["uq_method"] == "modality_consistency"
+        )
+        self.assertEqual(consistency["agreement_n_incomplete_excluded"], "1")
+
+    def test_run_matrix_counts_a_never_written_sample_as_incomplete(self) -> None:
+        """The recorded plan and the comparison config agree, so 4 of 5 is incomplete."""
+        self._write_registry(5)
+        self._write_config()
+        self._run_matrix()
 
         rows = eu.read_csv_rows(self.root / "outputs/run_matrix_summary.csv")
         consistency = next(

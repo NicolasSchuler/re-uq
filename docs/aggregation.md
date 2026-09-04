@@ -44,6 +44,15 @@ The scoring unit is **one model answer for one benchmark item**.
   the denominator from the rows that happen to exist is exploratory only, needs
   `infer_plan_from_observations=True`, and stamps every row it produces with
   `sampling_plan_source = "inferred"`.
+- Each run records the plan it was executed under in the registry's
+  `expected_stochastic_samples` column, so a later comparison does not have to
+  guess it. `compare_run_matrix.py` scores each completed run against its own
+  recorded plan and refuses to compare a run whose recorded count disagrees
+  with the comparison config: judging a three-sample run against a five-sample
+  config would mark every one of its stochastic groups incomplete and report
+  blank agreement for a run that was in fact complete. Rows written before the
+  column existed leave it blank, fall back to the comparison config, and are
+  named once in a warning.
 - Raw rows are **deduplicated before scoring**. If one
   `(run_id, model, task, item_id, sample_kind, sample_index)` key carries
   several raw rows — possible after a resume that changed the job config — the

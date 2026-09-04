@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -144,6 +145,41 @@ def load_registry_and_raw_rows(
     return registry_rows, raw_rows
 
 
+class SamplingPlanMismatchError(ValueError):
+    """A run in the group was executed under a different sampling plan."""
+
+
+def resolve_row_sampling_plan(
+    registry_row: Mapping[str, Any],
+    config_plan: eu.SamplingPlan,
+    unrecorded: list[str],
+) -> eu.SamplingPlan:
+    """The plan one completed run is scored against.
+
+    A run records what it was executed with, and that is what its completeness
+    must be judged against; scoring an archived three-sample run against a
+    five-sample comparison config would move every one of its rows into
+    ``agreement_n_incomplete_excluded`` and report blank agreement for a run
+    that was in fact complete. A disagreement is therefore an error, not a
+    silent reinterpretation. Rows written before the column existed record
+    nothing, so they fall back to the comparison config and are named once.
+    """
+    recorded = eu.SamplingPlan.from_registry_row(registry_row)
+    run_id = str(registry_row.get("run_id", ""))
+    if recorded is None:
+        unrecorded.append(run_id)
+        return config_plan
+    if recorded.stochastic_samples != config_plan.stochastic_samples:
+        raise SamplingPlanMismatchError(
+            f"run {run_id!r} was executed with "
+            f"{recorded.stochastic_samples} stochastic sample(s), but the "
+            f"comparison config declares {config_plan.stochastic_samples}. "
+            "Compare runs that share a sampling plan, or pass the config the "
+            "run was executed under."
+        )
+    return config_plan
+
+
 def annotate_summary(
     row: dict[str, Any], registry_row: dict[str, Any]
 ) -> dict[str, Any]:
@@ -241,9 +277,16 @@ def main() -> None:
         else list(run_config["benchmark_variants"])
     )
     run_group_id = run_config["run_group_id"]
-    # Completeness is judged against the plan the run config declares, never
-    # against the number of stochastic rows that happen to be on disk.
+    # Completeness is judged against a declared plan, never against the number of
+    # stochastic rows that happen to be on disk. The comparison config is the
+    # default, but each run's own recorded plan wins where it exists -- comparing
+    # a run executed with three samples against a config declaring five would
+    # mark every one of its stochastic groups incomplete.
     sampling_plan = eu.SamplingPlan.from_run_config(run_config)
+
+    # Named once at the end rather than per row: every archived run predates the
+    # column, so a per-row warning would bury the output.
+    unrecorded: list[str] = []
 
     for dataset_id in datasets:
         for variant in variants:
@@ -282,8 +325,11 @@ def main() -> None:
                 result_benchmark = eu.benchmark_rows_with_current_raw_outputs(
                     benchmark, raw_rows
                 )
+                row_plan = resolve_row_sampling_plan(
+                    registry_row, sampling_plan, unrecorded
+                )
                 scores = eu.build_uq_scores(
-                    result_benchmark, raw_rows, sampling_plan=sampling_plan
+                    result_benchmark, raw_rows, sampling_plan=row_plan
                 )
                 run_summary = eu.metric_summary_by_model_task_method(scores)
                 annotate_text_drift_cis(
@@ -327,6 +373,15 @@ def main() -> None:
             print(
                 f"{dataset_id}/{variant}: wrote {paths['markdown']} and {paths['csv']}"
             )
+
+    if unrecorded:
+        eu.logger.warning(
+            "%d run(s) record no expected_stochastic_samples and were scored "
+            "against the comparison config's plan of %d sample(s): %s",
+            len(unrecorded),
+            sampling_plan.stochastic_samples,
+            ", ".join(sorted(set(unrecorded))),
+        )
 
 
 if __name__ == "__main__":

@@ -499,7 +499,7 @@ def plan_cell(
     existing_rows = eu.read_jsonl(output_path)
     pending_jobs = eu.pending_completion_jobs(jobs, existing_rows, run_id)
     batch_size = int(profile["batch_size"])
-    return Task3Cell(
+    cell = Task3Cell(
         profile=profile,
         model=model,
         dataset_id=dataset_id,
@@ -537,6 +537,24 @@ def plan_cell(
         items_path=items_path,
         resume=resume,
     )
+    if resume is not None:
+        # Before any provider call: a resume that would audit a different source
+        # than the run it continues must not reach execute_cell.
+        rl.resumed_notes(resume.notes, source_note(matrix, cell))
+    return cell
+
+
+def source_note(matrix: Task3Run, cell: Task3Cell) -> str:
+    """Provenance for the audited Task 2 output, as registry-note fragments.
+
+    The source profile is spelled out only when it is not this cell's own, so
+    the note stays quiet on the normal path but a
+    `--allow-source-profile-mismatch` run is self-describing.
+    """
+    note = f"audit_mode={matrix.audit_mode}; source_run_id={cell.source_run_id}"
+    if set(cell.source_profile_ids) - {cell.profile_id}:
+        note += f"; source_profile_id={','.join(cell.source_profile_ids)}"
+    return note
 
 
 def registry_row(
@@ -549,12 +567,6 @@ def registry_row(
 ) -> dict[str, Any]:
     """Summarize `raw_rows` as this cell's Task 3 registry row."""
     profile = cell.profile
-    # Provenance for the audited Task 2 output. The source profile is spelled
-    # out only when it is not this cell's own, so the note stays quiet on the
-    # normal path but a `--allow-source-profile-mismatch` run is self-describing.
-    source_note = f"audit_mode={matrix.audit_mode}; source_run_id={cell.source_run_id}"
-    if set(cell.source_profile_ids) - {cell.profile_id}:
-        source_note += f"; source_profile_id={','.join(cell.source_profile_ids)}"
     return eu.run_registry_summary(
         cell.items,
         raw_rows,
@@ -581,10 +593,11 @@ def registry_row(
         server_model_probe=cell.preflight,
         batch_order=cell.batch_order,
         # A resumed cell keeps the notes (and resolved-config digest) of the run
-        # it continues instead of restamping them with `mode=resume`.
+        # it continues instead of restamping them with `mode=resume` -- but only
+        # if this attempt audits the same source; see rl.resumed_notes.
         notes=cell.resume.notes
         if cell.resume
-        else rp.run_notes(matrix.args, source_note),
+        else rp.run_notes(matrix.args, source_note(matrix, cell)),
     )
 
 

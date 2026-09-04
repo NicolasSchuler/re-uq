@@ -163,8 +163,10 @@ def find_resume_row(
         "benchmark_variant": eu.normalize_benchmark_variant(variant),
         "tasks": ",".join(eu.normalize_task_filter(tasks)),
     }
+    # One run id can appear on several rows; an operator needs every candidate's
+    # diff to see which row they meant, so these accumulate rather than overwrite.
     mismatches: list[str] = []
-    for row in candidates:
+    for index, row in enumerate(candidates):
         found = _registry_identity(row)
         row_mismatches = [
             f"{field_name}={found[field_name]!r} (resuming with {value!r})"
@@ -173,13 +175,41 @@ def find_resume_row(
         ]
         if not row_mismatches:
             return dict(row)
-        mismatches = row_mismatches
+        label = f"row {index + 1}" if len(candidates) > 1 else "its row"
+        mismatches.append(f"{label}: {', '.join(row_mismatches)}")
     raise ResumeError(
-        f"--mode resume was given run id {run_id!r}, but its row in "
-        f"{registry_path} was resolved differently: {'; '.join(mismatches)}. "
+        f"--mode resume was given run id {run_id!r}, but the "
+        f"{len(candidates)} matching row(s) in {registry_path} were resolved "
+        f"differently: {'; '.join(mismatches)}. "
         "Resume the run with the same provider/profile/model/dataset/variant/task "
         "selection it was started with, or start a new run."
     )
+
+
+def resumed_notes(original: str, extra: str) -> str:
+    """The first attempt's notes, checked against this attempt's provenance.
+
+    A resume carries the original notes forward so the registry keeps the first
+    run's provenance, which is only correct while that provenance still holds.
+    The identity check does not cover a Task 3 run's source, so a resume is free
+    to name a different `--source-run-id`, audit it, and leave the registry
+    describing a source run that was never read. Every `key=value` fragment this
+    attempt derived therefore has to be present in the notes being carried
+    forward.
+    """
+    missing = [
+        part
+        for part in (fragment.strip() for fragment in extra.split(";"))
+        if part and part not in original
+    ]
+    if missing:
+        raise ResumeError(
+            "--mode resume derived provenance the original run does not record: "
+            f"{'; '.join(missing)} is absent from its notes ({original!r}). "
+            "Resume with the same source run and profile selection the run was "
+            "started with, or start a new run."
+        )
+    return original
 
 
 def resolve_resume(

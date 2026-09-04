@@ -370,6 +370,10 @@ RUN_REGISTRY_FIELDS = [
     "temperature",
     "top_p",
     "config_sha",
+    # What the run was actually executed with. `expected_records` folds this in
+    # with the item count, so without it a later comparison has to guess the
+    # denominator a run was scored against.
+    "expected_stochastic_samples",
     "expected_records",
     # `observed_records` counts logical observations, `observed_attempts` the
     # physical raw rows behind them; see AttemptLedger in Section 9.
@@ -1351,6 +1355,17 @@ SAMPLING_PLAN_SOURCE_INFERRED = "inferred"
 SAMPLING_PLAN_SOURCES = (SAMPLING_PLAN_SOURCE_PLANNED, SAMPLING_PLAN_SOURCE_INFERRED)
 
 
+def _optional_float(value: Any) -> float | None:
+    """A registry cell as a float, or ``None`` when it is blank or unparseable."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class SamplingPlan:
     """The repeated-sampling plan a run was executed under.
@@ -1424,6 +1439,26 @@ class SamplingPlan:
             temperature=None if temperature is None else float(temperature),
             top_p=None if top_p is None else float(top_p),
         )
+
+    @classmethod
+    def from_registry_row(cls, row: Mapping[str, Any]) -> SamplingPlan | None:
+        """The plan a completed run recorded, or ``None`` if it recorded none.
+
+        Rows written before ``expected_stochastic_samples`` became a registry
+        column leave it blank. ``None`` says the run's own plan is unknown, so a
+        caller can decide between failing and falling back rather than silently
+        reading a blank as zero.
+        """
+        raw = str(row.get("expected_stochastic_samples", "")).strip()
+        if not raw:
+            return None
+        try:
+            samples = int(float(raw))
+        except ValueError:
+            return None
+        temperature = _optional_float(row.get("temperature"))
+        top_p = _optional_float(row.get("top_p"))
+        return cls(stochastic_samples=samples, temperature=temperature, top_p=top_p)
 
     @classmethod
     def inferred_from_observations(cls) -> SamplingPlan:
@@ -8321,6 +8356,7 @@ def run_registry_summary(
         "temperature": config_row.get("temperature", ""),
         "top_p": config_row.get("top_p", ""),
         "config_sha": config_sha,
+        "expected_stochastic_samples": int(expected_stochastic_samples),
         "expected_records": expected_records,
         # Logical observations (AttemptLedger.latest_logical_observations).
         "observed_records": observed_records,

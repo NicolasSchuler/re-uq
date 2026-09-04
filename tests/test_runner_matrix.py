@@ -777,6 +777,28 @@ class RunnerResumeProtocolTest(SingleCellRunnerTestCase):
         self.assertIn("tasks=", str(caught.exception))
         self.assertEqual(_processed_tree(self.root), before)
 
+    def test_every_candidate_row_is_explained_not_just_the_last(self) -> None:
+        """One run id under two providers: the operator needs both diffs."""
+        self.run_cell(mode="full", run_id=self.RUN_ID)
+        registry_path = self.registry_path
+        rows = eu.read_csv_rows(registry_path)
+        eu.write_csv_rows(
+            registry_path,
+            [
+                dict(rows[0], provider_id="provider-a"),
+                dict(rows[0], provider_id="provider-b"),
+            ],
+            fieldnames=eu.RUN_REGISTRY_FIELDS,
+        )
+
+        with self.assertRaises(rl.ResumeError) as caught:
+            self.run_cell(mode="resume", run_id=self.RUN_ID)
+
+        message = str(caught.exception)
+        self.assertIn("provider-a", message)
+        self.assertIn("provider-b", message)
+        self.assertIn("2 matching row(s)", message)
+
     def test_resume_preserves_the_original_start_time_and_provenance(self) -> None:
         self.run_cell(
             mode="full",
@@ -1051,7 +1073,7 @@ class Task3RunnerLifecycleTest(unittest.TestCase):
         args = _runner_args(
             all_models=False,
             model="fake-model-a",
-            source_run_id=self.SOURCE_RUN_ID,
+            source_run_id=overrides.pop("source_run_id", self.SOURCE_RUN_ID),
             audit_mode="blind",
             allow_partial_source=True,
             allow_source_profile_mismatch=False,
@@ -1069,6 +1091,41 @@ class Task3RunnerLifecycleTest(unittest.TestCase):
         )
         self.assertEqual(len(rows), 1, rows)
         return rows[0]
+
+    def _clone_source_run(self, new_run_id: str) -> None:
+        """A second complete Task 2 run a resume could bind to instead."""
+        raw_path = self.root / "data/processed/model_outputs_raw.jsonl"
+        clones = [
+            dict(record, run_id=new_run_id)
+            for record in eu.read_jsonl(raw_path)
+            if str(record.get("run_id", "")) == self.SOURCE_RUN_ID
+            and str(record.get("task", "")) == "task2"
+        ]
+        self.assertTrue(clones)
+        for record in clones:
+            eu.append_jsonl(raw_path, record)
+
+    def test_resume_cannot_silently_audit_a_different_source_run(self) -> None:
+        """The identity check does not cover the source, so the notes must."""
+        self.run_cell(mode="full", run_id=self.RUN_ID)
+        first = self.registry_row()
+        self.assertIn(f"source_run_id={self.SOURCE_RUN_ID}", first["notes"])
+        self._clone_source_run("full-source-b")
+
+        with self.assertRaises(rl.ResumeError) as caught:
+            self.run_cell(
+                mode="resume", run_id=self.RUN_ID, source_run_id="full-source-b"
+            )
+
+        self.assertIn("source_run_id=full-source-b", str(caught.exception))
+        # The registry still describes the source that was actually audited.
+        self.assertEqual(self.registry_row()["notes"], first["notes"])
+
+    def test_resume_with_the_same_source_still_carries_the_notes_forward(self) -> None:
+        self.run_cell(mode="full", run_id=self.RUN_ID)
+        first = self.registry_row()
+        self.run_cell(mode="resume", run_id=self.RUN_ID)
+        self.assertEqual(self.registry_row()["notes"], first["notes"])
 
     def test_resume_with_an_unknown_run_id_fails_before_writing(self) -> None:
         self.run_cell(mode="full", run_id=self.RUN_ID)
