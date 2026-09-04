@@ -182,6 +182,26 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(by_modality["mandatory"]["task1_gold_decision"], "yes")
         self.assertEqual(by_modality["recommended"]["task1_gold_decision"], "no")
 
+    def test_build_benchmark_items_passthrough_fields_default_to_none(self):
+        seeds = [{**export_report_seeds()[0], "context_marker": "O", "extra": "x"}]
+        plain = eu.build_benchmark_items(seeds)
+        carried = eu.build_benchmark_items(
+            seeds, passthrough_fields=["context_marker", "context_section"]
+        )
+
+        self.assertNotIn("context_marker", plain[0])
+        self.assertNotIn("extra", plain[0])
+        self.assertEqual(carried[0]["context_marker"], "O")
+        # A named field the seed lacks becomes an empty column, not a KeyError.
+        self.assertEqual(carried[0]["context_section"], "")
+        self.assertEqual(
+            set(carried[0]) - set(plain[0]), {"context_marker", "context_section"}
+        )
+        self.assertEqual(
+            [row["source_statement"] for row in plain],
+            [row["source_statement"] for row in carried],
+        )
+
     def test_weak_modality_probe_generation(self):
         seeds = [
             {
@@ -1009,6 +1029,182 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(pure["auto_include"], "no")
         self.assertIn("excluded_source", pure["auto_exclusion_reason"])
 
+    PURE_FIXTURE_XML = """<?xml version="1.0"?>
+<req_document xmlns="req_document.xsd">
+  <title>Fixture FRS</title>
+  <version>1</version>
+  <p id="1"><title>Introduction</title>
+    <p id="1.1"><text_body>(M) = Mandatory (O) = Optional</text_body></p>
+  </p>
+  <p id="2"><title>2 Network requirements</title>
+    <p id="2.2"><title>2.2 Voice services</title>
+      <req id="2.2.1"><text_body>2.2.1 The system shall support point-to-point voice calls. (M) Group calls</text_body></req>
+      <req id="2.2.2"><text_body>2.2.2 The network should support fax transmissions between users. (O)</text_body></req>
+      <req id="2.2.3"><text_body>2.2.3 Such calls include 112 calls. (I)</text_body></req>
+      <req id="2.2.4"><text_body>2.2.4 The network shall provide: text messages; (O) automatic fax; (M)</text_body></req>
+    </p>
+  </p>
+  <p><title>Functions</title>
+    <req id="3.1a"><text_body>ETCS shall supervise train movements.</text_body><modifier>M</modifier></req>
+    <req id="3.1b"><text_body>Train data may be entered automatically.</text_body><modifier>O</modifier></req>
+  </p>
+</req_document>
+"""
+
+    def test_parse_pure_document_extracts_markers_sections_and_neighbours(self):
+        rows = eu.parse_pure_document(self.PURE_FIXTURE_XML, "fixture")
+        by_id = {row["requirement_id"]: row for row in rows}
+
+        self.assertEqual(
+            [row["requirement_id"] for row in rows],
+            ["2.2.1", "2.2.2", "2.2.3", "2.2.4", "3.1a", "3.1b"],
+        )
+        self.assertEqual(
+            by_id["2.2.1"]["text"],
+            "The system shall support point-to-point voice calls.",
+        )
+        self.assertEqual(by_id["2.2.1"]["marker"], "M")
+        self.assertEqual(
+            by_id["2.2.1"]["section_path"],
+            "2 Network requirements > 2.2 Voice services",
+        )
+        self.assertEqual(by_id["2.2.2"]["marker"], "O")
+        self.assertEqual(by_id["2.2.3"]["marker"], "I")
+        self.assertEqual(by_id["2.2.4"]["marker_count"], 2)
+        self.assertEqual(by_id["3.1a"]["marker"], "M")
+        self.assertEqual(by_id["3.1b"]["marker"], "O")
+        self.assertEqual(by_id["3.1b"]["section_path"], "Functions")
+        self.assertEqual(by_id["3.1b"]["marker_count"], 1)
+        self.assertEqual(by_id["3.1a"]["document_title"], "Fixture FRS")
+
+        self.assertEqual(by_id["2.2.1"]["neighbour_before"], "")
+        self.assertEqual(
+            by_id["2.2.1"]["neighbour_after"],
+            "2.2.2 (O): The network should support fax transmissions between users.",
+        )
+        self.assertEqual(by_id["3.1b"]["neighbour_after"], "")
+        # List-shaped neighbours keep their per-item markers verbatim.
+        self.assertEqual(
+            by_id["3.1a"]["neighbour_before"],
+            "2.2.4: The network shall provide: text messages; (O) automatic fax; (M)",
+        )
+
+    def test_pure_filter_reason_table(self):
+        cases = [
+            ("The network should support fax transmissions.", "O", 1, None),
+            (
+                "The network should support fax transmissions.",
+                "I",
+                1,
+                "informative_marker",
+            ),
+            ("The network should support fax transmissions.", "", 0, "no_marker"),
+            (
+                "The network shall provide text messages and fax.",
+                "M",
+                2,
+                "multiple_markers",
+            ),
+            (
+                "It shall be possible to implement one level on a line.",
+                "O",
+                1,
+                "impersonal_construction",
+            ),
+            (
+                "The radio should comprise the following components:",
+                "O",
+                1,
+                "colon_structure",
+            ),
+            ("The weight of the radio should not exceed 250g.", "O", 1, "negation"),
+        ]
+        for requirement, marker, count, expected in cases:
+            with self.subTest(requirement=requirement, marker=marker):
+                include, reason = eu.pure_filter(
+                    requirement, eu.auto_capability_text(requirement), marker, count
+                )
+                if expected is None:
+                    self.assertTrue(include, reason)
+                else:
+                    self.assertFalse(include)
+                    self.assertIn(expected, reason)
+
+    def test_make_pure_seed_candidates_keeps_every_optional_and_samples_mandatory(
+        self,
+    ):
+        def row(rid, text, marker, doc="docA", count=1):
+            return {
+                "document_id": doc,
+                "document_title": f"{doc} title",
+                "requirement_id": rid,
+                "section_path": "1 Section",
+                "text": text,
+                "marker": marker,
+                "marker_count": count,
+                "neighbour_before": "",
+                "neighbour_after": "",
+            }
+
+        rows = [
+            row("o1", "The network should support fax transmissions.", "O"),
+            row("o2", "The network should support text messages.", "O"),
+            row("o2dup", "The network should support text messages.", "O"),
+            row("i1", "Such calls include emergency calls.", "I"),
+            *[
+                row(f"a{i}", f"The system shall support the {name} voice channel.", "M")
+                for i, name in enumerate(
+                    ["red", "blue", "green", "amber", "grey", "white"]
+                )
+            ],
+            *[
+                row(
+                    f"b{i}",
+                    f"The unit shall record the {name} diagnostic.",
+                    "M",
+                    "docB",
+                )
+                for i, name in enumerate(["thermal", "voltage", "timing"])
+            ],
+        ]
+
+        candidates = eu.make_pure_seed_candidates(rows, target_count=5, seed=7)
+        again = eu.make_pure_seed_candidates(rows, target_count=5, seed=7)
+        selected = [c for c in candidates if c["include"] == "yes"]
+
+        self.assertEqual(len(candidates), 12)  # duplicate text dropped
+        self.assertEqual(len(selected), 5)
+        self.assertEqual(
+            sorted(c["context_marker"] for c in selected), ["M", "M", "M", "O", "O"]
+        )
+        self.assertEqual({c["source_dataset"] for c in candidates}, {"PURE"})
+        self.assertEqual(
+            {c["source_corpus"] for c in selected if c["context_marker"] == "M"},
+            {"docA", "docB"},
+        )
+        self.assertEqual(
+            [c["seed_id"] for c in selected],
+            [c["seed_id"] for c in again if c["include"] == "yes"],
+        )
+        informative = next(c for c in candidates if c["context_requirement_id"] == "i1")
+        self.assertEqual(informative["auto_include"], "no")
+        self.assertIn("informative_marker", informative["auto_exclusion_reason"])
+        not_sampled = [
+            c for c in candidates if c["auto_include"] == "yes" and c["include"] == "no"
+        ]
+        self.assertTrue(not_sampled)
+        self.assertEqual(
+            {c["exclusion_reason"] for c in not_sampled}, {"not_sampled_mandatory_pool"}
+        )
+        self.assertEqual(
+            set(eu.seed_review_fields("pure")) - set(eu.BASE_SEED_REVIEW_FIELDS),
+            set(eu.PURE_CONTEXT_FIELDS),
+        )
+        self.assertTrue(set(eu.PURE_CONTEXT_FIELDS) <= set(selected[0]))
+
+        with self.assertRaises(ValueError):
+            eu.make_pure_seed_candidates(rows, target_count=50, seed=7)
+
     def test_weighted_sample_candidate_indices_is_deterministic_and_caps_sources(self):
         candidates = []
         for source in ["a", "b", "c", "d", "e", "f"]:
@@ -1048,6 +1244,11 @@ class EvalUtilsTest(unittest.TestCase):
             eu.artifact_path(base, "mlm_tapt", "shall"),
             Path("data/processed/benchmark_items_mlm_tapt_shall.csv"),
         )
+        self.assertEqual(
+            eu.artifact_path(base, "pure"),
+            Path("data/processed/benchmark_items_pure.csv"),
+        )
+        self.assertEqual(eu.normalize_dataset_id("PURE"), "pure")
 
     def test_task3_verification_items_path_is_run_specific(self):
         path_a = eu.task3_verification_items_path(

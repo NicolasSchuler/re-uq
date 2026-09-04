@@ -35,6 +35,12 @@
       "val"
     ],
     "mlm_tapt_target_seed_count": 180,
-    "mlm_tapt_exclude_source_regex": "_PURE$"
+    "mlm_tapt_exclude_source_regex": "_PURE$",
+    "pure_xml_url": "https://zenodo.org/records/7118517/files/requirements-xml.zip?download=1",
+    "pure_local_zip": "data/raw/pure_requirements_xml.zip",
+    "pure_documents": [
+      "XMLZIPFile/2007-eirene_fun_7-2.xml",
+      "XMLZIPFile/2007-ertms.xml"
+    ]
   }
 }

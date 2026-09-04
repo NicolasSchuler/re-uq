@@ -12,7 +12,7 @@ This directory holds dataset inputs and curated/derived data products.
 ## What is tracked under `data/processed/`
 
 - `benchmark_items*.csv` — frozen benchmark inputs for each dataset/variant.
-- `seeds_review*.csv`, `seeds_selected*.csv` — reviewed seed tables.
+- `seeds_review*.csv`, `seeds_selected*.csv` — reviewed seed tables. The `_pure` tables additionally carry the `context_*` columns (document, requirement id, author marker, section path, neighbouring requirements) used by the document-context ablation; they are built by `scripts/build_pure_benchmark.py`, not by the notebooks.
 - `metrics_summary*.csv`, `bootstrap_seed_ci.csv` — compact metric snapshots; treat them as diagnostic/stale unless regenerated from a complete current run.
 - `weak_modality_probe_items.csv` — robustness probe inputs (the four weak-intent phrasing templates).
 

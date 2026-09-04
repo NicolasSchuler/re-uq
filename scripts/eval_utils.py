@@ -21,6 +21,7 @@ import re
 import tempfile
 import time
 import uuid
+import zipfile
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -28,6 +29,7 @@ from functools import cache
 from itertools import batched, pairwise
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree as ET
 
 try:
     from scripts import structured_outputs as so
@@ -253,15 +255,34 @@ CONFIDENCE_0_1_PROMPT_VERSIONS = {"v2-conf01", "v2-instructor-conf01"}
 LOGPROB_PROBE_PROMPT = 'Return exactly this JSON object: {"decision":"yes","confidence":1.0,"brief_reason":"probe"}'
 DATASET_NICE = "nice"
 DATASET_MLM_TAPT = "mlm_tapt"
-DATASET_IDS = {DATASET_NICE, DATASET_MLM_TAPT}
+# `pure` is the document-context ablation cell (docs/context_ablation.md): PURE
+# corpus requirements that carry an author-assigned mandatory/optional marker
+# and their surrounding section and neighbours. It is never pooled into the
+# paper's headline cells.
+DATASET_PURE = "pure"
+DATASET_IDS = {DATASET_NICE, DATASET_MLM_TAPT, DATASET_PURE}
 DATASET_SUFFIXES = {
     DATASET_NICE: "",
     DATASET_MLM_TAPT: "_mlm_tapt",
+    DATASET_PURE: "_pure",
 }
 SOURCE_DATASET_LABELS = {
     DATASET_NICE: "NICE",
     DATASET_MLM_TAPT: "mlm_tapt",
+    DATASET_PURE: "PURE",
 }
+# Per-seed document context carried by the `pure` dataset (seed review rows and
+# benchmark items alike). Rendered into the prompt only when a run sets
+# `item_context: document`; see `document_context_text`.
+PURE_CONTEXT_FIELDS = [
+    "context_document",
+    "context_requirement_id",
+    "context_marker",
+    "context_section",
+    "context_before",
+    "context_after",
+    "context_legend",
+]
 BASE_SEED_REVIEW_FIELDS = [
     "seed_id",
     "source_dataset",
@@ -315,6 +336,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mlm_tapt_splits": ["train", "val"],
         "mlm_tapt_target_seed_count": 180,
         "mlm_tapt_exclude_source_regex": "_PURE$",
+        # PURE (Ferrari, Spagnolo & Gnesi, RE 2017; Zenodo 7118517, CC BY 4.0).
+        # Only the two XML documents with a per-requirement M/O marker are used.
+        "pure_xml_url": "https://zenodo.org/records/7118517/files/requirements-xml.zip?download=1",
+        "pure_local_zip": "data/raw/pure_requirements_xml.zip",
+        "pure_documents": [
+            "XMLZIPFile/2007-eirene_fun_7-2.xml",
+            "XMLZIPFile/2007-ertms.xml",
+        ],
     },
 }
 
@@ -582,6 +611,8 @@ def normalize_dataset_id(dataset_id: str | None) -> str:
         return DATASET_NICE
     if normalized in {DATASET_MLM_TAPT, "hf", "hf_requirements", "limsc_mlm_tapt"}:
         return DATASET_MLM_TAPT
+    if normalized in {DATASET_PURE, "pure_context"}:
+        return DATASET_PURE
     raise ValueError(f"Unknown dataset_id: {dataset_id}")
 
 
@@ -671,6 +702,8 @@ def seed_review_fields(dataset_id: str | None = None) -> list[str]:
     dataset_id = normalize_dataset_id(dataset_id)
     if dataset_id == DATASET_NICE:
         return [field for field in BASE_SEED_REVIEW_FIELDS if field != "source_corpus"]
+    if dataset_id == DATASET_PURE:
+        return [*BASE_SEED_REVIEW_FIELDS, *PURE_CONTEXT_FIELDS]
     return list(BASE_SEED_REVIEW_FIELDS)
 
 
@@ -2013,6 +2046,248 @@ def make_mlm_tapt_seed_candidates(
     return candidates
 
 
+# --- PURE corpus (document-context ablation) ---------------------------------
+# Two PURE XML documents carry an author-assigned marker on every requirement:
+# ERTMS FRS 5.0 as a `<modifier>M|O</modifier>` child, EIRENE FRS 7 as an inline
+# `(M)`, `(O)` or `(I)` token at the end of the text body. Both define the
+# legend in their introduction: (M) mandatory, (O) optional, (I) informative.
+
+PURE_XML_NS = "{req_document.xsd}"
+PURE_INLINE_MARKER_RE = re.compile(r"\((M|O|I)\)")
+PURE_LEADING_ID_RE = re.compile(r"^\d+(?:\.\d+)*[a-z]?\s+")
+PURE_MARKER_LEGEND = "(M) mandatory, (O) optional"
+PURE_IMPERSONAL_RE = re.compile(
+    r"^it\s+(?:shall|should|may|must|will)\s+(?:not\s+)?be\s+possible\b", re.I
+)
+PURE_DOCUMENT_TITLES = {
+    "2007-eirene_fun_7-2": "EIRENE Functional Requirements Specification, version 7",
+    "2007-ertms": "ERTMS/ETCS Functional Requirements Specification, version 5.0",
+}
+
+
+def _pure_element_text(element: ET.Element | None) -> str:
+    return normalize_space("".join(element.itertext())) if element is not None else ""
+
+
+def _pure_document_id(member_name: str) -> str:
+    return Path(member_name).stem
+
+
+def _pure_requirement_fields(req: ET.Element) -> dict[str, Any]:
+    """Split one `<req>` into its clean text and its author marker."""
+    text = _pure_element_text(req.find(f"{PURE_XML_NS}text_body"))
+    modifier = _pure_element_text(req.find(f"{PURE_XML_NS}modifier"))
+    inline_markers = PURE_INLINE_MARKER_RE.findall(text)
+    if modifier:
+        marker, marker_count = modifier, 1
+    elif inline_markers:
+        marker, marker_count = inline_markers[-1], len(inline_markers)
+    else:
+        marker, marker_count = "", 0
+    # EIRENE bodies start with the requirement id and may carry the next
+    # sub-heading after the final marker; keep only the text before it.
+    text = PURE_LEADING_ID_RE.sub("", text)
+    marked_text = text
+    if inline_markers:
+        last = list(PURE_INLINE_MARKER_RE.finditer(text))[-1]
+        marked_text = text[: last.end()]
+        text = text[: last.start()]
+    return {
+        "text": normalize_space(PURE_INLINE_MARKER_RE.sub(" ", text)),
+        # Verbatim body with its inline markers, for list-shaped neighbours.
+        "marked_text": normalize_space(marked_text),
+        "marker": marker,
+        "marker_count": marker_count,
+    }
+
+
+def parse_pure_document(
+    xml_text: str | bytes, document_id: str
+) -> list[dict[str, Any]]:
+    """Flatten one PURE XML document into requirement rows with their context.
+
+    Each row carries the requirement id and marker, the section title path,
+    and its previous/next requirement in document order (empty at the edges).
+    """
+    root = ET.fromstring(xml_text)
+    document_title = PURE_DOCUMENT_TITLES.get(
+        document_id, _pure_element_text(root.find(f"{PURE_XML_NS}title"))
+    )
+    rows: list[dict[str, Any]] = []
+
+    def walk(element: ET.Element, path: list[str]) -> None:
+        for child in element:
+            tag = child.tag.removeprefix(PURE_XML_NS)
+            if tag == "p":
+                title = _pure_element_text(child.find(f"{PURE_XML_NS}title"))
+                walk(child, [*path, title] if title else path)
+            elif tag == "req":
+                fields = _pure_requirement_fields(child)
+                rows.append(
+                    {
+                        "document_id": document_id,
+                        "document_title": document_title,
+                        "requirement_id": str(child.get("id", "")),
+                        "section_path": " > ".join(path),
+                        **fields,
+                    }
+                )
+
+    walk(root, [])
+
+    def neighbour(row: dict[str, Any] | None) -> str:
+        if row is None or not row["text"]:
+            return ""
+        if row["marker_count"] > 1:
+            # A list requirement marks each sub-item; show it as written.
+            return f"{row['requirement_id']}: {row['marked_text']}"
+        marker = f" ({row['marker']})" if row["marker"] else ""
+        return f"{row['requirement_id']}{marker}: {row['text']}"
+
+    for index, row in enumerate(rows):
+        row["neighbour_before"] = neighbour(rows[index - 1] if index else None)
+        row["neighbour_after"] = neighbour(
+            rows[index + 1] if index + 1 < len(rows) else None
+        )
+    return rows
+
+
+def load_pure_requirement_rows(config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Download (once) and parse the PURE XML documents named in the config."""
+    datasets_config = config.get("datasets", {}) if isinstance(config, Mapping) else {}
+    defaults = DEFAULT_CONFIG["datasets"]
+    zip_path = project_root() / str(
+        datasets_config.get("pure_local_zip", defaults["pure_local_zip"])
+    )
+    if not zip_path.exists():
+        download_file(
+            str(datasets_config.get("pure_xml_url", defaults["pure_xml_url"])),
+            zip_path,
+        )
+    members = datasets_config.get("pure_documents", defaults["pure_documents"])
+    if isinstance(members, str):
+        members = [members]
+    rows: list[dict[str, Any]] = []
+    with zipfile.ZipFile(zip_path) as archive:
+        for member in members:
+            rows.extend(
+                parse_pure_document(
+                    archive.read(str(member)), _pure_document_id(member)
+                )
+            )
+    return rows
+
+
+def pure_filter(
+    requirement: str, capability: str, marker: str, marker_count: int
+) -> tuple[bool, str]:
+    """Seed filter for PURE rows: the mlm_tapt screen plus marker checks."""
+    _, reason = mlm_tapt_filter(
+        requirement, capability, source_corpus="", exclude_source_regex=""
+    )
+    reasons = [item for item in reason.split(";") if item]
+    if marker_count == 0 or not marker:
+        reasons.append("no_marker")
+    elif marker_count > 1:
+        reasons.append("multiple_markers")
+    if marker == "I":
+        reasons.append("informative_marker")
+    if PURE_IMPERSONAL_RE.search(requirement):
+        reasons.append("impersonal_construction")
+    unique_reasons = list(dict.fromkeys(reasons))
+    return not unique_reasons, ";".join(unique_reasons)
+
+
+def make_pure_seed_candidates(
+    document_rows: list[dict[str, Any]],
+    target_count: int = DEFAULT_CONFIG["project"]["target_seed_count"],
+    seed: int = DEFAULT_CONFIG["project"]["seed"],
+) -> list[dict[str, Any]]:
+    """Build the reviewable seed table for the `pure` dataset.
+
+    Every eligible optional (O) requirement is included, because that stratum
+    is small and is the one the context ablation reports on; the remainder is
+    filled with mandatory (M) requirements sampled deterministically, in
+    proportion to each document's eligible M pool.
+    """
+    seen: set[str] = set()
+    candidates: list[dict[str, Any]] = []
+    for row in document_rows:
+        original = normalize_space(str(row.get("text", "")))
+        if not original:
+            continue
+        dedupe_key = original.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        capability = auto_capability_text(original)
+        marker = str(row.get("marker", ""))
+        auto_include, reason = pure_filter(
+            original, capability, marker, int(row.get("marker_count", 0))
+        )
+        candidates.append(
+            {
+                "seed_id": f"S{len(candidates) + 1:04d}",
+                "source_dataset": SOURCE_DATASET_LABELS[DATASET_PURE],
+                "source_corpus": str(row.get("document_id", "")),
+                "original_requirement": original,
+                "capability_text_auto": capability,
+                "auto_include": "yes" if auto_include else "no",
+                "auto_exclusion_reason": reason,
+                "include": "no",
+                "exclusion_reason": reason,
+                "capability_text_final": "",
+                "context_document": str(row.get("document_title", "")),
+                "context_requirement_id": str(row.get("requirement_id", "")),
+                "context_marker": marker,
+                "context_section": str(row.get("section_path", "")),
+                "context_before": str(row.get("neighbour_before", "")),
+                "context_after": str(row.get("neighbour_after", "")),
+                "context_legend": PURE_MARKER_LEGEND,
+            }
+        )
+
+    eligible = [i for i, c in enumerate(candidates) if is_truthy(c["auto_include"])]
+    optional = [i for i in eligible if candidates[i]["context_marker"] == "O"]
+    mandatory_by_document: dict[str, list[int]] = {}
+    for index in eligible:
+        if candidates[index]["context_marker"] == "M":
+            mandatory_by_document.setdefault(
+                candidates[index]["source_corpus"], []
+            ).append(index)
+    fill = target_count - len(optional)
+    mandatory_total = sum(len(pool) for pool in mandatory_by_document.values())
+    if fill < 0 or mandatory_total < fill:
+        raise ValueError(
+            f"Cannot select {target_count} PURE seeds: {len(optional)} optional and "
+            f"{mandatory_total} mandatory candidates are eligible."
+        )
+    rng = random.Random(seed)
+    selected = set(optional)
+    documents = sorted(mandatory_by_document)
+    quotas = {
+        doc: int(fill * len(mandatory_by_document[doc]) / mandatory_total)
+        for doc in documents
+    }
+    # Largest-remainder rounding so the quotas sum to `fill` exactly.
+    for doc in sorted(
+        documents,
+        key=lambda d: -(fill * len(mandatory_by_document[d]) / mandatory_total % 1),
+    )[: fill - sum(quotas.values())]:
+        quotas[doc] += 1
+    for doc in documents:
+        selected.update(rng.sample(sorted(mandatory_by_document[doc]), quotas[doc]))
+
+    for index, candidate in enumerate(candidates):
+        if index in selected:
+            candidate["include"] = "yes"
+            candidate["exclusion_reason"] = ""
+            candidate["capability_text_final"] = candidate["capability_text_auto"]
+        elif is_truthy(candidate["auto_include"]):
+            candidate["exclusion_reason"] = "not_sampled_mandatory_pool"
+    return candidates
+
+
 def _review_compare_text(value: Any) -> str:
     return strip_final_punctuation(str(value)).lower()
 
@@ -2574,8 +2849,12 @@ def build_benchmark_items(
     seed_rows: list[dict[str, Any]],
     numeric_strength: dict[str, float] | None = None,
     mandatory_keyword: str = "MUST",
+    *,
+    passthrough_fields: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
+    """Render seed x modality items; `passthrough_fields` copies extra seed columns."""
     numeric_strength = numeric_strength or NUMERIC_STRENGTH_DEFAULT
+    passthrough = list(passthrough_fields)
     mandatory_keyword = mandatory_keyword.upper()
     if mandatory_keyword not in {"MUST", "SHALL"}:
         raise ValueError(f"Unsupported mandatory keyword: {mandatory_keyword}")
@@ -2604,6 +2883,7 @@ def build_benchmark_items(
                     "task2_gold_modality": modality,
                     "ordinal_strength": ORDINAL_STRENGTH[modality],
                     "numeric_strength": numeric_strength[modality],
+                    **{field: seed.get(field, "") for field in passthrough},
                 }
             )
     return items

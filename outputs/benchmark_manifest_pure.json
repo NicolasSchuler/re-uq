@@ -1,0 +1,61 @@
+{
+  "artifacts": [
+    {
+      "bytes": 634042,
+      "exists": true,
+      "path": "data/processed/seeds_review_pure.csv",
+      "rows": 738,
+      "sha256": "cc5e03f8239374be3005db9897dbee5d9c06ae3d131f5173244aca744400de89"
+    },
+    {
+      "bytes": 128079,
+      "exists": true,
+      "path": "data/processed/seeds_selected_pure.csv",
+      "rows": 180,
+      "sha256": "4923d470af84dad5a49c4b7c56d007e01a3dbe5e8885e5ec4ca976d97abe2f84"
+    },
+    {
+      "bytes": 615143,
+      "exists": true,
+      "path": "data/processed/benchmark_items_pure.csv",
+      "rows": 720,
+      "sha256": "b0100d50866301c75642129a9ab1fb07a61dca5f9e732c43a8fe3e8bd91a97c3"
+    },
+    {
+      "bytes": 417,
+      "exists": true,
+      "path": "prompts/modality_extraction.txt",
+      "rows": "",
+      "sha256": "f8d5eff9dd6a88326ed8655d3f171f524bdcec6bb90161687a7785f10c971e24"
+    },
+    {
+      "bytes": 563,
+      "exists": true,
+      "path": "prompts/modality_extraction_context.txt",
+      "rows": "",
+      "sha256": "5f716b8ce64917a886a096bd3d494844cd3114c74b706be94eefab7775920b31"
+    }
+  ],
+  "created_at_utc": "2026-09-04T02:40:24Z",
+  "metadata": {
+    "dataset_id": "pure",
+    "documents": {
+      "2007-eirene_fun_7-2": 112,
+      "2007-ertms": 68
+    },
+    "main_benchmark": "MUST",
+    "marker_counts": {
+      "M": 155,
+      "O": 25
+    },
+    "purpose": "document-context ablation (docs/context_ablation.md)",
+    "robustness_benchmark": "",
+    "seed_count": 180,
+    "source_modalities": [
+      "mandatory",
+      "recommended",
+      "optional",
+      "nice_to_have"
+    ]
+  }
+}

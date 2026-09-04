@@ -33,6 +33,7 @@ Several artifacts come in parallel variants. The suffix encodes the variant; the
 | `_mlm_tapt` | `limsc/mlm-tapt-requirements` dataset, `MUST` variant — **co-primary** dataset. |
 | `_shall` | NICE/PROMISE dataset, `SHALL` robustness variant. |
 | `_mlm_tapt_shall` | `mlm_tapt` dataset, `SHALL` robustness variant. |
+| `_pure` | PURE document-context ablation cell, `MUST` only (`docs/context_ablation.md`). Ablation-only; never pooled into headline numbers. |
 
 Example: `outputs/benchmark_statements_review.csv` is the NICE/MUST review table; `outputs/benchmark_statements_review_mlm_tapt_shall.csv` is the `mlm_tapt`/SHALL review table.
 

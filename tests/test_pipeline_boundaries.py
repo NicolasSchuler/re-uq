@@ -128,6 +128,9 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
         ("data/processed/benchmark_items_mlm_tapt.csv", "MUST"),
         ("data/processed/benchmark_items_shall.csv", "SHALL"),
         ("data/processed/benchmark_items_mlm_tapt_shall.csv", "SHALL"),
+        # Document-context ablation cell (docs/context_ablation.md): same
+        # minimal-pair contract, MUST only, plus the context_* columns.
+        ("data/processed/benchmark_items_pure.csv", "MUST"),
     ]
     WEAK_TEMPLATES: ClassVar[set[str]] = {
         "future_enhancement",
@@ -186,6 +189,43 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
                         {row["source_modality"] for row in seed_rows},
                         set(eu.MODALITIES),
                     )
+
+    def test_checked_pure_benchmark_carries_document_context(self):
+        rows = eu.read_csv_rows("data/processed/benchmark_items_pure.csv")
+        seeds = eu.read_csv_rows("data/processed/seeds_selected_pure.csv")
+
+        self.assertEqual(len(seeds), 180)
+        self.assertTrue(set(eu.PURE_CONTEXT_FIELDS) <= set(rows[0]))
+        self.assertEqual({row["source_dataset"] for row in rows}, {"PURE"})
+        self.assertEqual({row["context_marker"] for row in rows}, {"M", "O"})
+        self.assertEqual(
+            {row["context_legend"] for row in rows}, {eu.PURE_MARKER_LEGEND}
+        )
+        for row in rows:
+            self.assertTrue(row["context_document"].strip(), row["item_id"])
+            self.assertTrue(row["context_requirement_id"].strip(), row["item_id"])
+            self.assertTrue(row["context_section"].strip(), row["item_id"])
+            # The bare sentence never embeds the context (metrics read it).
+            self.assertNotIn(row["context_requirement_id"], row["source_statement"])
+        by_seed = {
+            row["seed_id"]: row for row in rows if row["source_modality"] == "mandatory"
+        }
+        for seed in seeds:
+            self.assertEqual(
+                by_seed[seed["seed_id"]]["context_marker"], seed["context_marker"]
+            )
+
+        manifest_path = Path("outputs/benchmark_manifest_pure.json")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["metadata"]["dataset_id"], "pure")
+        self.assertEqual(manifest["metadata"]["seed_count"], 180)
+        self.assertEqual(manifest["metadata"]["robustness_benchmark"], "")
+        self.assertEqual(sum(manifest["metadata"]["marker_counts"].values()), 180)
+        artifact_paths = {artifact["path"] for artifact in manifest["artifacts"]}
+        self.assertIn("prompts/modality_extraction_context.txt", artifact_paths)
+        self.assertIn("data/processed/benchmark_items_pure.csv", artifact_paths)
+        summary = eu.verify_benchmark_manifest(manifest_path, Path.cwd())
+        self.assertEqual(summary["missing"], [])
 
     def test_checked_weak_modality_probe_rows_are_balanced(self):
         rows = eu.read_csv_rows("data/processed/weak_modality_probe_items.csv")

@@ -1,0 +1,20 @@
+Extract exactly one requirement from the source statement.
+Preserve the modality of the source.
+
+Document context (where the source statement appears):
+{context_block}
+
+Source:
+"{source_statement}"
+
+Extract the requirement from the source statement, not from its context.
+
+Return JSON only:
+{{
+  "requirement": "...",
+  "modality": "mandatory" | "recommended" | "optional" | "nice_to_have",
+  "confidence": 0.0-1.0
+}}
+
+Use confidence as a decimal probability for confidence in the selected modality.
+Do not return percentages such as 95 or strings such as "95%".
