@@ -80,6 +80,14 @@ def common_runner_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warn-request-error-rate", type=float)
     parser.add_argument("--no-progress-artifacts", action="store_true")
     parser.add_argument(
+        "--no-request-transcripts",
+        action="store_true",
+        help=(
+            "Do not write the per-request transcript sidecar "
+            "(data/processed/logs/<run_id>.transcript.jsonl)."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Logging level for the re_uq logger (default: INFO).",
@@ -521,6 +529,9 @@ class CellExecution:
     stamp_record: Callable[[dict[str, Any]], None] | None = None
     registry_label: str = "Registry status"
     lease: CellLease | None = None
+    #: Receives one row per provider call (payload sent, body returned). None
+    #: when the run turned transcripts off; built by the runner, like `lease`.
+    transcript: eu.TranscriptSink | None = None
 
 
 def execute_cell(execution: CellExecution) -> None:
@@ -662,6 +673,7 @@ def execute_cell(execution: CellExecution) -> None:
                 completion_fn=execution.completion_fn,
                 batch_size=cell.batch_size,
                 planned_jobs=cell.jobs,
+                transcript=execution.transcript,
             ),
             start=1,
         ):

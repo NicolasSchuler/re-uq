@@ -40,6 +40,8 @@ class RunnerArgs(Protocol):
     warn_parse_failure_rate: float | None
     warn_request_error_rate: float | None
     no_progress_artifacts: bool
+    #: Opt out of the per-request transcript sidecar.
+    no_request_transcripts: bool
 
 
 @runtime_checkable

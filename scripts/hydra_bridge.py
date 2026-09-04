@@ -168,6 +168,9 @@ def run_args_namespace(
             bool(logging_cfg.get("write_progress_csv", True))
             or bool(logging_cfg.get("write_event_jsonl", True))
         ),
+        no_request_transcripts=not bool(
+            logging_cfg.get("write_request_transcripts", True)
+        ),
         # Provenance: written per run id by the runners.
         resolved_config_yaml=resolved_yaml,
         resolved_config_sha=rp.sha256_text(resolved_yaml) if resolved_yaml else "",

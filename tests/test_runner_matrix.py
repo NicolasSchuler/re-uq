@@ -122,6 +122,7 @@ def _runner_args(**overrides: object) -> mock.Mock:
         "warn_parse_failure_rate": None,
         "warn_request_error_rate": None,
         "no_progress_artifacts": False,
+        "no_request_transcripts": False,
         "resolved_config_yaml": "",
         # Pinned so registry `notes` do not pick up an auto-created Mock
         # attribute; the Hydra bridge always supplies both provenance fields.
@@ -505,6 +506,17 @@ COMMON_CLI_OPTIONS: dict[str, CliOption] = {
         None,
         False,
         None,
+    ),
+    "no_request_transcripts": (
+        "--no-request-transcripts",
+        False,
+        None,
+        None,
+        False,
+        (
+            "Do not write the per-request transcript sidecar "
+            "(data/processed/logs/<run_id>.transcript.jsonl)."
+        ),
     ),
     "log_level": (
         "--log-level",

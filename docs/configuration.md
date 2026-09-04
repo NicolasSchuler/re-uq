@@ -205,6 +205,35 @@ Verify a run's configuration after the fact with:
 shasum -a 256 data/processed/logs/<run_id>.resolved.yaml
 ```
 
+### Request transcripts
+
+Every run also writes what it sent and what came back, as a third sidecar in
+the same directory:
+
+```
+data/processed/logs/<run_id>.transcript.jsonl
+```
+
+One row per provider **call** and per attempt, not per benchmark item: a
+16-item request stores its prompt once, and each transport retry that
+`call_with_retries` would otherwise only count gets its own row. A row carries
+the payload as it was sent (`request_payload`, whose `request_payload_sha` is
+the one the raw rows report), the full response body (`response_json`,
+`raw_text`), the provider provenance already on the raw rows (`served_model`,
+`finish_reason`, `usage_*`), and `error`. API keys never appear: the key lives
+on the client, not in the payload.
+
+This is the only place the *batch* prompt and the *batch* response body are
+kept -- a batched raw row's `prompt` is the single-item prompt and its
+`raw_text` is the per-item slice the parser cut out, so neither reconstructs
+the exchange. It is also where the body of a batch that failed to parse
+survives, before the items are re-sent one at a time.
+
+Budget roughly 8 MB per model-cell, next to the ~19 MB of raw rows. Turn it off
+with `--no-request-transcripts` on either runner, or
+`logging.write_request_transcripts: false` in the run config
+(`conf/logging/default.yaml`).
+
 ## 7. Migrating `current_run.json`
 
 `scripts/hydra_bridge.py` exports an existing JSON run config into the `conf/`

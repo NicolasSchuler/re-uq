@@ -30,7 +30,7 @@ from dataclasses import dataclass, field as dataclass_field
 from functools import cache
 from itertools import batched, pairwise
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Protocol
 from xml.etree import ElementTree as ET
 
 try:
@@ -416,6 +416,7 @@ DEFAULT_RUN_LOGGING: dict[str, Any] = {
     "warn_request_error_rate": 0.02,
     "write_progress_csv": True,
     "write_event_jsonl": True,
+    "write_request_transcripts": True,
 }
 STRUCTURED_OUTPUT_MODES = {"none", "json_object", "json_schema", "instructor"}
 
@@ -886,6 +887,9 @@ def logging_config_from_args(
             "warn_request_error_rate": args.warn_request_error_rate,
             "write_progress_csv": False if args.no_progress_artifacts else None,
             "write_event_jsonl": False if args.no_progress_artifacts else None,
+            "write_request_transcripts": (
+                False if getattr(args, "no_request_transcripts", False) else None
+            ),
         },
     )
 
@@ -963,6 +967,9 @@ def normalize_run_logging_config(
         ),
         "write_event_jsonl": bool_config(
             config["write_event_jsonl"], "logging.write_event_jsonl"
+        ),
+        "write_request_transcripts": bool_config(
+            config["write_request_transcripts"], "logging.write_request_transcripts"
         ),
     }
 
@@ -4842,6 +4849,25 @@ def request_payload_sha(request_kwargs: Mapping[str, Any]) -> str:
     )
 
 
+def transcript_request_payload(request_kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    """JSON-safe copy of the payload actually sent, for the run transcript.
+
+    Everything a provider request carries is already JSON except Instructor's
+    `response_model`, which is a Pydantic class; it is rendered as its name so
+    the transcript stays a plain JSONL file. The API key is never here -- it
+    lives on the client, not in the payload.
+    """
+    payload: dict[str, Any] = {}
+    for key, value in request_kwargs.items():
+        try:
+            json.dumps(value)
+        except TypeError:
+            payload[key] = getattr(value, "__name__", None) or repr(value)
+        else:
+            payload[key] = value
+    return payload
+
+
 def _openai_error_classes() -> tuple[type[BaseException], ...]:
     try:
         from openai import (
@@ -4887,12 +4913,17 @@ def call_with_retries(
     *,
     max_retries: int = DEFAULT_MAX_RETRIES,
     base_delay_s: float = RETRY_BASE_DELAY_S,
+    on_attempt_error: Callable[[int, BaseException], None] | None = None,
 ) -> tuple[Any, int, BaseException | None]:
     """Run `call`, retrying transient provider failures with bounded backoff.
 
     Returns (result, retry_count, error). `max_retries` is the number of total
     attempts (3 means one initial call plus two retries); non-transient errors
     fail fast on the first attempt.
+
+    `on_attempt_error(attempt, exc)` is called for every attempt that is
+    retried, so a transcript can keep the attempts that only survive here as a
+    count. The final failure is returned rather than reported through it.
     """
     attempts = max(1, int(max_retries))
     retry_count = 0
@@ -4904,6 +4935,8 @@ def call_with_retries(
             last_error = exc
             if attempt + 1 >= attempts or not is_transient_provider_error(exc):
                 return None, retry_count, exc
+            if on_attempt_error is not None:
+                on_attempt_error(attempt, exc)
             retry_count += 1
             time.sleep(retry_delay_seconds(attempt, base_delay_s))
     return None, retry_count, last_error
@@ -4953,11 +4986,21 @@ def chat_completion(
     if extra_body:
         request_kwargs["extra_body"] = dict(extra_body)
     payload_sha = request_payload_sha(request_kwargs)
+    # Carried on every return so the run transcript can record what was sent,
+    # including the attempts call_with_retries would otherwise only count.
+    attempt_errors: list[str] = []
+    provenance = {
+        "request_payload": transcript_request_payload(request_kwargs),
+        "request_payload_sha": payload_sha,
+        "request_seed": request_kwargs.get("seed"),
+        "attempt_errors": attempt_errors,
+    }
 
     start = time.perf_counter()
     response, retry_count, error = call_with_retries(
         lambda: client.chat.completions.create(**request_kwargs),
         max_retries=max_retries,
+        on_attempt_error=lambda _attempt, exc: attempt_errors.append(repr(exc)),
     )
     latency_s = time.perf_counter() - start
     if error is not None:
@@ -4967,9 +5010,8 @@ def chat_completion(
             "response_json": None,
             "latency_s": latency_s,
             "error": repr(error),
-            "request_payload_sha": payload_sha,
-            "request_seed": request_kwargs.get("seed"),
             "retry_count": retry_count,
+            **provenance,
         }
     try:
         raw_text = response.choices[0].message.content or ""
@@ -4981,9 +5023,8 @@ def chat_completion(
             "response_json": None,
             "latency_s": latency_s,
             "error": repr(exc),
-            "request_payload_sha": payload_sha,
-            "request_seed": request_kwargs.get("seed"),
             "retry_count": retry_count,
+            **provenance,
         }
     return {
         "ok": True,
@@ -4991,9 +5032,8 @@ def chat_completion(
         "response_json": response_json,
         "latency_s": latency_s,
         "error": "",
-        "request_payload_sha": payload_sha,
-        "request_seed": request_kwargs.get("seed"),
         "retry_count": retry_count,
+        **provenance,
     }
 
 
@@ -5092,15 +5132,19 @@ def instructor_completion(
     if cleaned_extra_body:
         request_kwargs["extra_body"] = cleaned_extra_body
     payload_sha = request_payload_sha(request_kwargs)
+    attempt_errors: list[str] = []
     provenance = {
+        "request_payload": transcript_request_payload(request_kwargs),
         "request_payload_sha": payload_sha,
         "request_seed": request_kwargs.get("seed"),
+        "attempt_errors": attempt_errors,
     }
 
     start = time.perf_counter()
     parsed, retry_count, error = call_with_retries(
         lambda: client.chat.completions.create(**request_kwargs),
         max_retries=max_retries,
+        on_attempt_error=lambda _attempt, exc: attempt_errors.append(repr(exc)),
     )
     latency_s = time.perf_counter() - start
     if error is None:
@@ -5720,9 +5764,29 @@ def completion_kwargs_for_job(
     return kwargs
 
 
+class TranscriptSink(Protocol):
+    """What the job runners need from `run_transcripts.TranscriptWriter`.
+
+    Structural, so `eval_utils` keeps depending on nothing above it: the writer
+    imports this module, not the other way round.
+    """
+
+    def record(
+        self,
+        job: Any,
+        completion: Any,
+        *,
+        batch_id: str = "",
+        batch_size: int = 1,
+        request_indices: Any = (),
+    ) -> None: ...
+
+
 def run_completion_job(
     job: Mapping[str, Any],
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
+    *,
+    transcript: TranscriptSink | None = None,
 ) -> dict[str, Any]:
     runner = completion_runner_for_job(job, completion_fn)
     completion = runner(
@@ -5736,6 +5800,13 @@ def run_completion_job(
         )
     )
     request_index = job.get("request_index")
+    if transcript is not None:
+        transcript.record(
+            job,
+            completion,
+            batch_size=1,
+            request_indices=() if request_index is None else (int(request_index),),
+        )
     return _job_record(
         job,
         completion=completion,
@@ -5994,11 +6065,17 @@ def valid_instructor_batch_results(
 def run_instructor_completion_batch(
     jobs: list[Mapping[str, Any]],
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
+    *,
+    transcript: TranscriptSink | None = None,
 ) -> list[dict[str, Any]]:
     if not jobs:
         return []
     if len(jobs) == 1:
-        return [run_completion_job(jobs[0], completion_fn=completion_fn)]
+        return [
+            run_completion_job(
+                jobs[0], completion_fn=completion_fn, transcript=transcript
+            )
+        ]
 
     first = jobs[0]
     task = str(first["task"])
@@ -6021,6 +6098,14 @@ def run_instructor_completion_batch(
             batched=True,
         )
     )
+    if transcript is not None:
+        transcript.record(
+            first,
+            completion,
+            batch_id=batch_id,
+            batch_size=len(jobs),
+            request_indices=[int(job["request_index"]) for job in jobs],
+        )
 
     records_by_request_index: dict[int, dict[str, Any]] = {}
     fallback_jobs = [dict(job) for job in jobs]
@@ -6065,7 +6150,9 @@ def run_instructor_completion_batch(
                 )
 
     for fallback_job in fallback_jobs:
-        fallback_record = run_completion_job(fallback_job, completion_fn=completion_fn)
+        fallback_record = run_completion_job(
+            fallback_job, completion_fn=completion_fn, transcript=transcript
+        )
         records_by_request_index[int(fallback_job["request_index"])] = fallback_record
     return [records_by_request_index[int(job["request_index"])] for job in jobs]
 
@@ -6073,13 +6160,21 @@ def run_instructor_completion_batch(
 def run_completion_batch(
     jobs: list[Mapping[str, Any]],
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
+    *,
+    transcript: TranscriptSink | None = None,
 ) -> list[dict[str, Any]]:
     if not jobs:
         return []
     if len(jobs) == 1:
-        return [run_completion_job(jobs[0], completion_fn=completion_fn)]
+        return [
+            run_completion_job(
+                jobs[0], completion_fn=completion_fn, transcript=transcript
+            )
+        ]
     if job_uses_instructor(jobs[0]):
-        return run_instructor_completion_batch(jobs, completion_fn=completion_fn)
+        return run_instructor_completion_batch(
+            jobs, completion_fn=completion_fn, transcript=transcript
+        )
 
     first = jobs[0]
     batch_prompt = batch_prompt_for_completion_jobs(jobs)
@@ -6112,6 +6207,14 @@ def run_completion_batch(
         f"{min(int(job.get('request_index', 0)) for job in jobs)}-"
         f"{max(int(job.get('request_index', 0)) for job in jobs)}"
     )
+    if transcript is not None:
+        transcript.record(
+            first,
+            completion,
+            batch_id=batch_id,
+            batch_size=len(jobs),
+            request_indices=[int(job["request_index"]) for job in jobs],
+        )
     parsed_results, batch_parse_status = parse_batch_completion_results(
         completion.get("raw_text", "")
     )
@@ -6165,6 +6268,7 @@ def run_completion_batch(
                 fallback_job,
                 completion_fn=completion_fn,
                 batch_error=batch_error,
+                transcript=transcript,
             )
         )
     return [records_by_request_index[int(job["request_index"])] for job in jobs]
@@ -6175,6 +6279,7 @@ def _batch_fallback_record(
     *,
     completion_fn: Callable[..., dict[str, Any]],
     batch_error: str,
+    transcript: TranscriptSink | None = None,
 ) -> dict[str, Any]:
     """Re-send one job of a failed batch as a single-item request.
 
@@ -6184,7 +6289,7 @@ def _batch_fallback_record(
     the failure stand; the original batch error is then kept in ``error`` behind a
     ``batch_fallback:`` prefix so the batch-level cause is not lost.
     """
-    record = run_completion_job(job, completion_fn=completion_fn)
+    record = run_completion_job(job, completion_fn=completion_fn, transcript=transcript)
     record["batch_size"] = 1
     if str(record.get("parse_status", "")) != "ok":
         own_error = str(record.get("error", "") or "")
@@ -6203,12 +6308,16 @@ def run_completion_jobs(
     seed: Any = None,
     *,
     planned_jobs: Iterable[Mapping[str, Any]] | None = None,
+    transcript: TranscriptSink | None = None,
 ) -> Iterable[dict[str, Any]]:
     """Run planned jobs, batched per :func:`completion_job_batches`.
 
     ``planned_jobs`` carries the FULL plan on a resumed run so the pending subset
     keeps the batch composition of the first attempt instead of being re-batched
     on its own; see :func:`completion_job_batches`.
+
+    ``transcript`` receives one row per provider call, including the single-item
+    re-sends a failed batch falls back to; None turns transcripts off.
     """
     batches = completion_job_batches(
         jobs,
@@ -6223,12 +6332,19 @@ def run_completion_jobs(
     worker_count = min(positive_int(max_workers, "max_workers"), len(batches))
     if worker_count == 1:
         for batch in batches:
-            yield from run_completion_batch(batch, completion_fn=completion_fn)
+            yield from run_completion_batch(
+                batch, completion_fn=completion_fn, transcript=transcript
+            )
         return
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = [
-            executor.submit(run_completion_batch, batch, completion_fn=completion_fn)
+            executor.submit(
+                run_completion_batch,
+                batch,
+                completion_fn=completion_fn,
+                transcript=transcript,
+            )
             for batch in batches
         ]
         for future in as_completed(futures):

@@ -12,6 +12,7 @@ Smoke runs write into a separate tree, so they never append to or overwrite the 
 | Task 3 verification items CSV | `data/processed/task3_verification_items/smoke/` |
 | Analysis output | `outputs/smoke/evaluation_<dataset>_<variant>_<run_id>/` |
 | Per-run log | `data/processed/logs/<run_id>.log` |
+| Per-request transcript | `data/processed/logs/<run_id>.transcript.jsonl` |
 
 Set `RE_UQ_SMOKE_TREE=1` to force the smoke tree explicitly; the `smoke-fake*` subcommands set it for you.
 

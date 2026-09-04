@@ -343,6 +343,7 @@ The runner and analysis CLIs share a few operational flags:
 | `--dry-run` | `run_experiment_from_config.py` | Plan the requests, print what would be sent, exit without calling the provider. Use it before every paid full run. |
 | `--all-models` | `run_experiment_from_config.py` | Iterate every model in the selected profile instead of requiring `--model`. |
 | `--fake-completion` | both runners | Synthesize deterministic local responses; no HTTP. |
+| `--no-request-transcripts` | both runners | Skip the per-request transcript sidecar `data/processed/logs/<run_id>.transcript.jsonl` (on by default; see [`configuration.md`](configuration.md) §6). |
 
 Environment variables recognised by the runners and the wrapper:
 

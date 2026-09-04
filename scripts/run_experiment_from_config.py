@@ -18,12 +18,14 @@ from typing import Any
 try:
     import eval_utils as eu
     import run_provenance as rp
+    import run_transcripts as rt
     import runner_lifecycle as rl
     from runner_args import RunnerArgs
 except ModuleNotFoundError:  # pragma: no cover
     from scripts import (
         eval_utils as eu,
         run_provenance as rp,
+        run_transcripts as rt,
         runner_lifecycle as rl,
     )
     from scripts.runner_args import RunnerArgs
@@ -105,12 +107,27 @@ def fake_completion(**kwargs: Any) -> dict[str, Any]:
             "modality": fake_modality(statement),
             "confidence": FAKE_CONFIDENCE,
         }
+    # The synthesized request is reported like a real one so a fake run
+    # exercises the transcript sidecar end to end.
+    request_kwargs = {
+        "model": kwargs.get("model", ""),
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": kwargs.get("temperature"),
+        "top_p": kwargs.get("top_p"),
+        "max_tokens": kwargs.get("max_tokens"),
+    }
+    if kwargs.get("seed") is not None:
+        request_kwargs["seed"] = kwargs["seed"]
     return {
         "ok": True,
         "raw_text": json.dumps(payload),
         "response_json": {"fake": True, "model": kwargs.get("model", "")},
         "latency_s": 0.0,
         "error": "",
+        "request_payload": eu.transcript_request_payload(request_kwargs),
+        "request_payload_sha": eu.request_payload_sha(request_kwargs),
+        "request_seed": kwargs.get("seed"),
+        "attempt_errors": [],
     }
 
 
@@ -447,6 +464,11 @@ def cell_execution(matrix: MatrixRun, cell: RunCell) -> rl.CellExecution:
         },
         stamp_record=stamp_record,
         registry_label="Registry status",
+        transcript=rt.TranscriptWriter.for_run(
+            matrix.root,
+            cell.run_id,
+            enabled=bool(matrix.logging_config["write_request_transcripts"]),
+        ),
         lease=rl.CellLease.for_cell(
             matrix.root,
             run_id=cell.run_id,

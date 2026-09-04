@@ -6,3 +6,6 @@ warn_parse_failure_rate: 0.02
 warn_request_error_rate: 0.02
 write_progress_csv: true
 write_event_jsonl: true
+# Per-request transcript sidecar: data/processed/logs/<run_id>.transcript.jsonl,
+# one row per provider call with the payload sent and the body returned.
+write_request_transcripts: true
