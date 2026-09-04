@@ -17,6 +17,7 @@ from unittest import mock
 
 from scripts import (
     aggregate_paper_headline_metrics as agg,
+    compare_context_ablation as context_ablation,
     compare_run_matrix as compare_matrix,
     eval_utils as eu,
     export_paper_tables as export,
@@ -409,6 +410,191 @@ class RunMatrixCiTest(unittest.TestCase):
             "strict_text_over_commitment_ci_high",
         ]:
             self.assertIn(field, compare_matrix.SUMMARY_FIELDS)
+
+
+class ContextAblationTableTest(unittest.TestCase):
+    """The ablation table pairs the two arms on the same items and seeds."""
+
+    @staticmethod
+    def _pure_benchmark():
+        seeds = [
+            {
+                **seed,
+                "source_dataset": "PURE",
+                "context_document": "Fixture FRS",
+                "context_legend": "(M) mandatory, (O) optional",
+                "context_section": "1 Fixture",
+                "context_requirement_id": f"1.{index}",
+                # Seeds 1-4 are mandatory-marked, 5-6 optional-marked.
+                "context_marker": "M" if index <= 4 else "O",
+                "context_before": "",
+                "context_after": "",
+            }
+            for index, seed in enumerate(_seeds(), start=1)
+        ]
+        return eu.build_benchmark_items(
+            seeds, passthrough_fields=eu.PURE_CONTEXT_FIELDS
+        )
+
+    @staticmethod
+    def _registry_row(run_id, model, item_context, started, **overrides):
+        return {
+            "run_id": run_id,
+            "run_group_id": "context-ablation-2026-09",
+            "model": model,
+            "dataset_id": "pure",
+            "benchmark_variant": "must",
+            "status": "complete",
+            "deterministic_item_coverage": "1.0",
+            "started_at_utc": started,
+            "item_context": item_context,
+            "batch_size": "16",
+            "batch_order": "grouped",
+            "notes": f"resolved_config_sha={run_id}",
+            **overrides,
+        }
+
+    def _raw_rows(self, benchmark, run_id, model, *, strengthen_weak):
+        rows = []
+        for item in benchmark:
+            requirement = item["source_statement"].replace("MAY", "may")
+            if strengthen_weak and item["source_modality"] == "nice_to_have":
+                # A strict strengthening: explicit modal, high confidence.
+                requirement = f"The system must {item['capability_text']}."
+            rows.append(
+                _task2_raw(item, model=model, run_id=run_id, requirement=requirement)
+            )
+        return rows
+
+    def test_select_arm_runs_takes_latest_complete_and_reads_blank_as_bare(self):
+        rows = [
+            self._registry_row("old-bare", "m1", "", "2026-09-01T00:00:00Z"),
+            self._registry_row("new-bare", "m1", "bare", "2026-09-02T00:00:00Z"),
+            self._registry_row("doc", "m1", "document", "2026-09-02T00:00:00Z"),
+            self._registry_row(
+                "partial",
+                "m1",
+                "document",
+                "2026-09-03T00:00:00Z",
+                deterministic_item_coverage="0.5",
+            ),
+            self._registry_row(
+                "running", "m1", "document", "2026-09-03T00:00:00Z", status="running"
+            ),
+            self._registry_row(
+                "other-group",
+                "m1",
+                "document",
+                "2026-09-03T00:00:00Z",
+                run_group_id="provider-matrix-2026-05",
+            ),
+            self._registry_row("smoke-x", "m1", "document", "2026-09-04T00:00:00Z"),
+        ]
+        selected = context_ablation.select_arm_runs(
+            rows, run_group_id="context-ablation-2026-09", include_smoke=False
+        )
+        self.assertEqual(
+            {key: row["run_id"] for key, row in selected.items()},
+            {("m1", "bare"): "new-bare", ("m1", "document"): "doc"},
+        )
+        with_smoke = context_ablation.select_arm_runs(
+            rows, run_group_id="context-ablation-2026-09", include_smoke=True
+        )
+        self.assertEqual(with_smoke[("m1", "document")]["run_id"], "smoke-x")
+
+    def test_build_tables_reports_arms_strata_and_paired_deltas(self):
+        benchmark = self._pure_benchmark()
+        registry = [
+            self._registry_row("bare-1", "m1", "bare", "2026-09-02T00:00:00Z"),
+            self._registry_row("doc-1", "m1", "document", "2026-09-02T00:00:00Z"),
+        ]
+        raw = self._raw_rows(
+            benchmark, "bare-1", "m1", strengthen_weak=False
+        ) + self._raw_rows(benchmark, "doc-1", "m1", strengthen_weak=True)
+
+        tables = context_ablation.build_tables(
+            benchmark,
+            registry,
+            raw,
+            run_group_id="context-ablation-2026-09",
+            include_smoke=False,
+            bootstrap_samples=50,
+        )
+
+        arms = {(r["item_context"], r["stratum"]): r for r in tables["arms"]}
+        self.assertEqual(
+            set(arms),
+            {(a, s) for a in ("bare", "document") for s in context_ablation.STRATA},
+        )
+        self.assertEqual(arms[("bare", "all")]["n"], len(benchmark))
+        self.assertEqual(arms[("bare", "weak_intent")]["n"], 6)
+        self.assertEqual(arms[("bare", "marker_M")]["n"], 16)
+        self.assertEqual(arms[("bare", "marker_O")]["n"], 8)
+        self.assertEqual(arms[("bare", "all")]["label_accuracy"], 1.0)
+        self.assertEqual(
+            arms[("bare", "weak_intent")]["strict_text_strengthening"], 0.0
+        )
+        self.assertEqual(
+            arms[("document", "weak_intent")]["strict_text_strengthening"], 1.0
+        )
+        self.assertEqual(
+            arms[("document", "weak_intent")]["weak_strict_text_strengthening_90"], 1.0
+        )
+        self.assertEqual(arms[("bare", "all")]["weak_strict_text_strengthening_90"], "")
+
+        deltas = {(r["stratum"], r["metric"]): r for r in tables["deltas"]}
+        self.assertEqual(
+            len(deltas), len(context_ablation.STRATA) * len(context_ablation.METRICS)
+        )
+        weak = deltas[("weak_intent", "strict_text_strengthening")]
+        self.assertEqual(
+            (weak["bare"], weak["document"], weak["delta"]), (0.0, 1.0, 1.0)
+        )
+        self.assertEqual((weak["delta_ci_low"], weak["delta_ci_high"]), (1.0, 1.0))
+        self.assertEqual((weak["n_bare"], weak["n_document"]), (6, 6))
+        overall = deltas[("all", "strict_text_strengthening")]
+        self.assertAlmostEqual(overall["delta"], 6 / 24)
+        self.assertGreater(overall["delta_ci_low"], 0.0)
+        self.assertEqual(deltas[("all", "label_accuracy")]["delta"], 0.0)
+
+        self.assertEqual(
+            [
+                (p["item_context"], p["run_id"], p["task2_rows"])
+                for p in tables["provenance"]
+            ],
+            [("bare", "bare-1", 24), ("document", "doc-1", 24)],
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            paths = context_ablation.write_outputs(
+                tables, Path(tmpdir) / "context_ablation_summary"
+            )
+            markdown = paths["markdown"].read_text(encoding="utf-8")
+            self.assertIn("## Deltas (document - bare)", markdown)
+            self.assertIn("weak_intent", markdown)
+            self.assertEqual(len(eu.read_csv_rows(paths["csv"])), len(tables["arms"]))
+            self.assertEqual(
+                len(eu.read_csv_rows(paths["deltas_csv"])), len(tables["deltas"])
+            )
+            provenance = json.loads(paths["provenance"].read_text(encoding="utf-8"))
+            self.assertEqual(provenance["dataset_id"], "pure")
+            self.assertIn("resolved_config_sha=doc-1", provenance["runs"][1]["notes"])
+
+    def test_missing_arm_yields_empty_deltas_not_a_crash(self):
+        benchmark = self._pure_benchmark()
+        registry = [self._registry_row("bare-1", "m1", "bare", "2026-09-02T00:00:00Z")]
+        raw = self._raw_rows(benchmark, "bare-1", "m1", strengthen_weak=False)
+        tables = context_ablation.build_tables(
+            benchmark,
+            registry,
+            raw,
+            run_group_id="context-ablation-2026-09",
+            include_smoke=False,
+            bootstrap_samples=10,
+        )
+        self.assertEqual({r["item_context"] for r in tables["arms"]}, {"bare"})
+        self.assertTrue(all(r["delta"] == "" for r in tables["deltas"]))
+        self.assertTrue(all(r["n_document"] == 0 for r in tables["deltas"]))
 
 
 class SmokeTreeRoutingTest(unittest.TestCase):

@@ -16,6 +16,7 @@ This is the command-first path for reproducing the publication artifacts. The no
 | Generate paper-facing analysis | `bash scripts/reproduce.sh analysis --run-id RUN_ID --task3-run-id TASK3_RUN_ID` |
 | Monitor a live run | `.venv/bin/python scripts/show_run_progress.py --dataset mlm_tapt --run-id RUN_ID --watch 30` |
 | Compare completed cells | `.venv/bin/python scripts/compare_run_matrix.py --config run_configs/current_run.json --dataset mlm_tapt` |
+| Document-context ablation table | `.venv/bin/python scripts/compare_context_ablation.py` (after `+experiment=context_ablation`; see [`context_ablation.md`](context_ablation.md)) |
 | Export cross-cell paper tables | `.venv/bin/python scripts/export_paper_tables.py` |
 | Print the Task 3 queue without running it | `TASK3_DRY_RUN=1 bash scripts/enqueue_task3_runs.sh` |
 | Regenerate the modality template inventory | see [`docs/experimental_setup.md`](experimental_setup.md) §2.2 |

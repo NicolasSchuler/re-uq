@@ -54,37 +54,52 @@ what buys the causal control, and it is also the largest external-validity gap.
 Requirements in practice are read inside a document, with a heading, a status,
 an owner, and neighbours.
 
-**Design sketch.**
+**Done (minimal two-arm ablation).** See
+[`docs/context_ablation.md`](docs/context_ablation.md).
 
-- Keep the minimal-pair spine: same capability, only the modal force varies.
-- Add a *context envelope* around each item, varied as a second factor:
+- Dataset `pure`: 180 seeds from the two PURE documents that attach an
+  author-assigned mandatory/optional marker to every requirement (EIRENE FRS 7,
+  ERTMS FRS 5.0; CC BY 4.0). Every eligible optional-marked requirement (25) is
+  included, the rest is mandatory-marked. Items keep the minimal-pair spine and
+  carry the document, section path, marker and neighbouring requirements as
+  separate columns (`scripts/build_pure_benchmark.py`).
+- Knob `item_context: bare|document` (run-level, mirrors `batch_order` end to
+  end: run config, job fingerprint, raw row, registry column). The `document`
+  arm shows each Task 2 item with its real context; the `bare` arm is
+  byte-identical to the paper condition (pinned).
+- Preset `+experiment=context_ablation` (both arms, `pure`/`must`, Task 2,
+  deterministic, grouped 16-item batches, own run group) and
+  `scripts/compare_context_ablation.py` (per model × arm × stratum table plus
+  `document − bare` deltas with a paired seed-clustered bootstrap CI,
+  `eu.bootstrap_seed_metric_delta`).
 
-  | Context factor | Levels (sketch) |
-  | --- | --- |
-  | Section heading | none / `Mandatory requirements` / `Optional enhancements` / `Wishlist` |
-  | Document status | none / `Draft` / `Approved` |
-  | Stakeholder role | none / product owner / end user / support engineer |
-  | Priority field | none / `High` / `Low` |
-  | Rationale sentence | absent / present |
-  | Neighbouring requirements | none / two same-strength / two mixed-strength |
-  | Elicitation transcript | absent / short interview excerpt containing the wish |
+**Still open.**
 
-- Cross the four modal-force conditions with a *subset* of the envelope (a full
-  cross is not affordable; use a fractional design and pre-register which cells
-  are run).
-- Primary question: does a weak wish under an `Optional enhancements` heading
-  get strengthened less often than the same wish with no heading? Does a strong
-  `MUST` under a `Draft` status get weakened?
-- Second track: **naturally occurring stakeholder statements**. Collect real
-  wish-shaped utterances (issue trackers, interview transcripts, feature
-  requests) instead of template output, annotate their intended strength, and
-  measure strengthening without the template scaffold. This trades control for
-  ecological validity and should be reported separately, not pooled with the
-  controlled benchmark. Candidate public corpora are surveyed in
-  [`docs/external_validity_datasets.md`](docs/external_validity_datasets.md).
-- Reuse: `main_modality_template_rows()` generalises to
-  `(context_envelope, modality_template)` pairs; the detector, metrics, and
-  aggregation need no change.
+1. The runs themselves (`glm-5.1`, `kit.gemma4-31b-it`) and the table; then
+   the write-up in `docs/context_ablation.md` and the manuscript's robustness
+   paragraph.
+2. A human pass over `capability_text_final` for the 180 `pure` seeds (the
+   automatic extraction is used as is).
+3. A **marker-flipped** third arm (same context, M ↔ O swapped) to isolate the
+   marker from heading and neighbours.
+4. The remaining envelope factors of the original sketch, as a fractional
+   design with pre-registered cells:
+
+   | Context factor | Levels (sketch) |
+   | --- | --- |
+   | Document status | none / `Draft` / `Approved` |
+   | Stakeholder role | none / product owner / end user / support engineer |
+   | Priority field | none / `High` / `Low` |
+   | Rationale sentence | absent / present |
+   | Neighbouring requirements | none / two same-strength / two mixed-strength |
+   | Elicitation transcript | absent / short interview excerpt containing the wish |
+
+5. Second track: **naturally occurring stakeholder statements** (issue
+   trackers, interview transcripts, feature requests) with annotated intended
+   strength, reported separately from the controlled benchmark. Best first
+   candidate: the Public Jira Dataset's Apache "Wish" issues, whose declared
+   type and priority are contextual cues orthogonal to the phrasing; survey in
+   [`docs/external_validity_datasets.md`](docs/external_validity_datasets.md).
 
 ## C. More diverse model families
 

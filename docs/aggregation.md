@@ -18,7 +18,9 @@ The scoring unit is **one model answer for one benchmark item**.
   (`mandatory`, `recommended`, `optional`, `nice_to_have`). Each cell of the
   design (dataset x benchmark variant) holds 180 seeds x 4 = 720 items.
 - A cell is a `(dataset, variant)` pair: `mlm_tapt/must`, `mlm_tapt/shall`,
-  `nice/must`, `nice/shall`.
+  `nice/must`, `nice/shall`. The `pure/must` cell of the document-context
+  ablation ([`context_ablation.md`](context_ablation.md)) is scored the same
+  way but is reported on its own and never enters any pooled or macro figure.
 - Score rows are produced by `build_uq_scores`
   (`scripts/eval_utils.py:5606`). Every row carries `run_id`, `model`, `task`,
   `uq_method`, `item_id`, `seed_id`, `source_modality`, `valid_n`, `total_n`,

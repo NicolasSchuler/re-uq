@@ -6562,6 +6562,53 @@ def bootstrap_seed_metric(
     return float(point), float(low), float(high)
 
 
+def bootstrap_seed_metric_delta(
+    rows_a: list[dict[str, Any]],
+    rows_b: list[dict[str, Any]],
+    metric: Callable[[list[dict[str, Any]]], float],
+    seed_field: str = "seed_id",
+    iterations: int = 1000,
+    seed: int = 20260518,
+) -> tuple[float, float, float]:
+    """Paired seed-clustered bootstrap for ``metric(rows_b) - metric(rows_a)``.
+
+    The two arms score the same benchmark items under different conditions
+    (for example `item_context` bare vs document), so their rows are paired by
+    seed. Each iteration draws one resample of the union of seed ids and
+    evaluates the metric on *both* arms restricted to those seeds before
+    differencing; resampling the arms independently would treat paired
+    observations as unrelated and overstate the interval. Returns
+    ``(delta_point, ci_low, ci_high)`` at the 2.5/97.5 percentiles; NaN when
+    either arm is empty.
+    """
+    if not rows_a or not rows_b:
+        return math.nan, math.nan, math.nan
+
+    def by_seed(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            groups.setdefault(str(row.get(seed_field, "")), []).append(row)
+        return groups
+
+    groups_a, groups_b = by_seed(rows_a), by_seed(rows_b)
+    seed_keys = np.asarray(sorted(set(groups_a) | set(groups_b)), dtype=object)
+    point = metric(rows_b) - metric(rows_a)
+    rng = np.random.default_rng(seed)
+    samples = []
+    for _ in range(iterations):
+        sample_a: list[dict[str, Any]] = []
+        sample_b: list[dict[str, Any]] = []
+        for seed_key in rng.choice(seed_keys, size=seed_keys.size, replace=True):
+            sample_a.extend(groups_a.get(str(seed_key), []))
+            sample_b.extend(groups_b.get(str(seed_key), []))
+        samples.append(metric(sample_b) - metric(sample_a))
+    sample_array = np.asarray([x for x in samples if not math.isnan(x)], dtype=float)
+    if sample_array.size == 0:
+        return float(point), math.nan, math.nan
+    low, high = np.quantile(sample_array, [0.025, 0.975])
+    return float(point), float(low), float(high)
+
+
 def score_from_distribution(
     raw: dict[str, Any],
     item: dict[str, Any],

@@ -281,6 +281,7 @@ and the pooled strict CI is [8.2%, 9.0%] against [13.2%, 14.4%] broad.
 | Understand the pipeline architecture | [`docs/architecture.md`](docs/architecture.md) |
 | Understand artifact policy | [`docs/repository_hygiene.md`](docs/repository_hygiene.md) |
 | See common reviewer questions | [`docs/faq.md`](docs/faq.md) |
+| See the document-context ablation (`pure` cell) | [`docs/context_ablation.md`](docs/context_ablation.md) |
 | See open gaps and planned work | [`TODO.md`](TODO.md) |
 
 ## Quick Check

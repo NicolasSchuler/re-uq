@@ -7,7 +7,7 @@ This document is the single source of truth for the repository map. The `README.
 | Path | Purpose |
 | --- | --- |
 | `README.md` | Reader entry point: study abstract and pointers into the docs. |
-| `TODO.md` | Open work: batching ablations, contextual extension, model-family coverage, construct-review sign-off, snapshot regeneration, provenance rerun. |
+| `TODO.md` | Open work: batching ablations, contextual extension (minimal two-arm ablation done, see `docs/context_ablation.md`), model-family coverage, construct-review sign-off, snapshot regeneration, provenance rerun. |
 | `docs/` | Reader-facing documentation (experimental setup, evaluation spec, aggregation, reproduction guide, results mapping, FAQ) plus archived internal planning notes. |
 | `docs/archive/` | Compressed planning/framing notes preserved for traceability. Not required for reproduction. |
 | `scripts/` | Canonical CLI entry points and shared evaluation utilities. The `scripts/*.py` files are the publication reproduction interface. |

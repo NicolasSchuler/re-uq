@@ -5758,6 +5758,40 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
         self.assertEqual(legacy["item_context"], "bare")
         self.assertNotIn("context_marker", legacy)
 
+    def test_bootstrap_seed_metric_delta_is_paired_and_deterministic(self):
+        def rate(rows):
+            return sum(row["flag"] for row in rows) / len(rows)
+
+        arm_a = [{"seed_id": f"S{i:03d}", "flag": i % 2} for i in range(40)]
+        # Same seeds; the last ten seeds flip to 1 in arm B.
+        arm_b = [
+            {"seed_id": f"S{i:03d}", "flag": 1 if i >= 30 else i % 2} for i in range(40)
+        ]
+
+        self.assertEqual(
+            eu.bootstrap_seed_metric_delta(arm_a, arm_a, rate, iterations=100),
+            (0.0, 0.0, 0.0),
+        )
+        point, low, high = eu.bootstrap_seed_metric_delta(
+            arm_a, arm_b, rate, iterations=300
+        )
+        self.assertAlmostEqual(point, 0.125)
+        self.assertGreater(low, 0.0)
+        self.assertLess(high, 0.3)
+        self.assertEqual(
+            eu.bootstrap_seed_metric_delta(arm_a, arm_b, rate, iterations=300),
+            (point, low, high),
+        )
+        self.assertNotEqual(
+            eu.bootstrap_seed_metric_delta(arm_a, arm_b, rate, iterations=300, seed=1)[
+                1:
+            ],
+            (low, high),
+        )
+        self.assertTrue(
+            all(math.isnan(v) for v in eu.bootstrap_seed_metric_delta([], arm_b, rate))
+        )
+
     def test_batch_prompt_wrapper_sha_digests_the_rendered_wrapper(self):
         probe_jobs = [
             {

@@ -46,6 +46,10 @@ Not literally. The frozen files in `prompts/` define the task contract, the labe
 
 Possibly, and we say so. Batches are consecutive request indices without shuffling, and benchmark rows are ordered seed x variant, so each Task 2 batch of 16 contained all four modality variants of the same four seeds side by side. The prompt asks for independent evaluation, but the minimal-pair contrast was in the context window. Contrastive context plausibly makes modality preservation *easier*, which would make the reported strengthening rates conservative — but that direction is an assumption. The shuffled-batch and `batch_size=1` ablations that would settle it are [`TODO.md`](../TODO.md) section A.
 
+## Does surrounding document context change the result?
+
+That is what the document-context ablation measures. The `pure` cell takes 180 requirements from two PURE documents whose authors marked every requirement mandatory or optional, keeps the minimal-pair templates, and shows each Task 2 item either bare (the paper condition) or with its document, section, marker and neighbouring requirements (`item_context: bare|document`). It is reported on its own with paired seed-clustered deltas and never pooled into the headline cells; see [`docs/context_ablation.md`](context_ablation.md).
+
 ## Why is `heuristic_system_verb` counted in broad strengthening but not strict?
 
 Because it is a convention, not evidence. 11.5% of successful Task 2 outputs contain no modal at all (17.6% in the MUST cells, 5.5% in the SHALL cells). A bare `The system exports reports.` reads as an obligation to most RE practitioners, so the broad measure defaults it to mandatory; the strict measure refuses to guess and requires an explicit modal or a weak phrase. Both are reported, and any single number must say which one it uses. See [`docs/evaluation.md`](evaluation.md).
