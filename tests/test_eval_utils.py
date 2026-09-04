@@ -5447,6 +5447,38 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
             )
             self.assertEqual(baseline, eu.compute_job_config_sha(**base, task="task1"))
 
+    def test_paper_condition_fingerprints_are_pinned(self):
+        """Regression pin: the bare Task 2 request is the paper condition.
+
+        Every reported run was a 16-item grouped batch built by
+        `batch_prompt_for_completion_jobs` with no item context. These digests
+        must not move when ablation knobs (batch_order, item_context) are
+        added, otherwise `--mode resume` would re-request every archived
+        batched row and the bare arm of an ablation would no longer be the
+        paper condition.
+        """
+        self.assertEqual(
+            eu.batch_prompt_wrapper_sha("task2"),
+            "d8a5b71a8e621ca55dcfbf4f52a3248581cda1cda333ae372c0b75b0e230a35a",
+        )
+        base = {
+            "prompt": "p",
+            "prompt_version": "v2-conf01",
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "max_tokens": 64,
+            "structured_output": "json_object",
+            "json_mode": True,
+        }
+        self.assertEqual(
+            eu.compute_job_config_sha(**base),
+            "9c1bac1710cbae8ce430c3891173021c8d34e937c39ed55acbe1afb977fc198b",
+        )
+        self.assertEqual(
+            eu.compute_job_config_sha(**base, task="task2", batch_size=16),
+            "9ac6e6ad20307371e4774b4ecc36a06f8e1e04c7e1ed2c7b37d637574343db7a",
+        )
+
     def test_batch_prompt_wrapper_sha_digests_the_rendered_wrapper(self):
         probe_jobs = [
             {
