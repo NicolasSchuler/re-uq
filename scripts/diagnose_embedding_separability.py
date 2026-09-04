@@ -20,7 +20,6 @@ behind an AUROC near 0.5.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -41,6 +40,7 @@ try:
     )
     from probe_acse_embedding_separability import (
         add_probe_labels,
+        embed_requirement_only,
         fold_metrics,
         group_values,
         summarize,
@@ -53,6 +53,7 @@ except ModuleNotFoundError:  # pragma: no cover
     )
     from scripts.probe_acse_embedding_separability import (
         add_probe_labels,
+        embed_requirement_only,
         fold_metrics,
         group_values,
         summarize,
@@ -71,64 +72,6 @@ WITHIN_TARGETS = [
     "sample_strict_text_overcommit",
 ]
 WITHIN_SCOPES = ["recommended", "optional", "nice_to_have"]
-
-
-def embed_requirement_only(
-    requirements: list[str],
-    *,
-    batch_size: int,
-    cache_path: Path,
-    reuse_cache: bool,
-) -> np.ndarray:
-    """Embed each row's requirement text with MLX, deduplicating first."""
-    # Bind the cache to the exact requirement texts (and backend), not just the row
-    # count, so a stale cache from a different run of equal length is not reused.
-    requirements_digest = hashlib.sha256(
-        ("mlx\x00" + "\x00".join(requirements)).encode("utf-8")
-    ).hexdigest()
-    if reuse_cache and cache_path.exists():
-        cached = np.load(cache_path, allow_pickle=False)
-        cached_digest = (
-            str(cached["requirements_digest"])
-            if "requirements_digest" in cached.files
-            else ""
-        )
-        if (
-            int(cached["n_rows"]) == len(requirements)
-            and cached_digest == requirements_digest
-        ):
-            print(
-                f"[reqonly-mlx] reuse cache {cache_path} ({cached['embeddings'].shape})"
-            )
-            return cached["embeddings"].astype(np.float32, copy=False)
-
-    unique_texts = sorted(set(requirements))
-    index_of = {text: i for i, text in enumerate(unique_texts)}
-    print(
-        f"[reqonly-mlx] embedding {len(unique_texts)} unique requirement strings "
-        f"(of {len(requirements)} rows) in batches of {batch_size}"
-    )
-    blocks: list[np.ndarray] = []
-    for start in range(0, len(unique_texts), batch_size):
-        batch = unique_texts[start : start + batch_size]
-        matrix, _ = eu.semantic_embedding_matrix(batch, embedding_backend="mlx")
-        blocks.append(np.asarray(matrix, dtype=np.float32))
-        if (start // batch_size) % 5 == 0:
-            print(
-                f"  embedded {min(start + batch_size, len(unique_texts))}/{len(unique_texts)}"
-            )
-    unique_embeddings = np.vstack(blocks)
-    row_embeddings = unique_embeddings[[index_of[text] for text in requirements]]
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        cache_path,
-        embeddings=row_embeddings.astype(np.float32),
-        n_rows=np.asarray(len(requirements)),
-        dim=np.asarray(row_embeddings.shape[1]),
-        requirements_digest=np.asarray(requirements_digest),
-    )
-    print(f"[reqonly-mlx] cached -> {cache_path} ({row_embeddings.shape})")
-    return row_embeddings.astype(np.float32, copy=False)
 
 
 def reduce_features(

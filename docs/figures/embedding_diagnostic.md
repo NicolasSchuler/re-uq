@@ -1,5 +1,15 @@
 # Embedding diagnostic figure (RQ3)
 
+> **Status: this page describes the committed PDF, which is one revision behind the
+> script.** `plot_embedding_diagnostic_figure_v2.py` now selects the
+> **requirement-only** substrate for the target bars (`mlx / reqonly / seed`:
+> 0.707 global, 0.613 / 0.612 / 0.620 within level) and shows the label-prefixed
+> 0.822 as a separate, hatched **leakage control**. The prefixed string begins
+> `modality: <predicted label>` and strengthening is derived partly from that
+> label, so it cannot serve as the headline substrate. The numbers, PDF, LaTeX
+> caption and the paper's Table 1 below still show the previous prefixed
+> configuration; rerun the commands under **Reproduce** to bring them in line.
+
 Paper figure showing that black-box text embeddings encode the **input commitment
 level** and **source dataset** of a generated requirement, but not whether the
 model **strengthened** it — the strengthening signal that a global classifier

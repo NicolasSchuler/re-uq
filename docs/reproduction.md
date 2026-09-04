@@ -343,7 +343,7 @@ These are diagnostic/figure scripts run **after** a complete analysis. They read
 | Script | Stage | Current? | Purpose |
 | --- | --- | --- | --- |
 | `compute_acse_semantic_artifacts.py` | 1. cache | current | Recomputes and caches sample embeddings, item-level ACSE rows, and metadata for completed Task 1/2 runs, so later scripts need no embedding backend. Writes `outputs/acse_semantic_artifact_manifest.*`. |
-| `probe_acse_embedding_separability.py` | 2. probe | current | Baseline probe: do cached embeddings separate dataset, source modality, or drift labels? |
+| `probe_acse_embedding_separability.py` | 2. probe | current | Baseline probe: do embeddings separate dataset, source modality, or drift labels? Primary condition is `requirement_only` (requirement text alone, PCA fitted inside each CV fold); the cached label-prefixed embeddings run only as the `prefixed_leakage_control` positive control. |
 | `diagnose_embedding_separability.py` | 2. probe | current | Extended probe grid over text variant (`prefixed` vs `reqonly`), backend (`mlx` vs `tfidf`), and grouping (`seed` vs `item`); reports AUROC and AUPRC against the prevalence baseline. Feeds the paper figure. |
 | `plot_embedding_diagnostic_figure_v2.py` | 3. figure | **current — the paper figure** | Single horizontal AUROC bar chart: context probes (input commitment level, dataset) vs strengthening-detection probes. |
 | `plot_embedding_diagnostic_figure.py` | 3. figure | **superseded** | The earlier four-panel version (two t-SNE maps + AUROC bars + AUPRC lift). Kept for provenance; do not use in the paper. |

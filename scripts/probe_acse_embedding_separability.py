@@ -1,8 +1,27 @@
-"""Probe whether cached ACSE embeddings separate dataset, modality, or drift labels."""
+"""Probe whether ACSE embeddings separate dataset, modality, or drift labels.
+
+The probe runs one or more **text conditions**:
+
+* ``requirement_only`` (the primary diagnostic) embeds the generated requirement
+  wording alone. Nothing about the predicted modality is written into the string,
+  so a strengthening probe here measures what the wording itself reveals.
+* ``prefixed_leakage_control`` reuses the cached ACSE embeddings, whose text comes
+  from ``eval_utils.semantic_response_text()`` and literally begins
+  ``modality: <predicted label>``. Strengthening is derived partly from that same
+  predicted label, so this condition is a **positive control**: it shows what the
+  score looks like when the answer is inside the input. It is never the headline
+  number, and every artifact names it as a control.
+
+Dimensionality reduction is fitted **inside each cross-validation fold, on the
+training rows only** (PCA is the first step of the estimator pipeline). Fitting it
+once over all observations would let a held-out fold help choose the axes it is
+later scored in.
+"""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from collections import Counter
@@ -69,6 +88,24 @@ DEFAULT_WITHIN_TARGETS = [
     "sample_strict_text_overcommit",
 ]
 
+# --- Text conditions ---------------------------------------------------------
+# The predicted modality is an ingredient of the strengthening label, so a
+# substrate that spells that modality out cannot answer "what does the wording
+# reveal?". Requirement-only text is therefore the primary condition and the
+# label-prefixed cache is demoted to a named positive control.
+REQUIREMENT_ONLY_CONDITION = "requirement_only"
+PREFIXED_CONTROL_CONDITION = "prefixed_leakage_control"
+PRIMARY_TEXT_CONDITION = REQUIREMENT_ONLY_CONDITION
+TEXT_CONDITION_ROLES = {
+    REQUIREMENT_ONLY_CONDITION: "primary",
+    PREFIXED_CONTROL_CONDITION: "positive_control_label_leakage",
+}
+DEFAULT_TEXT_CONDITIONS = [REQUIREMENT_ONLY_CONDITION, PREFIXED_CONTROL_CONDITION]
+
+# ``class_labels`` is ascending, so column 1 of a two-class probability matrix is
+# the greater label -- the positive class under scikit-learn's binary convention.
+POSITIVE_COLUMN = 1
+
 
 def clean_label(value: Any) -> str:
     text = str(value or "").strip()
@@ -103,6 +140,104 @@ def add_probe_labels(rows: list[dict[str, Any]]) -> None:
         )
 
 
+def stamp_text_condition(row: dict[str, Any], condition: str) -> dict[str, Any]:
+    """Prefix a result row with the text condition it came from and that condition's role.
+
+    Both columns are written on every artifact so a reader never has to know which
+    condition happens to be the default to tell a diagnostic from a control.
+    """
+    return {
+        "text_condition": condition,
+        "text_condition_role": TEXT_CONDITION_ROLES[condition],
+        **row,
+    }
+
+
+def embed_requirement_only(
+    requirements: list[str],
+    *,
+    batch_size: int,
+    cache_path: Path,
+    reuse_cache: bool,
+) -> np.ndarray:
+    """Embed each row's requirement text with MLX, deduplicating first."""
+    # Bind the cache to the exact requirement texts (and backend), not just the row
+    # count, so a stale cache from a different run of equal length is not reused.
+    requirements_digest = hashlib.sha256(
+        ("mlx\x00" + "\x00".join(requirements)).encode("utf-8")
+    ).hexdigest()
+    if reuse_cache and cache_path.exists():
+        cached = np.load(cache_path, allow_pickle=False)
+        cached_digest = (
+            str(cached["requirements_digest"])
+            if "requirements_digest" in cached.files
+            else ""
+        )
+        if (
+            int(cached["n_rows"]) == len(requirements)
+            and cached_digest == requirements_digest
+        ):
+            print(
+                f"[reqonly-mlx] reuse cache {cache_path} ({cached['embeddings'].shape})"
+            )
+            return cached["embeddings"].astype(np.float32, copy=False)
+
+    unique_texts = sorted(set(requirements))
+    index_of = {text: i for i, text in enumerate(unique_texts)}
+    print(
+        f"[reqonly-mlx] embedding {len(unique_texts)} unique requirement strings "
+        f"(of {len(requirements)} rows) in batches of {batch_size}"
+    )
+    blocks: list[np.ndarray] = []
+    for start in range(0, len(unique_texts), batch_size):
+        batch = unique_texts[start : start + batch_size]
+        matrix, _ = eu.semantic_embedding_matrix(batch, embedding_backend="mlx")
+        blocks.append(np.asarray(matrix, dtype=np.float32))
+        if (start // batch_size) % 5 == 0:
+            print(
+                f"  embedded {min(start + batch_size, len(unique_texts))}/{len(unique_texts)}"
+            )
+    unique_embeddings = np.vstack(blocks)
+    row_embeddings = unique_embeddings[[index_of[text] for text in requirements]]
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        cache_path,
+        embeddings=row_embeddings.astype(np.float32),
+        n_rows=np.asarray(len(requirements)),
+        dim=np.asarray(row_embeddings.shape[1]),
+        requirements_digest=np.asarray(requirements_digest),
+    )
+    print(f"[reqonly-mlx] cached -> {cache_path} ({row_embeddings.shape})")
+    return row_embeddings.astype(np.float32, copy=False)
+
+
+def build_text_conditions(
+    sample_rows: list[dict[str, Any]],
+    cached_prefixed: np.ndarray,
+    *,
+    conditions: list[str],
+    mlx_batch: int,
+    cache_path: Path,
+    reuse_cache: bool,
+) -> dict[str, np.ndarray]:
+    """Return the raw (unprojected) feature matrix for each requested condition."""
+    matrices: dict[str, np.ndarray] = {}
+    for condition in conditions:
+        if condition == PREFIXED_CONTROL_CONDITION:
+            matrices[condition] = cached_prefixed
+        elif condition == REQUIREMENT_ONLY_CONDITION:
+            matrices[condition] = embed_requirement_only(
+                [str(row.get("requirement", "")) for row in sample_rows],
+                batch_size=mlx_batch,
+                cache_path=cache_path,
+                reuse_cache=reuse_cache,
+            )
+        else:
+            raise ValueError(f"Unknown text condition: {condition}")
+        print(f"[{condition}] {matrices[condition].shape}")
+    return matrices
+
+
 def target_values(rows: list[dict[str, Any]], target: str) -> np.ndarray:
     if target in BINARY_TARGETS:
         return np.asarray(
@@ -133,9 +268,9 @@ def group_values(rows: list[dict[str, Any]], mode: str) -> np.ndarray:
     raise ValueError(f"Unknown group mode: {mode}")
 
 
-def make_estimator(model_name: str, random_state: int) -> Any:
+def model_steps(model_name: str, random_state: int) -> list[Any]:
     if model_name == "logreg":
-        return make_pipeline(
+        return [
             StandardScaler(),
             LogisticRegression(
                 max_iter=1000,
@@ -143,18 +278,43 @@ def make_estimator(model_name: str, random_state: int) -> Any:
                 solver="lbfgs",
                 random_state=random_state,
             ),
-        )
+        ]
     if model_name == "hgb":
-        return HistGradientBoostingClassifier(
-            learning_rate=0.08,
-            max_iter=100,
-            max_leaf_nodes=31,
-            min_samples_leaf=30,
-            l2_regularization=0.05,
-            class_weight="balanced",
-            random_state=random_state,
-        )
+        return [
+            HistGradientBoostingClassifier(
+                learning_rate=0.08,
+                max_iter=100,
+                max_leaf_nodes=31,
+                min_samples_leaf=30,
+                l2_regularization=0.05,
+                class_weight="balanced",
+                random_state=random_state,
+            )
+        ]
     raise ValueError(f"Unknown model: {model_name}")
+
+
+def make_estimator(
+    model_name: str, random_state: int, *, pca_components: int | None = None
+) -> Any:
+    """Build the probe estimator, optionally with PCA as its first pipeline step.
+
+    Putting PCA in the pipeline is what makes the projection fold-local: the
+    estimator is fitted on the training rows of one fold, so the axes the held-out
+    rows are transformed into were chosen without them. Callers that pass features
+    which are already reduced leave ``pca_components`` at ``None``.
+    """
+    steps = model_steps(model_name, random_state)
+    if pca_components is not None:
+        steps.insert(
+            0,
+            PCA(
+                n_components=pca_components,
+                svd_solver="randomized",
+                random_state=random_state,
+            ),
+        )
+    return steps[0] if len(steps) == 1 else make_pipeline(*steps)
 
 
 def finite_metric(value: float) -> float | str:
@@ -167,42 +327,71 @@ def positive_rate(y: np.ndarray) -> float:
     return float(np.mean(y.astype(int)))
 
 
-def multiclass_auroc(
-    y_true: np.ndarray, probabilities: np.ndarray, classes: np.ndarray
-) -> float:
-    if len(classes) < 2:
-        return math.nan
-    present_classes = np.unique(y_true)
-    if len(present_classes) < len(classes):
-        return math.nan
-    try:
-        return float(
-            roc_auc_score(
-                y_true,
-                probabilities,
-                labels=classes,
-                multi_class="ovr",
-                average="macro",
-            )
-        )
-    except ValueError:
-        return math.nan
+def ordered_class_probabilities(
+    probabilities: np.ndarray,
+    estimator_classes: np.ndarray,
+    class_labels: np.ndarray,
+) -> np.ndarray:
+    """Scatter an estimator's probability columns into ``class_labels`` order.
+
+    ``estimator.classes_`` only covers the classes its training fold contained, in
+    its own order. Keying the copy by class label rather than by position keeps the
+    matrix aligned no matter how the estimator ordered or dropped classes; a class
+    the estimator never saw keeps a zero column.
+    """
+    column_of = {int(label): column for column, label in enumerate(class_labels)}
+    ordered = np.zeros((probabilities.shape[0], len(class_labels)), dtype=float)
+    for local_column, class_id in enumerate(estimator_classes):
+        ordered[:, column_of[int(class_id)]] = probabilities[:, local_column]
+    return ordered
 
 
-def multiclass_average_precision(
+def ranking_metric_is_defined(y_true: np.ndarray, classes: np.ndarray) -> bool:
+    """AUROC and average precision need at least two classes, all present in the fold.
+
+    A held-out fold that is missing a class has no defined one-vs-rest score for it,
+    so the probe reports an empty cell. That is a property of the fold, not a
+    swallowed error.
+    """
+    return len(classes) >= 2 and len(np.unique(y_true)) == len(classes)
+
+
+def probe_auroc(
     y_true: np.ndarray, probabilities: np.ndarray, classes: np.ndarray
 ) -> float:
-    if len(classes) < 2:
+    """Held-out AUROC; ``probabilities`` must already be in ``classes`` order.
+
+    Exactly two classes take scikit-learn's binary API on the positive column --
+    the multiclass entry point rejects a two-column score matrix outright. Three or
+    more classes keep macro-averaged one-vs-rest.
+    """
+    if not ranking_metric_is_defined(y_true, classes):
         return math.nan
-    if len(np.unique(y_true)) < len(classes):
-        return math.nan
-    try:
-        binary_true = label_binarize(y_true, classes=classes)
-        return float(
-            average_precision_score(binary_true, probabilities, average="macro")
+    if len(classes) == 2:
+        return float(roc_auc_score(y_true, probabilities[:, POSITIVE_COLUMN]))
+    return float(
+        roc_auc_score(
+            y_true,
+            probabilities,
+            labels=classes,
+            multi_class="ovr",
+            average="macro",
         )
-    except ValueError:
+    )
+
+
+def probe_average_precision(
+    y_true: np.ndarray, probabilities: np.ndarray, classes: np.ndarray
+) -> float:
+    """Macro-averaged held-out average precision, one column per class."""
+    if not ranking_metric_is_defined(y_true, classes):
         return math.nan
+    indicator = label_binarize(y_true, classes=classes)
+    if len(classes) == 2:
+        # label_binarize collapses two classes into a single column; macro-averaging
+        # over both classes needs the negative class spelled out as its own column.
+        indicator = np.hstack([1 - indicator, indicator])
+    return float(average_precision_score(indicator, probabilities, average="macro"))
 
 
 def fold_metrics(
@@ -215,6 +404,7 @@ def fold_metrics(
     scope: str,
     n_splits: int,
     random_state: int,
+    pca_components: int | None = None,
 ) -> list[dict[str, Any]]:
     if len(np.unique(y_raw)) < 2:
         return []
@@ -233,17 +423,25 @@ def fold_metrics(
     for fold_index, (train_index, test_index) in enumerate(
         splitter.split(X, y, groups=groups)
     ):
-        estimator = make_estimator(model_name, random_state + fold_index)
+        # PCA cannot exceed the rank the training fold can support.
+        fold_components = (
+            None
+            if pca_components is None
+            else max(1, min(pca_components, len(train_index), X.shape[1]))
+        )
+        estimator = make_estimator(
+            model_name, random_state + fold_index, pca_components=fold_components
+        )
         estimator.fit(X[train_index], y[train_index])
         pred = estimator.predict(X[test_index])
-        probabilities = estimator.predict_proba(X[test_index])
+        probability_matrix = ordered_class_probabilities(
+            estimator.predict_proba(X[test_index]), estimator.classes_, class_labels
+        )
         y_test = y[test_index]
         if target in BINARY_TARGETS:
-            positive_prob = (
-                probabilities[:, list(estimator.classes_).index(1)]
-                if 1 in estimator.classes_
-                else np.zeros(len(test_index))
-            )
+            # Binary targets keep positive-class average precision (not the macro
+            # form) because it is what `baseline_average_precision` is a baseline for.
+            positive_prob = probability_matrix[:, POSITIVE_COLUMN]
             auroc = (
                 float(roc_auc_score(y_test, positive_prob))
                 if len(np.unique(y_test)) == 2
@@ -257,43 +455,37 @@ def fold_metrics(
             prevalence = positive_rate(y_test)
             macro_auroc = auroc
         else:
-            probability_matrix = np.zeros(
-                (len(test_index), len(class_labels)), dtype=float
-            )
-            for local_col, class_id in enumerate(estimator.classes_):
-                probability_matrix[:, int(class_id)] = probabilities[:, local_col]
-            auprc = multiclass_average_precision(
-                y_test, probability_matrix, class_labels
-            )
-            macro_auroc = multiclass_auroc(y_test, probability_matrix, class_labels)
+            auprc = probe_average_precision(y_test, probability_matrix, class_labels)
+            macro_auroc = probe_auroc(y_test, probability_matrix, class_labels)
             prevalence = math.nan
-        rows.append(
-            {
-                "scope": scope,
-                "target": target,
-                "model": model_name,
-                "fold": fold_index,
-                "n_train": len(train_index),
-                "n_test": len(test_index),
-                "n_groups_train": len(np.unique(groups[train_index])),
-                "n_groups_test": len(np.unique(groups[test_index])),
-                "class_distribution_test": json.dumps(
-                    dict(Counter(str(value) for value in y_raw[test_index])),
-                    sort_keys=True,
-                ),
-                "positive_rate_test": finite_metric(prevalence),
-                "accuracy": float(accuracy_score(y_test, pred)),
-                "balanced_accuracy": float(balanced_accuracy_score(y_test, pred)),
-                "macro_f1": float(
-                    f1_score(y_test, pred, average="macro", zero_division=0)
-                ),
-                "auroc_macro": finite_metric(macro_auroc),
-                "average_precision_macro": finite_metric(auprc),
-                "baseline_average_precision": finite_metric(
-                    prevalence if target in BINARY_TARGETS else math.nan
-                ),
-            }
-        )
+        fold_row: dict[str, Any] = {
+            "scope": scope,
+            "target": target,
+            "model": model_name,
+            "fold": fold_index,
+            "n_train": len(train_index),
+            "n_test": len(test_index),
+            "n_groups_train": len(np.unique(groups[train_index])),
+            "n_groups_test": len(np.unique(groups[test_index])),
+            "class_distribution_test": json.dumps(
+                dict(Counter(str(value) for value in y_raw[test_index])),
+                sort_keys=True,
+            ),
+            "positive_rate_test": finite_metric(prevalence),
+            "accuracy": float(accuracy_score(y_test, pred)),
+            "balanced_accuracy": float(balanced_accuracy_score(y_test, pred)),
+            "macro_f1": float(f1_score(y_test, pred, average="macro", zero_division=0)),
+            "auroc_macro": finite_metric(macro_auroc),
+            "average_precision_macro": finite_metric(auprc),
+            "baseline_average_precision": finite_metric(
+                prevalence if target in BINARY_TARGETS else math.nan
+            ),
+        }
+        if fold_components is not None:
+            # Provenance for the fold-local projection; absent when the caller
+            # supplied features that were already reduced.
+            fold_row["pca_components_fold"] = int(fold_components)
+        rows.append(fold_row)
     return rows
 
 
@@ -374,6 +566,33 @@ def main() -> None:
     parser.add_argument("--n-splits", type=int, default=3)
     parser.add_argument("--group-mode", choices=["seed", "item"], default="seed")
     parser.add_argument("--pca-components", type=int, default=128)
+    parser.add_argument(
+        "--text-conditions",
+        nargs="+",
+        default=DEFAULT_TEXT_CONDITIONS,
+        choices=[REQUIREMENT_ONLY_CONDITION, PREFIXED_CONTROL_CONDITION],
+        help=(
+            f"{REQUIREMENT_ONLY_CONDITION} is the primary diagnostic; "
+            f"{PREFIXED_CONTROL_CONDITION} is a positive control whose text spells "
+            "out the predicted modality and must not be read as a headline result"
+        ),
+    )
+    parser.add_argument(
+        "--reqonly-cache",
+        type=Path,
+        default=None,
+        help=(
+            "requirement-only embedding cache (default: "
+            "<output-dir>/task2_reqonly_mlx_embeddings.npz); point it at the "
+            "embedding-diagnostic cache to reuse an existing re-embedding"
+        ),
+    )
+    parser.add_argument("--mlx-batch", type=int, default=256)
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="force re-embedding requirement-only text",
+    )
     parser.add_argument("--random-state", type=int, default=20260527)
     args = parser.parse_args()
 
@@ -384,51 +603,67 @@ def main() -> None:
     output_dir = (
         args.output_dir if args.output_dir.is_absolute() else root / args.output_dir
     )
+    reqonly_cache = (
+        args.reqonly_cache or output_dir / "task2_reqonly_mlx_embeddings.npz"
+    )
+    if not reqonly_cache.is_absolute():
+        reqonly_cache = root / reqonly_cache
     rows = manifest_rows(manifest_path, args.backend_prefix)
-    embeddings, sample_rows = load_embeddings_and_rows(rows)
+    cached_prefixed, sample_rows = load_embeddings_and_rows(rows)
     add_probe_labels(sample_rows)
 
-    pca_components = min(args.pca_components, embeddings.shape[0], embeddings.shape[1])
-    pca = PCA(
-        n_components=pca_components,
-        svd_solver="randomized",
-        random_state=args.random_state,
+    output_dir.mkdir(parents=True, exist_ok=True)
+    condition_features = build_text_conditions(
+        sample_rows,
+        cached_prefixed,
+        conditions=args.text_conditions,
+        mlx_batch=args.mlx_batch,
+        cache_path=reqonly_cache,
+        reuse_cache=not args.no_cache,
     )
-    features = pca.fit_transform(embeddings)
 
-    fold_rows: list[dict[str, Any]] = []
     scopes = ["global"]
     scopes.extend(
         f"dataset_variant={value}"
         for value in sorted({row["dataset_variant"] for row in sample_rows})
     )
     scopes.extend(args.extra_scopes)
-    for scope in scopes:
-        X_scope, rows_scope = filtered_scope(features, sample_rows, scope)
-        target_names = args.targets if scope == "global" else args.within_targets
-        if not rows_scope:
-            continue
-        groups = group_values(rows_scope, args.group_mode)
-        for target in target_names:
-            y = target_values(rows_scope, target)
-            if len(np.unique(y)) < 2:
-                continue
-            for model_name in args.models:
-                fold_rows.extend(
-                    fold_metrics(
-                        X=X_scope,
-                        y_raw=y,
-                        groups=groups,
-                        target=target,
-                        model_name=model_name,
-                        scope=scope,
-                        n_splits=args.n_splits,
-                        random_state=args.random_state,
-                    )
-                )
 
-    summary_rows = summarize(fold_rows)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    fold_rows: list[dict[str, Any]] = []
+    summary_rows: list[dict[str, Any]] = []
+    for condition, features in condition_features.items():
+        condition_folds: list[dict[str, Any]] = []
+        for scope in scopes:
+            X_scope, rows_scope = filtered_scope(features, sample_rows, scope)
+            target_names = args.targets if scope == "global" else args.within_targets
+            if not rows_scope:
+                continue
+            groups = group_values(rows_scope, args.group_mode)
+            for target in target_names:
+                y = target_values(rows_scope, target)
+                if len(np.unique(y)) < 2:
+                    continue
+                for model_name in args.models:
+                    condition_folds.extend(
+                        fold_metrics(
+                            X=X_scope,
+                            y_raw=y,
+                            groups=groups,
+                            target=target,
+                            model_name=model_name,
+                            scope=scope,
+                            n_splits=args.n_splits,
+                            random_state=args.random_state,
+                            pca_components=args.pca_components,
+                        )
+                    )
+        fold_rows.extend(
+            stamp_text_condition(row, condition) for row in condition_folds
+        )
+        summary_rows.extend(
+            stamp_text_condition(row, condition) for row in summarize(condition_folds)
+        )
+
     fold_path = output_dir / "fold_metrics.csv"
     summary_path = output_dir / "summary.csv"
     eu.write_csv_rows(fold_path, fold_rows)
@@ -442,10 +677,20 @@ def main() -> None:
         "backend_prefix": args.backend_prefix,
         "embedding_backend_rows": len(rows),
         "sample_rows": len(sample_rows),
-        "embedding_shape": list(embeddings.shape),
+        "primary_text_condition": PRIMARY_TEXT_CONDITION,
+        "text_conditions": {
+            condition: {
+                "role": TEXT_CONDITION_ROLES[condition],
+                "feature_shape": list(features.shape),
+            }
+            for condition, features in condition_features.items()
+        },
+        "requirement_only_embedding_cache": str(reqonly_cache),
         "feature_projection": "pca",
-        "pca_components": int(pca_components),
-        "pca_explained_variance_sum": float(np.sum(pca.explained_variance_ratio_)),
+        # Fitted per fold on training rows only, so a held-out fold never helps
+        # choose the axes it is scored in.
+        "pca_fit_scope": "train_rows_per_fold",
+        "pca_components_requested": int(args.pca_components),
         "models": args.models,
         "targets": args.targets,
         "within_targets": args.within_targets,
