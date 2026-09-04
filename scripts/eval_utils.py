@@ -6834,6 +6834,31 @@ def monotonicity_violation_diagnostics(
     }
 
 
+def raw_batch_id(raw: Any) -> str:
+    """The provider request a raw completion record was sent in.
+
+    Blank for legacy rows written before requests were batched, for
+    single-item requests, and for synthesised (fake-completion) rows.
+    """
+    return str(raw.get("batch_id", "") or "") if isinstance(raw, Mapping) else ""
+
+
+def sample_batch_ids_field(sample_rows: Iterable[Any]) -> str:
+    """Semicolon-joined request ids behind one collapsed score row.
+
+    A stochastic group collapses its repeated samples into a single score row,
+    and each sample index was its own request, so the row is decided by several
+    requests. First-seen order is kept so the value is stable across runs;
+    blank ids are dropped, and the result is blank when nothing was batched.
+    """
+    seen: dict[str, None] = {}
+    for row in sample_rows:
+        batch_id = raw_batch_id(row)
+        if batch_id:
+            seen.setdefault(batch_id, None)
+    return ";".join(seen)
+
+
 def answer_length_fields(
     raw: Mapping[str, Any], item: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -6857,7 +6882,7 @@ def answer_length_fields(
     if requirement_words is None:
         requirement_words = word_count(requirement_text) if requirement_text else None
     source_words = word_count(str(item.get("source_statement", "") or "")) or None
-    batch_id = str(raw.get("batch_id", "") or "") if isinstance(raw, Mapping) else ""
+    batch_id = raw_batch_id(raw)
     try:
         batch_item_count = (
             int(raw.get("batch_item_count", 0) or 0) if isinstance(raw, Mapping) else 0
@@ -7141,6 +7166,12 @@ def distribution_score_rows(
         )
         acse_row.update(diagnostics)
         rows.append(acse_row)
+        # ``raw`` is the group's representative sample, so its ``batch_id``
+        # names one request only. Record every request the group was decided
+        # in, so a collapsed row can still be traced back to all of them.
+        contributing = sample_batch_ids_field(sample_rows)
+        for row in rows:
+            row["sample_batch_ids"] = contributing
     return rows
 
 
@@ -8812,6 +8843,8 @@ def write_preliminary_result_snapshot(
         "uq_method",
         "item_id",
         "seed_id",
+        "batch_id",
+        "sample_batch_ids",
         "source_modality",
         "ordinal_strength",
         "numeric_strength",
@@ -8959,6 +8992,15 @@ def score_base(
     valid_n: int,
     total_n: int,
 ) -> dict[str, Any]:
+    """Identity and provenance fields shared by every score row.
+
+    ``batch_id`` is the provider request this row's answer was decided in and
+    is the default bootstrap cluster (:data:`DEFAULT_BOOTSTRAP_CLUSTER_FIELD`);
+    ``sample_batch_ids`` lists every contributing request, which only differs
+    from ``batch_id`` for a collapsed stochastic group. Both are blank when the
+    raw record carries no ``batch_id`` (legacy, single-item, or fake rows).
+    """
+    batch_id = raw_batch_id(raw)
     return {
         "run_id": raw.get("run_id", ""),
         "run_group_id": raw.get("run_group_id", ""),
@@ -8969,6 +9011,8 @@ def score_base(
         "uq_method": uq_method,
         "item_id": item["item_id"],
         "seed_id": item["seed_id"],
+        "batch_id": batch_id,
+        "sample_batch_ids": batch_id,
         "source_modality": item["source_modality"],
         "ordinal_strength": int(item["ordinal_strength"]),
         "numeric_strength": float(item["numeric_strength"]),
@@ -8990,6 +9034,9 @@ def baseline_score_base(item: dict[str, Any], task: str) -> dict[str, Any]:
         "uq_method": RULE_BASELINE_METHOD,
         "item_id": item["item_id"],
         "seed_id": item["seed_id"],
+        # The rule-based baseline never sent a request, so it has no cluster.
+        "batch_id": "",
+        "sample_batch_ids": "",
         "source_modality": item["source_modality"],
         "ordinal_strength": int(item["ordinal_strength"]),
         "numeric_strength": float(item["numeric_strength"]),

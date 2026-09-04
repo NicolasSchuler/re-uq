@@ -34,6 +34,77 @@ from scripts import (
 NO_STOCHASTIC_PLAN = eu.SamplingPlan(stochastic_samples=0)
 FIVE_SAMPLE_PLAN = eu.SamplingPlan(stochastic_samples=5)
 
+# Pinned score-row schema. Every `build_uq_scores` row carries exactly these
+# keys; the ACSE proxy row additionally carries ACSE_ONLY_SCORE_ROW_FIELDS.
+# Adding or dropping a key here is a deliberate output-contract change and has
+# to be reflected in the `score_fields` writer list and docs/aggregation.md.
+SCORE_ROW_FIELDS = frozenset(
+    {
+        "batch_id",
+        "completion_tokens",
+        "confidence",
+        "gold_modality",
+        "item_id",
+        "label_correct_text_overcommit_80",
+        "label_correct_text_overcommit_90",
+        "label_distribution",
+        "label_text_consistent",
+        "length_ratio",
+        "model",
+        "numeric_strength",
+        "ordinal_strength",
+        "p_yes",
+        "parse_failures",
+        "pred_modality",
+        "profile_id",
+        "provider_id",
+        "requirement_word_count",
+        "run_group_id",
+        "run_id",
+        "sample_batch_ids",
+        "sampling_plan_source",
+        "seed_id",
+        "source_modality",
+        "source_word_count",
+        "stochastic_complete",
+        "strict_text_high_conf_overcommit_80",
+        "strict_text_high_conf_overcommit_90",
+        "strict_text_overcommit",
+        "task",
+        "text_high_conf_overcommit_80",
+        "text_high_conf_overcommit_90",
+        "text_modality",
+        "text_modality_basis",
+        "text_modality_correct",
+        "text_modality_modals_found",
+        "text_modality_multi_modal",
+        "text_modality_parse_status",
+        "text_overcommit",
+        "text_undercommit",
+        "total_n",
+        "uncertainty_measure",
+        "uncertainty_score",
+        "uq_method",
+        "valid_n",
+        "y_pred",
+        "y_true",
+    }
+)
+ACSE_ONLY_SCORE_ROW_FIELDS = frozenset(
+    {
+        "semantic_cluster_count",
+        "semantic_cluster_distribution",
+        "semantic_cluster_entropy",
+        "semantic_cluster_variation_ratio",
+        "semantic_distance_threshold",
+        "semantic_dominant_cluster_mean_distance",
+        "semantic_dominant_cluster_share",
+        "semantic_embedding_backend",
+        "semantic_mean_pairwise_distance",
+        "semantic_uncertainty_score",
+    }
+)
+
 
 def export_report_seeds():
     """Return the canonical single ``export reports`` seed row as a fresh list."""
@@ -1848,6 +1919,117 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(len(scores), 4)
         self.assertEqual(summary[0]["accuracy"], 1.0)
         self.assertTrue(all("uncertainty_score" in row for row in scores))
+
+    def _batched_task2_raw_rows(self, benchmark, *, stochastic_samples=0):
+        """Task 2 raw rows for one seed, all four variants in one request.
+
+        The deterministic variants share a single ``batch_id``, exactly as the
+        archived runs sent them (16 items = 4 seeds x 4 modalities per request).
+        Each stochastic sample index is its own request.
+        """
+        rows = []
+        for item in benchmark:
+            deterministic = self._task2_raw_row(item, "The system must export reports.")
+            deterministic["batch_id"] = "r1:m1:task2:deterministic:0:0-3"
+            deterministic["batch_item_count"] = len(benchmark)
+            rows.append(deterministic)
+            for index in range(stochastic_samples):
+                sample = self._task2_raw_row(item, "The system must export reports.")
+                sample["sample_kind"] = "stochastic"
+                sample["sample_index"] = index + 1
+                sample["batch_id"] = f"r1:m1:task2:stochastic:{index + 1}:0-3"
+                sample["batch_item_count"] = len(benchmark)
+                rows.append(sample)
+        return rows
+
+    def test_score_rows_carry_the_request_batch_id(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        raw_rows = self._batched_task2_raw_rows(benchmark, stochastic_samples=2)
+
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=eu.SamplingPlan(stochastic_samples=2)
+        )
+        deterministic = [
+            row for row in scores if row["uq_method"] == "verbalized_confidence"
+        ]
+        collapsed = [
+            row for row in scores if row["uq_method"] == "modality_consistency"
+        ]
+
+        # One request per (sample kind, sample index): the four variants of a
+        # seed share the deterministic request, so clustering by request nests
+        # clustering by seed.
+        self.assertEqual(len(deterministic), 4)
+        self.assertEqual(
+            {row["batch_id"] for row in deterministic},
+            {"r1:m1:task2:deterministic:0:0-3"},
+        )
+        self.assertEqual(
+            {row["sample_batch_ids"] for row in deterministic},
+            {"r1:m1:task2:deterministic:0:0-3"},
+        )
+        # A collapsed stochastic row is decided across several requests: it is
+        # keyed on its representative sample and lists every contributor.
+        self.assertEqual(len(collapsed), 4)
+        self.assertEqual(
+            {row["batch_id"] for row in collapsed},
+            {"r1:m1:task2:stochastic:1:0-3"},
+        )
+        self.assertEqual(
+            {row["sample_batch_ids"] for row in collapsed},
+            {"r1:m1:task2:stochastic:1:0-3;r1:m1:task2:stochastic:2:0-3"},
+        )
+
+    def test_score_rows_leave_batch_id_blank_for_unbatched_rows(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        # Legacy and single-item rows were never sent as part of a request.
+        raw_rows = [
+            self._task2_raw_row(item, "The system must export reports.")
+            for item in benchmark
+        ]
+
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=NO_STOCHASTIC_PLAN
+        )
+
+        self.assertTrue(scores)
+        self.assertEqual({row["batch_id"] for row in scores}, {""})
+        self.assertEqual({row["sample_batch_ids"] for row in scores}, {""})
+        self.assertEqual(
+            {row["batch_id"] for row in eu.build_rule_baseline_scores(benchmark)},
+            {""},
+        )
+
+    def test_score_row_schema_is_pinned(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        raw_rows = self._batched_task2_raw_rows(benchmark, stochastic_samples=2)
+        raw_rows.extend(
+            raw_record(
+                item,
+                task="task1",
+                parsed_json={
+                    "decision": "yes",
+                    "confidence": 0.9,
+                    "brief_reason": "",
+                },
+            )
+            for item in benchmark
+        )
+
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=eu.SamplingPlan(stochastic_samples=2)
+        )
+
+        self.assertTrue(scores)
+        for row in scores:
+            expected = SCORE_ROW_FIELDS | (
+                ACSE_ONLY_SCORE_ROW_FIELDS
+                if row["uq_method"] == eu.ACSE_PROXY_METHOD
+                else frozenset()
+            )
+            self.assertEqual(set(row), set(expected), row["uq_method"])
+        # The writer list has to be able to emit every pinned field.
+        self.assertLessEqual({"batch_id", "sample_batch_ids"}, SCORE_ROW_FIELDS)
 
     def _task2_raw_row(self, item, requirement, **overrides):
         row = raw_record(

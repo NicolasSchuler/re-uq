@@ -23,9 +23,20 @@ The scoring unit is **one model answer for one benchmark item**.
   way but is reported on its own and never enters any pooled or macro figure.
 - Score rows are produced by `build_uq_scores`
   (`scripts/eval_utils.py:5606`). Every row carries `run_id`, `model`, `task`,
-  `uq_method`, `item_id`, `seed_id`, `source_modality`, `valid_n`, `total_n`,
-  `parse_failures`, `stochastic_complete`, and `sampling_plan_source`, built by
-  `score_base` (`scripts/eval_utils.py:6703`).
+  `uq_method`, `item_id`, `seed_id`, `batch_id`, `sample_batch_ids`,
+  `source_modality`, `valid_n`, `total_n`, `parse_failures`,
+  `stochastic_complete`, and `sampling_plan_source`, built by
+  `score_base` (`scripts/eval_utils.py`, Section 9).
+- `batch_id` is the provider **request** the answer was decided in, forwarded
+  from the raw record (`<run_id>:<model>:<task>:<sample_kind>:<sample_index>:<min>-<max>`).
+  Every archived run sent 16 items per request — four whole seeds x four source
+  conditions — so a request contains whole seeds and clustering by request
+  nests clustering by seed. It is the default bootstrap cluster, see Section 6.
+  `sample_batch_ids` lists every contributing request, semicolon-joined; it
+  equals `batch_id` for a deterministic row and names all five sample requests
+  for a collapsed stochastic row (whose `batch_id` is its representative
+  sample's request). Both are blank for rows that were never batched: legacy
+  runs, single-item requests, synthesised completions, and the rule baseline.
 - `build_uq_scores` requires a `SamplingPlan`: the number of stochastic samples
   the run *planned* per item, threaded from the run config by every caller.
   `total_n` is `max(observed, planned)`, so three written samples of a planned
