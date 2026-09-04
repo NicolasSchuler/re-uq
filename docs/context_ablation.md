@@ -161,14 +161,26 @@ joins the author marker back on `item_id`. It writes:
 - `outputs/context_ablation_summary.csv` / `.md`: one row per model × arm ×
   stratum with `n`, the number of rows whose generated text yielded a
   modality, declared-label accuracy, strict and broad text strengthening
-  with seed-clustered bootstrap CIs (`eu.text_over_commitment_ci_fields`),
+  with request-clustered bootstrap CIs (`eu.text_over_commitment_ci_fields`,
+  [`aggregation.md`](aggregation.md) §6) and the seed-clustered pair alongside
+  as `*_seed_ci_low` / `*_seed_ci_high`,
   and in the weak-intent stratum the README-style p ≥ 0.90 strict rate.
 - `outputs/context_ablation_summary_deltas.csv` and the second table of the
   Markdown: `document − bare` per model × stratum × metric with a **paired**
-  seed-clustered bootstrap CI (`eu.bootstrap_seed_metric_delta`): each
-  iteration draws one resample of seeds and evaluates both arms on those
-  seeds before differencing. Resampling the arms independently would treat
-  paired observations as unrelated and overstate the interval. The cohort is
+  cluster bootstrap CI (`eu.bootstrap_seed_metric_delta`): each iteration
+  draws one resample and evaluates both arms on it before differencing.
+  Resampling the arms independently would treat paired observations as
+  unrelated and overstate the interval. Pairing and resampling are different
+  units: rows are **paired by seed**, because that is the same capability seen
+  bare and in its document, while the **resampling unit is the request**. A
+  seed's four source conditions sit inside one request, so a request contains
+  whole pairs and is only the coarser unit. The two arms are separate runs and
+  their request ids differ, but the partition of seeds into requests is a
+  property of the batching and is the same in both, so each paired seed is
+  assigned to the request observed for it in the bare arm.
+  `delta_ci_low` / `delta_ci_high` are request-clustered,
+  `delta_seed_ci_low` / `delta_seed_ci_high` the seed-clustered pair, and
+  `delta_cluster_field` / `n_delta_clusters` record the unit used. The cohort is
   the seeds *both* arms answered, built once before any resampling: a seed only
   one arm answered is excluded up front and counted, so the number of pairs
   cannot vary from replicate to replicate. `n_complete_pairs` and

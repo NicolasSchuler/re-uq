@@ -38,11 +38,16 @@ SUMMARY_FIELDS = [
     "text_over_commitment_n_denominator",
     "text_over_commitment_ci_low",
     "text_over_commitment_ci_high",
+    "text_over_commitment_seed_ci_low",
+    "text_over_commitment_seed_ci_high",
     "strict_text_over_commitment",
     "strict_text_over_commitment_n_numerator",
     "strict_text_over_commitment_n_denominator",
     "strict_text_over_commitment_ci_low",
     "strict_text_over_commitment_ci_high",
+    "strict_text_over_commitment_seed_ci_low",
+    "strict_text_over_commitment_seed_ci_high",
+    "bootstrap_ci_cluster_field",
     "parse_failure_rate",
 ]
 
@@ -55,10 +60,13 @@ def annotate_text_drift_cis(
     scores: list[dict[str, Any]],
     bootstrap_samples: int = DEFAULT_BOOTSTRAP_SAMPLES,
 ) -> list[dict[str, Any]]:
-    """Attach text-strengthening counts and seed-clustered CIs to Task 2 rows.
+    """Attach text-strengthening counts and both cluster CIs to Task 2 rows.
 
-    The CI is a seed-clustered bootstrap (``eu.bootstrap_seed_metric``) with a
-    fixed seed so the matrix table is reproducible run to run.
+    The reported interval (``*_ci_low`` / ``*_ci_high``) is a request-clustered
+    bootstrap (``eu.text_over_commitment_ci_fields``); the seed-clustered pair
+    travels alongside as ``*_seed_ci_low`` / ``*_seed_ci_high`` and
+    ``bootstrap_ci_cluster_field`` names the unit actually used. The RNG seed is
+    fixed so the matrix table is reproducible run to run.
     """
     by_group: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for score in scores:

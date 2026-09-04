@@ -58,10 +58,13 @@ In short:
 * **Agreement.** Repeated-sample unanimity is computed only over items where
   every stochastic sample parsed (``stochastic_complete``), with the excluded
   count reported as ``agreement_n_incomplete_excluded``.
-* **Bootstrap.** ``--regenerate-snapshots`` appends a seed-clustered
-  bootstrap CI (resampling ``seed_id`` with replacement, 1000 resamples, fixed
+* **Bootstrap.** ``--regenerate-snapshots`` appends a request-clustered
+  bootstrap CI (resampling ``batch_id`` with replacement, 1000 resamples, fixed
   seed 20260518, percentile interval) to the strict and broad headline rows,
-  pooled over all requested cells.
+  pooled over all requested cells, as ``value_ci_low`` / ``value_ci_high``. The
+  narrower seed-clustered pair travels alongside as ``value_seed_ci_low`` /
+  ``value_seed_ci_high``, and ``value_ci_cluster_field`` records which unit the
+  reported interval used. See docs/aggregation.md Section 6.
 """
 
 from __future__ import annotations
@@ -148,10 +151,11 @@ def build_headline_rows(
 ) -> list[dict[str, Any]]:
     """Reconstruct the headline table from the three per-cell snapshots.
 
-    ``bootstrap_ci_rows`` optionally carries seed-clustered bootstrap bounds
-    (as written by ``scripts/export_paper_tables.py``) keyed by
+    ``bootstrap_ci_rows`` optionally carries request- and seed-clustered
+    bootstrap bounds (as written by ``scripts/export_paper_tables.py``) keyed by
     ``headline_key``; matching headline rows gain ``value_ci_low`` /
-    ``value_ci_high`` / ``bootstrap_samples``.
+    ``value_ci_high`` / ``value_seed_ci_low`` / ``value_seed_ci_high`` /
+    ``value_ci_cluster_field`` / ``bootstrap_samples``.
     """
     task2 = _rows_by_cell(task2_rows)
     confidence = _rows_by_cell(confidence_rows)
@@ -308,12 +312,20 @@ def attach_bootstrap_cis(
     rows: list[dict[str, Any]],
     bootstrap_ci_rows: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    """Add seed-clustered CI columns to the headline rows (empty when absent)."""
+    """Add both cluster bootstrap CI columns to the headline rows.
+
+    ``value_ci_low`` / ``value_ci_high`` are the reported request-clustered
+    interval and ``value_seed_ci_*`` the seed-clustered pair; every column is
+    empty for a headline the bootstrap rows do not cover.
+    """
     by_key = {str(row["headline_key"]): row for row in (bootstrap_ci_rows or [])}
     for row in rows:
         ci_row = by_key.get(str(row["headline_key"]), {})
         row["value_ci_low"] = ci_row.get("ci_low", "")
         row["value_ci_high"] = ci_row.get("ci_high", "")
+        row["value_seed_ci_low"] = ci_row.get("seed_ci_low", "")
+        row["value_seed_ci_high"] = ci_row.get("seed_ci_high", "")
+        row["value_ci_cluster_field"] = ci_row.get("ci_cluster_field", "")
         row["bootstrap_samples"] = ci_row.get("bootstrap_samples", "")
     return rows
 
@@ -377,7 +389,7 @@ def main() -> None:
         help=(
             "Regenerate the per-cell snapshots from the local raw outputs with "
             "scripts/export_paper_tables.py before aggregating, and append "
-            "seed-clustered bootstrap CIs to the headline table."
+            "request- and seed-clustered bootstrap CIs to the headline table."
         ),
     )
     parser.add_argument(

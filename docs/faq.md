@@ -48,7 +48,7 @@ Possibly, and we say so. Batches are consecutive request indices without shuffli
 
 ## Does surrounding document context change the result?
 
-That is what the document-context ablation measures. The `pure` cell takes 180 requirements from two PURE documents whose authors marked every requirement mandatory or optional, keeps the minimal-pair templates, and shows each Task 2 item either bare (the paper condition) or with its document, section, marker and neighbouring requirements (`item_context: bare|document`). It is reported on its own with paired seed-clustered deltas and never pooled into the headline cells; see [`docs/context_ablation.md`](context_ablation.md).
+That is what the document-context ablation measures. The `pure` cell takes 180 requirements from two PURE documents whose authors marked every requirement mandatory or optional, keeps the minimal-pair templates, and shows each Task 2 item either bare (the paper condition) or with its document, section, marker and neighbouring requirements (`item_context: bare|document`). It is reported on its own with paired deltas (paired by seed, resampled by request) and never pooled into the headline cells; see [`docs/context_ablation.md`](context_ablation.md).
 
 ## Why is `heuristic_system_verb` counted in broad strengthening but not strict?
 

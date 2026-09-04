@@ -236,19 +236,39 @@ The RNG seed is fixed at `20260518` (`BOOTSTRAP_SEED` in
 `scripts/export_paper_tables.py` and `scripts/compare_run_matrix.py`), so the
 intervals are reproducible.
 
-Entry points:
+Entry points, and the columns each writes:
 
-- `text_over_commitment_ci_fields` (`scripts/eval_utils.py:7868`) — broad and
-  strict text strengthening with counts and CI bounds.
+- `cluster_ci_fields` (`scripts/eval_utils.py`, Section 10) — the shared shape:
+  `{metric}_ci_low` / `{metric}_ci_high`, `{metric}_seed_ci_low` /
+  `{metric}_seed_ci_high`, and one `bootstrap_ci_cluster_field` per row.
+- `text_over_commitment_ci_fields` (`scripts/eval_utils.py`, Section 10) — broad
+  and strict text strengthening with counts and both intervals.
 - `headline_risk_ci_fields` (`scripts/eval_utils.py`, Section 10) — Task 1/2
   high-confidence risks used by `scripts/generate_evaluation_analysis.py`.
-- `annotate_text_drift_cis` (`scripts/compare_run_matrix.py:52`) — per run and
+- `annotate_text_drift_cis` (`scripts/compare_run_matrix.py`) — per run and
   model in the run-matrix table, `--bootstrap-samples` controls the resamples.
+- `scripts/export_paper_tables.py` — `broad_strengthening_ci_*` /
+  `strict_strengthening_ci_*` plus their `*_seed_ci_*` pairs and
+  `strengthening_ci_cluster_field` in the per-model and headline tables, and
+  `ci_low` / `ci_high` / `seed_ci_low` / `seed_ci_high` / `ci_cluster_field` in
+  `paper_headline_bootstrap_ci.csv`.
 - `scripts/aggregate_paper_headline_metrics.py --regenerate-snapshots` — pools
-  the deterministic rows across all requested cells, bootstraps over seeds, and
-  appends `value_ci_low` / `value_ci_high` / `bootstrap_samples` to the headline
-  table (`attach_bootstrap_cis`,
-  `scripts/aggregate_paper_headline_metrics.py:272`).
+  the deterministic rows across all requested cells, bootstraps over requests,
+  and appends `value_ci_low` / `value_ci_high` / `value_seed_ci_low` /
+  `value_seed_ci_high` / `value_ci_cluster_field` / `bootstrap_samples` to the
+  headline table (`attach_bootstrap_cis`).
+- `scripts/compare_context_ablation.py` — arm rows carry
+  `*_ci_*` / `*_seed_ci_*` / `bootstrap_ci_cluster_field`; delta rows carry
+  `delta_ci_*`, `delta_seed_ci_*`, `delta_cluster_field` and
+  `n_delta_clusters`. The paired delta **pairs by seed and resamples by
+  request**: the two arms are separate runs whose request ids differ, but the
+  partition of seeds into requests is the same, and a seed's four source
+  conditions sit in one request, so a request carries whole pairs.
+
+The snapshots committed under `outputs/` predate this change: their
+`*_ci_low` / `*_ci_high` columns are seed-clustered and they carry no
+`*_seed_ci_*` or cluster-field column. Regenerating them (Section 8) produces
+request-clustered primaries and the seed-clustered pair alongside.
 
 ## 7. Answer length and bloat
 
