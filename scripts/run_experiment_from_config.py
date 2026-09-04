@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,9 +18,14 @@ from typing import Any
 try:
     import eval_utils as eu
     import run_provenance as rp
+    import runner_lifecycle as rl
     from runner_args import RunnerArgs
 except ModuleNotFoundError:  # pragma: no cover
-    from scripts import eval_utils as eu, run_provenance as rp
+    from scripts import (
+        eval_utils as eu,
+        run_provenance as rp,
+        runner_lifecycle as rl,
+    )
     from scripts.runner_args import RunnerArgs
 
 
@@ -110,26 +114,13 @@ def fake_completion(**kwargs: Any) -> dict[str, Any]:
     }
 
 
-def main(argv: list[str] | None = None) -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """CLI for this runner: the shared options plus the Task 1/2 ones."""
     parser = argparse.ArgumentParser(
-        description="Run provider-aware benchmark experiments from a run config."
+        description="Run provider-aware benchmark experiments from a run config.",
+        parents=[rl.common_runner_parser()],
     )
-    parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument("--profile")
-    parser.add_argument("--model")
-    parser.add_argument("--dataset")
-    parser.add_argument("--variant")
     parser.add_argument("--task", choices=["task1", "task2", "both"], default=None)
-    parser.add_argument("--mode", choices=["smoke", "full", "resume"], default="smoke")
-    parser.add_argument("--run-id")
-    parser.add_argument("--smoke-items", type=int, default=2)
-    parser.add_argument("--fake-completion", action="store_true")
-    parser.add_argument("--progress-every-records", type=int)
-    parser.add_argument("--progress-every-seconds", type=int)
-    parser.add_argument("--warn-after-records", type=int)
-    parser.add_argument("--warn-parse-failure-rate", type=float)
-    parser.add_argument("--warn-request-error-rate", type=float)
-    parser.add_argument("--no-progress-artifacts", action="store_true")
     parser.add_argument(
         "--all-models",
         action="store_true",
@@ -140,12 +131,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Print the planned job/batch/API-call counts and exit without contacting a provider.",
     )
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        help="Logging level for the re_uq logger (default: INFO).",
-    )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     eu.configure_run_logging(args.log_level)
     run_from_config(eu.load_run_config(args.config), args)
 
@@ -174,6 +164,10 @@ class MatrixRun:
     @property
     def expected_stochastic_samples(self) -> int:
         return int(self.run_config["stochastic"]["samples"])
+
+    def smoke_for(self, run_id: str) -> bool:
+        """Whether `run_id` writes into the parallel smoke artifact tree."""
+        return self.smoke_tree or eu.is_smoke_run_id(run_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +199,9 @@ class RunCell:
     registry_path: Path
     progress_path: Path
     events_path: Path
+    #: Set only under `--mode resume`; carries the first attempt's identity so
+    #: this cell reports the original start time and provenance notes.
+    resume: rl.ResumeState | None = None
 
     @property
     def profile_id(self) -> str:
@@ -248,10 +245,11 @@ def plan_cell(
     send_seed: bool,
     max_retries: int,
     batch_order: str,
+    resume: rl.ResumeState | None = None,
 ) -> RunCell:
     """Resolve one matrix cell: its artifact paths and job plan."""
     args = matrix.args
-    smoke_run = matrix.smoke_tree or eu.is_smoke_run_id(run_id)
+    smoke_run = matrix.smoke_for(run_id)
     benchmark = eu.read_csv_rows(
         eu.artifact_path(
             matrix.root / "data/processed/benchmark_items.csv", dataset_id, variant
@@ -305,7 +303,8 @@ def plan_cell(
         dataset_id=dataset_id,
         variant=variant,
         run_id=run_id,
-        started_at=eu.utc_now_iso(),
+        # A resumed cell keeps the start time its first attempt recorded.
+        started_at=resume.started_at_utc if resume else eu.utc_now_iso(),
         seed=seed,
         send_seed=send_seed,
         max_retries=max_retries,
@@ -331,6 +330,7 @@ def plan_cell(
         events_path=eu.run_events_path(
             matrix.root, dataset_id, variant, smoke=smoke_run
         ),
+        resume=resume,
     )
 
 
@@ -374,7 +374,9 @@ def registry_row(
         server_model_probe=cell.preflight,
         batch_order=cell.batch_order,
         item_context=matrix.item_context,
-        notes=rp.run_notes(matrix.args),
+        # A resumed cell keeps the notes (and resolved-config digest) of the run
+        # it continues instead of restamping them with `mode=resume`.
+        notes=cell.resume.notes if cell.resume else rp.run_notes(matrix.args),
     )
 
 
@@ -403,96 +405,27 @@ def log_planned_cell(matrix: MatrixRun, cell: RunCell) -> None:
     )
 
 
-def execute_cell(matrix: MatrixRun, cell: RunCell) -> None:
-    """Run one matrix cell to completion, streaming progress artifacts."""
-    logging_config = matrix.logging_config
-    current_rows = list(cell.existing_rows)
-    started_monotonic = time.monotonic()
-    emitted_warning_types: set[str] = set()
+def cell_execution(matrix: MatrixRun, cell: RunCell) -> rl.CellExecution:
+    """Bind this cell's Task 1/2 specifics to the shared lifecycle."""
 
-    def refresh_live_progress(
-        event_type: str, finished_at_utc: str = "", print_line: bool = True
-    ) -> dict[str, Any]:
-        run_rows = eu.select_model_run_rows(
-            current_rows, cell.run_id, cell.model, matrix.tasks
-        )
-        pending_jobs_now = eu.pending_completion_jobs(
-            cell.jobs, current_rows, cell.run_id
-        )
-        pending_api_calls_now = len(
-            eu.completion_job_batches(
-                pending_jobs_now, cell.batch_size, planned_jobs=cell.jobs
-            )
-        )
-        status = (
-            "running"
-            if event_type in {"start", "progress"} and pending_jobs_now
-            else None
-        )
-        eu.upsert_run_registry_row(
-            cell.registry_path,
-            registry_row(
-                matrix,
-                cell,
-                current_rows,
-                status=status,
-                finished_at_utc=finished_at_utc,
-            ),
-        )
-        if logging_config["write_progress_csv"]:
-            eu.write_live_progress_csv(
-                cell.progress_path,
-                cell.benchmark_rows,
-                run_rows,
-                expected_stochastic_samples=matrix.expected_stochastic_samples,
-            )
-        counters = eu.live_run_counters(
-            run_rows,
-            expected_records=len(cell.jobs),
-            expected_api_calls=cell.planned_api_calls,
-            started_monotonic=started_monotonic,
-        )
-        event = {
-            "event_type": event_type,
-            **cell_context(matrix, cell),
-            "tasks": matrix.tasks,
-            "mode": matrix.args.mode,
-            "output_path": str(cell.output_path),
-            "registry_path": str(cell.registry_path),
-            "progress_path": str(cell.progress_path),
-            "planned_jobs": len(cell.jobs),
-            "pending_jobs": len(pending_jobs_now),
-            "planned_api_calls": cell.planned_api_calls,
-            "pending_api_calls": pending_api_calls_now,
-            **counters,
-        }
-        if logging_config["write_event_jsonl"]:
-            eu.append_run_event(cell.events_path, event)
-        if print_line and event_type in {"progress", "finish"}:
-            eu.logger.info("%s", eu.format_live_progress_line(cell.run_id, counters))
-        if event_type == "finish":
-            eu.logger.info(
-                "%s",
-                eu.format_run_quality_line(
-                    cell.run_id, eu.run_quality_counters(run_rows)
-                ),
-            )
-        return counters
+    def stamp_record(record: dict[str, Any]) -> None:
+        # Persist the resolved choice on the run artifact. The analysis process
+        # cannot inherit this process's env.
+        record["semantic_embedding_backend"] = matrix.semantic_embedding_backend
 
-    eu.upsert_run_registry_row(
-        cell.registry_path,
-        registry_row(
-            matrix,
-            cell,
-            current_rows,
-            status="running" if cell.pending_jobs else None,
+    return rl.CellExecution(
+        cell=cell,
+        tasks=matrix.tasks,
+        progress_items=cell.benchmark_rows,
+        expected_stochastic_samples=matrix.expected_stochastic_samples,
+        logging_config=matrix.logging_config,
+        completion_fn=matrix.completion_fn,
+        context=cell_context(matrix, cell),
+        mode=matrix.args.mode,
+        registry_row=lambda raw_rows, **kwargs: registry_row(
+            matrix, cell, raw_rows, **kwargs
         ),
-    )
-    refresh_live_progress("start", print_line=False)
-
-    eu.logger.info(
-        "%s",
-        {
+        start_log={
             "run_id": cell.run_id,
             "dataset_id": cell.dataset_id,
             "variant": cell.variant,
@@ -512,52 +445,22 @@ def execute_cell(matrix: MatrixRun, cell: RunCell) -> None:
             "progress_path": str(cell.progress_path),
             "output_path": str(cell.output_path),
         },
-    )
-    progress_every_records = int(logging_config["progress_every_records"])
-    progress_every_seconds = int(logging_config["progress_every_seconds"])
-    last_progress_record_index = 0
-    last_progress_monotonic = time.monotonic()
-    for index, record in enumerate(
-        eu.run_completion_jobs(
-            cell.pending_jobs,
-            max_workers=int(cell.profile["concurrency"]),
-            completion_fn=matrix.completion_fn,
-            batch_size=cell.batch_size,
-            planned_jobs=cell.jobs,
+        stamp_record=stamp_record,
+        registry_label="Registry status",
+        lease=rl.CellLease.for_cell(
+            matrix.root,
+            run_id=cell.run_id,
+            profile_id=cell.profile_id,
+            model=cell.model,
+            dataset_id=cell.dataset_id,
+            variant=cell.variant,
         ),
-        start=1,
-    ):
-        # Persist the resolved choice on the run artifact. The analysis process
-        # cannot inherit this process's env.
-        record["semantic_embedding_backend"] = matrix.semantic_embedding_backend
-        eu.append_jsonl(cell.output_path, record)
-        current_rows.append(record)
-        now_monotonic = time.monotonic()
-        records_due = index - last_progress_record_index >= progress_every_records
-        seconds_due = (
-            progress_every_seconds > 0
-            and now_monotonic - last_progress_monotonic >= progress_every_seconds
-        )
-        if records_due or seconds_due or index == len(cell.pending_jobs):
-            counters = refresh_live_progress("progress")
-            last_progress_record_index = index
-            last_progress_monotonic = now_monotonic
-            eu.emit_warning_events(
-                counters,
-                logging_config=logging_config,
-                emitted_warning_types=emitted_warning_types,
-                context=cell_context(matrix, cell),
-                events_path=cell.events_path,
-            )
+    )
 
-    finish_row = registry_row(
-        matrix, cell, current_rows, finished_at_utc=eu.utc_now_iso()
-    )
-    eu.upsert_run_registry_row(cell.registry_path, finish_row)
-    refresh_live_progress("finish", finished_at_utc=str(finish_row["finished_at_utc"]))
-    eu.logger.info(
-        "Registry status: %s at %s", finish_row["status"], cell.registry_path
-    )
+
+def execute_cell(matrix: MatrixRun, cell: RunCell) -> None:
+    """Run one matrix cell to completion, streaming progress artifacts."""
+    rl.execute_cell(cell_execution(matrix, cell))
 
 
 def run_from_config(run_config: dict[str, Any], args: RunnerArgs) -> None:
@@ -649,16 +552,32 @@ def run_from_config(run_config: dict[str, Any], args: RunnerArgs) -> None:
                     run_id = args.run_id or eu.new_run_id(
                         run_prefix(args.mode, variant)
                     )
+                    resume = (
+                        # Fails here, before this run id opens a log file or
+                        # touches the registry, if it is not a real run of this
+                        # exact cell.
+                        rl.resolve_resume(
+                            root,
+                            eu.run_registry_path(
+                                root,
+                                dataset_id,
+                                variant,
+                                smoke=matrix.smoke_for(run_id),
+                            ),
+                            run_id=run_id,
+                            provider_id=profile["provider_id"],
+                            profile_id=profile["profile_id"],
+                            model=model,
+                            dataset_id=dataset_id,
+                            variant=variant,
+                            tasks=tasks,
+                            record=not args.dry_run,
+                        )
+                        if args.mode == "resume"
+                        else None
+                    )
                     if not args.dry_run:
-                        # Configured before planning so planning-time warnings
-                        # land in this run's log file.
-                        eu.configure_run_logging(
-                            args.log_level, log_path=eu.run_log_path(root, run_id)
-                        )
-                        # No-op unless the run was composed by scripts/run.py.
-                        rp.write_resolved_config(
-                            root, run_id, getattr(args, "resolved_config_yaml", "")
-                        )
+                        rl.prepare_run_directory(root, run_id, args, resume=resume)
                     cell = plan_cell(
                         matrix,
                         profile,
@@ -671,6 +590,7 @@ def run_from_config(run_config: dict[str, Any], args: RunnerArgs) -> None:
                         send_seed=send_seed,
                         max_retries=max_retries,
                         batch_order=batch_order,
+                        resume=resume,
                     )
                     if args.dry_run:
                         log_planned_cell(matrix, cell)
