@@ -52,6 +52,7 @@ Many curated artifacts under `outputs/` and `docs/final_seed_documents/` exist a
 | Understand how headline numbers are aggregated | `docs/aggregation.md` |
 | Reproduce the pipeline end-to-end | `docs/reproduction.md`, `scripts/reproduce.sh` |
 | See how artifacts map to paper figures/tables | `docs/results_mapping.md` |
+| Regenerate the manuscript's LaTeX number macros from the artifacts | `scripts/export_paper_numbers.py` (writes `numbers.tex`; see `docs/results_mapping.md`) |
 | Understand pipeline code architecture | `docs/architecture.md` |
 | Understand Git/artifact policy | `docs/repository_hygiene.md` |
 | Common reviewer questions | `docs/faq.md` |
