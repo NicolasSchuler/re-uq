@@ -150,7 +150,9 @@ class SemanticCachePipelineTest(unittest.TestCase):
 
     def _cache_dir(self, manifest: dict[str, object]) -> Path:
         return eu.acse_semantic_cache_dir(
-            self.analysis_dir, str(manifest["embedding_backend"])
+            self.analysis_dir,
+            str(manifest["embedding_backend"]),
+            str(manifest["model"]),
         )
 
     def test_compute_run_backend_orders_samples_and_counts_failed_attempts(

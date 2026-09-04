@@ -255,11 +255,15 @@ def backend_specs_for_run(
 
 
 def existing_backend_manifests(output_root: Path) -> list[dict[str, Any]]:
+    """Every cache manifest under ``output_root``, one per model and backend.
+
+    The glob matches any analysis dir name, not just ``evaluation_*``, because
+    discovery reads ``provenance_manifest.json`` from any directory; a renamed
+    analysis dir must stay visible here or its artifacts vanish downstream.
+    """
     manifests: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str, str]] = set()
-    for manifest_path in sorted(
-        output_root.glob("evaluation_*/acse_semantic_*/manifest.json")
-    ):
+    for manifest_path in sorted(output_root.glob("*/acse_semantic_*/manifest.json")):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         key = (
             str(manifest.get("dataset_id", "")),
@@ -273,6 +277,47 @@ def existing_backend_manifests(output_root: Path) -> list[dict[str, Any]]:
         seen.add(key)
         manifests.append(manifest)
     return manifests
+
+
+def manifest_summary_rows(
+    discovered: list[dict[str, Any]], computed: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Summary rows for the discovered caches, refusing a truncating rewrite.
+
+    ``computed`` is what this invocation just wrote. Discovery finding none of it
+    means the summary CSV would be replaced by a header-less empty file and the
+    fresh artifacts would be invisible downstream, so that is an error rather
+    than a silent truncation.
+    """
+    if computed and not discovered:
+        raise ValueError(
+            f"{len(computed)} cache manifest(s) were just written, but discovery "
+            f"found none; refusing to overwrite {eu.ACSE_SEMANTIC_MANIFEST_FILENAME} "
+            "with an empty file."
+        )
+    return [
+        {
+            "dataset_id": row["dataset_id"],
+            "benchmark_variant": row["benchmark_variant"],
+            "run_id": row["run_id"],
+            "model": row["model"],
+            "profile_id": row["profile_id"],
+            "embedding_backend": row["embedding_backend"],
+            "status": row["status"],
+            "item_rows": row["item_rows"],
+            "stochastic_sample_rows": row["stochastic_sample_rows"],
+            "embedding_shape": json.dumps(row["embedding_shape"]),
+            "analysis_dir": row["analysis_dir"],
+            "artifact_dir": str(
+                eu.acse_semantic_cache_dir(
+                    Path(row["analysis_dir"]),
+                    row["embedding_backend"],
+                    row["model"],
+                )
+            ),
+        }
+        for row in discovered
+    ]
 
 
 def input_fingerprint(path: Path, manifest_dir: Path) -> dict[str, Any]:
@@ -298,9 +343,9 @@ def cache_input_fingerprints(
     """Everything the cached artifacts were derived from, as a comparable dict.
 
     A cache is only reusable when the raw outputs, the analysis scores, the
-    benchmark items, and the embedding identity are all unchanged. Comparing
-    these beats trusting the ``status`` field, which only says that some
-    earlier invocation finished.
+    benchmark items, the embedding identity, and the scored model are all
+    unchanged. Comparing these beats trusting the ``status`` field, which only
+    says that some earlier invocation finished.
     """
     _, model_name = eu.semantic_embedding_backend_args(backend_label)
     return {
@@ -320,6 +365,7 @@ def cache_input_fingerprints(
         ),
         "embedding_backend": backend_label,
         "embedding_model": model_name or "",
+        "model": run.model,
     }
 
 
@@ -466,7 +512,7 @@ def compute_run_backend(
     backend_label, _ = eu.semantic_embedding_backend_label(
         embedding_backend, mlx_model_name
     )
-    output_dir = eu.acse_semantic_cache_dir(run.analysis_dir, backend_label)
+    output_dir = eu.acse_semantic_cache_dir(run.analysis_dir, backend_label, run.model)
     manifest_path = output_dir / "manifest.json"
     fingerprints = cache_input_fingerprints(root, run, backend_label, output_dir)
     if manifest_path.exists() and not force:
@@ -516,7 +562,7 @@ def compute_run_backend(
         mlx_model_name,
         embedding_batch_size,
     )
-    output_dir = eu.acse_semantic_cache_dir(run.analysis_dir, backend_label)
+    output_dir = eu.acse_semantic_cache_dir(run.analysis_dir, backend_label, run.model)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     deterministic_requirements = deterministic_requirement(raw_rows)
@@ -773,27 +819,7 @@ def main() -> None:
             )
 
     all_manifests = existing_backend_manifests(output_root)
-    manifest_rows = [
-        {
-            "dataset_id": row["dataset_id"],
-            "benchmark_variant": row["benchmark_variant"],
-            "run_id": row["run_id"],
-            "model": row["model"],
-            "profile_id": row["profile_id"],
-            "embedding_backend": row["embedding_backend"],
-            "status": row["status"],
-            "item_rows": row["item_rows"],
-            "stochastic_sample_rows": row["stochastic_sample_rows"],
-            "embedding_shape": json.dumps(row["embedding_shape"]),
-            "analysis_dir": row["analysis_dir"],
-            "artifact_dir": str(
-                eu.acse_semantic_cache_dir(
-                    Path(row["analysis_dir"]), row["embedding_backend"]
-                )
-            ),
-        }
-        for row in all_manifests
-    ]
+    manifest_rows = manifest_summary_rows(all_manifests, manifests)
     eu.write_csv_rows(output_root / eu.ACSE_SEMANTIC_MANIFEST_FILENAME, manifest_rows)
     eu.write_json(output_root / "acse_semantic_artifact_manifest.json", all_manifests)
 

@@ -1687,8 +1687,18 @@ def run_log_path(root: str | Path, run_id: str) -> Path:
     return Path(root) / "data/processed/logs" / f"{safe_identifier(run_id)}.log"
 
 
-def acse_semantic_cache_dir(analysis_dir: str | Path, backend_label: str) -> Path:
-    return Path(analysis_dir) / f"acse_semantic_{safe_identifier(backend_label)}"
+def acse_semantic_cache_dir(
+    analysis_dir: str | Path, backend_label: str, model: str
+) -> Path:
+    """Cache directory for one model's artifacts under one embedding backend.
+
+    The model is part of the path because one analysis dir can hold several
+    scored models: an empty ``model_filter`` expands to all of them, and without
+    the model component they would all write the same directory.
+    """
+    return Path(analysis_dir) / (
+        f"acse_semantic_{safe_identifier(backend_label)}__{safe_identifier(model)}"
+    )
 
 
 def utc_now_iso() -> str:

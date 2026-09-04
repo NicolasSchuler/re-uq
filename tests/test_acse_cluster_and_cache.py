@@ -16,6 +16,7 @@ Four contracts are pinned here, all offline:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import tempfile
@@ -658,7 +659,12 @@ class AcseCacheValidityTest(unittest.TestCase):
         return eu.model_outputs_raw_path(self.root, "nice", "must")
 
     def _raw_row(
-        self, item: dict[str, Any], sample_kind: str, sample_index: int, modality: str
+        self,
+        item: dict[str, Any],
+        sample_kind: str,
+        sample_index: int,
+        modality: str,
+        model: str = "model-1",
     ) -> dict[str, Any]:
         modal = {"mandatory": "MUST", "recommended": "SHOULD", "optional": "MAY"}[
             modality
@@ -668,7 +674,7 @@ class AcseCacheValidityTest(unittest.TestCase):
             "run_group_id": "group-1",
             "provider_id": "provider-1",
             "profile_id": "profile-1",
-            "model": "model-1",
+            "model": model,
             "task": "task2",
             "item_id": item["item_id"],
             "seed_id": item["seed_id"],
@@ -684,18 +690,32 @@ class AcseCacheValidityTest(unittest.TestCase):
             "confidence_scale": eu.CONFIDENCE_SCALE_0_1,
         }
 
-    def _write_raw_rows(self) -> None:
+    def _write_raw_rows(self, model: str = "model-1") -> None:
         for item in self.items:
             eu.append_jsonl(
-                self.raw_path, self._raw_row(item, "deterministic", 0, "optional")
+                self.raw_path,
+                self._raw_row(item, "deterministic", 0, "optional", model),
             )
             for sample_index, modality in enumerate(
                 ["optional", "recommended", "mandatory"]
             ):
                 eu.append_jsonl(
                     self.raw_path,
-                    self._raw_row(item, "stochastic", sample_index, modality),
+                    self._raw_row(item, "stochastic", sample_index, modality, model),
                 )
+
+    def _add_model(self, model: str) -> None:
+        """Score a second model into the same analysis dir.
+
+        This is what an empty ``model_filter`` expands to, so it is the case the
+        cache layout has to keep apart.
+        """
+        self._write_raw_rows(model)
+        rows = eu.read_csv_rows(self.analysis_dir / "uq_scores.csv")
+        eu.write_csv_rows(
+            self.analysis_dir / "uq_scores.csv",
+            rows + [dict(row, model=model) for row in rows],
+        )
 
     def _write_scores(self) -> None:
         eu.write_csv_rows(
@@ -730,9 +750,14 @@ class AcseCacheValidityTest(unittest.TestCase):
         )
 
     def _compute(self, *, force: bool = False) -> dict[str, Any]:
+        return self._compute_for(self.run, force=force)
+
+    def _compute_for(
+        self, run: semantic_cache.CompletedRun, *, force: bool = False
+    ) -> dict[str, Any]:
         return semantic_cache.compute_run_backend(
             self.root,
-            self.run,
+            run,
             embedding_backend="tfidf",
             mlx_model_name=None,
             distance_threshold=THRESHOLD,
@@ -743,7 +768,9 @@ class AcseCacheValidityTest(unittest.TestCase):
     def _manifest_path(self, manifest: dict[str, Any]) -> Path:
         return (
             eu.acse_semantic_cache_dir(
-                self.analysis_dir, str(manifest["embedding_backend"])
+                self.analysis_dir,
+                str(manifest["embedding_backend"]),
+                str(manifest["model"]),
             )
             / "manifest.json"
         )
@@ -810,6 +837,7 @@ class AcseCacheValidityTest(unittest.TestCase):
                 "benchmark_items",
                 "embedding_backend",
                 "embedding_model",
+                "model",
                 "raw_rows",
                 "uq_scores",
             ],
@@ -871,6 +899,56 @@ class AcseCacheValidityTest(unittest.TestCase):
             manifest["inputs"]["embedding_backend"], eu.ACSE_PROXY_EMBEDDING_BACKEND
         )
         self.assertEqual(manifest["inputs"]["embedding_model"], "")
+
+    # -- one cache per model ---------------------------------------------
+
+    def test_two_models_in_one_analysis_dir_do_not_share_a_cache(self) -> None:
+        self._add_model("model-2")
+        other_run = dataclasses.replace(self.run, model="model-2")
+
+        first = self._compute()
+        other = self._compute_for(other_run)
+
+        self.assertEqual(first["model"], "model-1")
+        self.assertEqual(other["model"], "model-2")
+        self.assertEqual(
+            other["status"], "computed", "the second model must not reuse the first"
+        )
+        first_path = self._manifest_path(first)
+        other_path = self._manifest_path(other)
+        self.assertNotEqual(first_path, other_path)
+        for path, model in [(first_path, "model-1"), (other_path, "model-2")]:
+            on_disk = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(on_disk["model"], model, path)
+
+    def test_the_scored_model_is_part_of_the_cache_fingerprint(self) -> None:
+        self.assertEqual(self._compute()["inputs"]["model"], "model-1")
+
+    def test_manifest_discovery_is_not_limited_to_evaluation_dirs(self) -> None:
+        renamed = self.output_root / "acse_reanalysis_nice_must"
+        self.analysis_dir.rename(renamed)
+        self.analysis_dir = renamed
+        self._compute_for(dataclasses.replace(self.run, analysis_dir=renamed))
+
+        found = semantic_cache.existing_backend_manifests(self.output_root)
+        self.assertEqual([manifest["model"] for manifest in found], ["model-1"])
+
+    def test_a_summary_never_replaces_computed_manifests_with_an_empty_file(
+        self,
+    ) -> None:
+        computed = [self._compute()]
+        with self.assertRaises(ValueError) as caught:
+            semantic_cache.manifest_summary_rows([], computed)
+        self.assertIn("empty file", str(caught.exception))
+
+    def test_a_summary_row_points_at_the_model_s_own_artifact_dir(self) -> None:
+        computed = [self._compute()]
+        discovered = semantic_cache.existing_backend_manifests(self.output_root)
+        rows = semantic_cache.manifest_summary_rows(discovered, computed)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            Path(rows[0]["artifact_dir"]), self._manifest_path(computed[0]).parent
+        )
 
     # -- single clustering fit per item ----------------------------------
 

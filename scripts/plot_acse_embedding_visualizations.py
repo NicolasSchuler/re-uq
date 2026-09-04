@@ -447,7 +447,7 @@ def main() -> None:
         args.backend, args.mlx_model
     )
     cache_dir = args.cache_dir or eu.acse_semantic_cache_dir(
-        analysis_dir, requested_backend_label
+        analysis_dir, requested_backend_label, args.model
     )
     cache_used = False
     if cache_dir.exists() and not args.recompute_embeddings:
