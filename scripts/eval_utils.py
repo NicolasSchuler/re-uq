@@ -3065,57 +3065,18 @@ def prompt_for_benchmark_task(
     raise ValueError(f"Unsupported benchmark task: {task}")
 
 
-def _json_schema_object(
-    properties: Mapping[str, Any], required: list[str]
-) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": dict(properties),
-        "required": list(required),
-        "additionalProperties": False,
-    }
-
-
 def task_response_schema(task: str, *, batched: bool = False) -> dict[str, Any]:
-    confidence = {"type": "number", "minimum": 0, "maximum": 1}
-    if task == "task1":
-        properties: dict[str, Any] = {
-            "decision": {"type": "string", "enum": ["yes", "no"]},
-            "confidence": confidence,
-            "brief_reason": {"type": "string", "maxLength": 200},
-        }
-        required = ["decision", "confidence", "brief_reason"]
-    elif task == "task2":
-        properties = {
-            "requirement": {"type": "string"},
-            "modality": {"type": "string", "enum": list(MODALITIES)},
-            "confidence": confidence,
-        }
-        required = ["requirement", "modality", "confidence"]
-    elif task == "task3":
-        properties = {
-            "relation": {"type": "string", "enum": list(TASK3_RELATIONS)},
-            "confidence": confidence,
-            "evidence_phrase": {"type": "string", "maxLength": 240},
-            "brief_reason": {"type": "string", "maxLength": 240},
-        }
-        required = ["relation", "confidence", "evidence_phrase", "brief_reason"]
-    else:
-        raise ValueError(f"Unsupported task for JSON Schema response format: {task}")
+    """Strict provider JSON Schema for `task`, derived from its Pydantic model.
 
-    if batched:
-        properties = {"request_index": {"type": "integer"}, **properties}
-        required = ["request_index", *required]
-        return _json_schema_object(
-            {
-                "results": {
-                    "type": "array",
-                    "items": _json_schema_object(properties, required),
-                }
-            },
-            ["results"],
-        )
-    return _json_schema_object(properties, required)
+    Derived rather than written out here so the schema a request carries and
+    the model Instructor validates against cannot drift apart. The derivation
+    reproduces the handwritten schema byte for byte; those bytes are pinned in
+    tests/test_structured_outputs.py because they are part of the request
+    fingerprint every archived run resumes on.
+    """
+    if task not in so.TASK_RESPONSE_MODELS:
+        raise ValueError(f"Unsupported task for JSON Schema response format: {task}")
+    return so.provider_schema_for_task(task, batched=batched)
 
 
 def response_format_for_task(
@@ -4157,11 +4118,71 @@ def text_modality_fields(
     }
 
 
+# Names for the concessions the tolerant parser makes relative to the strict
+# JSON Schema and Instructor paths. They are recorded under PARSE_REPAIRS_FIELD
+# inside the parsed payload, so a raw row tells apart a response the provider
+# contract would have accepted as sent (empty list) from one that only parsed
+# because we repaired it. Rows written before the field existed carry no key at
+# all, which `parse_repairs_for_record` reads as "unknown, treat as none".
+PARSE_REPAIRS_FIELD = "parse_repairs"
+PARSE_REPAIR_PROSE_WRAPPER = "prose_wrapper"
+PARSE_REPAIR_LABEL_ALIAS = "label_alias"
+PARSE_REPAIR_UNEXPECTED_FIELDS = "unexpected_fields"
+
+# Fields each task's strict contract allows, plus the batch key that a batched
+# item carries. Derived from the response models so "unexpected" always means
+# "a key `additionalProperties: false` would have rejected".
+TASK_CONTRACT_FIELDS: dict[str, frozenset[str]] = {
+    task: frozenset(model.model_fields) | {"request_index"}
+    for task, model in so.TASK_RESPONSE_MODELS.items()
+}
+
+
+def _with_parse_repairs(parsed: dict[str, Any], repairs: list[str]) -> dict[str, Any]:
+    """Attach the repair list, deduplicated, in the order the repairs applied."""
+    parsed[PARSE_REPAIRS_FIELD] = list(dict.fromkeys(repairs))
+    return parsed
+
+
+def _repaired_contract_text(
+    parsed: dict[str, Any],
+    field: str,
+    repairs: list[str],
+    max_length: int | None = None,
+) -> str:
+    """Force `field` to the contract's string type and length, naming repairs.
+
+    The strict paths reject an absent, non-string, or over-long value outright;
+    here each of those is fixed up and recorded so the row stays auditable.
+    """
+    if field in parsed:
+        value = parsed[field]
+        if not isinstance(value, str):
+            repairs.append(f"coerced_{field}")
+            value = str(value)
+    else:
+        repairs.append(f"defaulted_{field}")
+        value = ""
+    if max_length is not None and len(value) > max_length:
+        repairs.append(f"truncated_{field}")
+        value = value[:max_length]
+    parsed[field] = value
+    return value
+
+
 def parse_task_response(
     task: str,
     raw_text: str,
     confidence_scale: str = CONFIDENCE_SCALE_0_100,
 ) -> tuple[dict[str, Any] | None, str]:
+    """Tolerant per-response parser that names every repair it applies.
+
+    Deliberately accepts responses the strict JSON Schema and Instructor paths
+    reject -- prose around the JSON object, label aliases, a missing or
+    over-long free-text field, extra keys -- so a run is not lost to a
+    formatting slip. Each concession is listed under `parse_repairs` in the
+    returned payload; an empty list means the response conformed as sent.
+    """
     json_text = extract_json_object(raw_text)
     if json_text is None:
         return None, "invalid_json"
@@ -4170,39 +4191,56 @@ def parse_task_response(
     except json.JSONDecodeError:
         return None, "invalid_json"
 
+    repairs: list[str] = []
+    if json_text.strip() != str(raw_text or "").strip():
+        repairs.append(PARSE_REPAIR_PROSE_WRAPPER)
+    contract_fields = TASK_CONTRACT_FIELDS.get(task)
+    if contract_fields is not None and set(parsed) - contract_fields:
+        repairs.append(PARSE_REPAIR_UNEXPECTED_FIELDS)
+
     confidence = parse_confidence(parsed.get("confidence"), confidence_scale)
     if confidence is None:
-        return parsed, "invalid_confidence"
+        return _with_parse_repairs(parsed, repairs), "invalid_confidence"
     parsed["confidence"] = confidence
 
     if task == "task1":
         decision = normalize_decision(parsed.get("decision"))
         if decision is None:
-            return parsed, "invalid_label"
+            return _with_parse_repairs(parsed, repairs), "invalid_label"
+        if parsed.get("decision") != decision:
+            repairs.append(PARSE_REPAIR_LABEL_ALIAS)
         parsed["decision"] = decision
-        parsed["brief_reason"] = str(parsed.get("brief_reason", ""))[:200]
-        return parsed, "ok"
+        _repaired_contract_text(parsed, "brief_reason", repairs, max_length=200)
+        return _with_parse_repairs(parsed, repairs), "ok"
 
     if task == "task2":
         modality = normalize_modality(parsed.get("modality"))
         if modality is None:
-            return parsed, "invalid_label"
+            return _with_parse_repairs(parsed, repairs), "invalid_label"
         if "requirement" not in parsed:
-            return parsed, "missing_fields"
+            return _with_parse_repairs(parsed, repairs), "missing_fields"
+        if parsed.get("modality") != modality:
+            repairs.append(PARSE_REPAIR_LABEL_ALIAS)
         parsed["modality"] = modality
-        parsed["requirement"] = str(parsed.get("requirement", ""))
-        return parsed, "ok"
+        requirement = _repaired_contract_text(parsed, "requirement", repairs)
+        if not requirement.strip():
+            # A blank extraction is a failed extraction, not an empty one, and
+            # Task2Response rejects it too. No archived raw row is affected.
+            return _with_parse_repairs(parsed, repairs), "missing_fields"
+        return _with_parse_repairs(parsed, repairs), "ok"
 
     if task == "task3":
         relation = normalize_relation(parsed.get("relation"))
         if relation is None:
-            return parsed, "invalid_label"
+            return _with_parse_repairs(parsed, repairs), "invalid_label"
         if "evidence_phrase" not in parsed:
-            return parsed, "missing_fields"
+            return _with_parse_repairs(parsed, repairs), "missing_fields"
+        if parsed.get("relation") != relation:
+            repairs.append(PARSE_REPAIR_LABEL_ALIAS)
         parsed["relation"] = relation
-        parsed["evidence_phrase"] = str(parsed.get("evidence_phrase", ""))[:240]
-        parsed["brief_reason"] = str(parsed.get("brief_reason", ""))[:240]
-        return parsed, "ok"
+        _repaired_contract_text(parsed, "evidence_phrase", repairs, max_length=240)
+        _repaired_contract_text(parsed, "brief_reason", repairs, max_length=240)
+        return _with_parse_repairs(parsed, repairs), "ok"
 
     raise ValueError(f"Unknown task: {task}")
 
@@ -4214,9 +4252,43 @@ def parse_instructor_task_response(
     if json_text is None:
         return None, "invalid_json"
     try:
-        return so.validated_json_for_task(task, json_text), "ok"
+        parsed = so.validated_json_for_task(task, json_text)
     except Exception:
         return None, "instructor_validation_error"
+    # The strict path repairs nothing by construction; its one concession is
+    # lifting the object out of surrounding prose before validating it.
+    prose = json_text.strip() != str(raw_text or "").strip()
+    repairs = [PARSE_REPAIR_PROSE_WRAPPER] if prose else []
+    return _with_parse_repairs(parsed, repairs), "ok"
+
+
+def parse_repairs_for_record(row: Mapping[str, Any]) -> list[str]:
+    """Repairs recorded on a raw row; empty for conforming and pre-field rows."""
+    parsed = row.get("parsed_json")
+    if not isinstance(parsed, Mapping):
+        return []
+    repairs = parsed.get(PARSE_REPAIRS_FIELD)
+    if not isinstance(repairs, list):
+        return []
+    return [str(repair) for repair in repairs]
+
+
+def parse_repair_counts(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    """Repair histogram over raw rows, for run-quality reporting.
+
+    `repaired_records` counts rows that needed at least one repair; the other
+    keys count how often each individual repair was applied. A run whose rows
+    all parsed as sent reports `{"repaired_records": 0}`.
+    """
+    counts: dict[str, int] = {"repaired_records": 0}
+    for row in raw_rows:
+        repairs = parse_repairs_for_record(row)
+        if not repairs:
+            continue
+        counts["repaired_records"] += 1
+        for repair in repairs:
+            counts[repair] = counts.get(repair, 0) + 1
+    return counts
 
 
 def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
