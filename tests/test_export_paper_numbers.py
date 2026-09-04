@@ -755,6 +755,57 @@ class FormatterGuardTest(unittest.TestCase):
         self.assertEqual(found, ["numB", "numC"])
 
 
+class ClusterProvenanceTest(ExporterFixtureTest):
+    """The annotation must come from the artifact, never from a fixed string."""
+
+    def _set_cluster_field(self, value: str | None) -> None:
+        path = self.outputs / exporter.HEADLINE_BOOTSTRAP_CI
+        rows = eu.read_csv_rows(path)
+        for row in rows:
+            if value is None:
+                row.pop("ci_cluster_field", None)
+            else:
+                row["ci_cluster_field"] = value
+        eu.write_csv_rows(path, rows)
+
+    def _annotation(self, macro: str) -> str:
+        for line in self.output.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"\\newcommand{{\\{macro}}}"):
+                return line.split("%", 1)[1].strip() if "%" in line else ""
+        raise AssertionError(f"{macro} not found")
+
+    def test_a_request_clustered_snapshot_says_so(self) -> None:
+        self._set_cluster_field(eu.DEFAULT_BOOTSTRAP_CLUSTER_FIELD)
+        self.export()
+        self.assertEqual(
+            self._annotation("numStrictOverall"), "pooled, request-clustered CI"
+        )
+        self.assertEqual(
+            self._annotation("numBroadOverall"), "pooled, request-clustered CI"
+        )
+
+    def test_a_slice_that_fell_back_to_the_seed_is_not_mislabelled(self) -> None:
+        self._set_cluster_field(eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD)
+        self.export()
+        self.assertEqual(
+            self._annotation("numStrictOverall"), "pooled, seed-clustered CI"
+        )
+
+    def test_a_snapshot_without_the_column_claims_nothing(self) -> None:
+        self._set_cluster_field(None)
+        self.export()
+        self.assertEqual(
+            self._annotation("numStrictOverall"), "pooled, resampling unit not recorded"
+        )
+
+    def test_an_unknown_unit_is_reported_verbatim(self) -> None:
+        self._set_cluster_field("run_id")
+        self.export()
+        self.assertEqual(
+            self._annotation("numStrictOverall"), "pooled, run_id-clustered CI"
+        )
+
+
 class StrictModeTest(ExporterFixtureTest):
     """--strict is what the manuscript path uses: never write a doubtful number."""
 

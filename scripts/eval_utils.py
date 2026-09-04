@@ -10508,11 +10508,13 @@ def cluster_ci_fields(
     from treating the request rather than the seed as independent.
     ``bootstrap_ci_cluster_field`` records the field the primary interval
     actually used; when it is already the seed the two intervals coincide and
-    only one bootstrap runs.
+    only one bootstrap runs. It is emitted even when there are no metrics, so a
+    task with no headline risk still says which unit its slice resolved to
+    rather than carrying a blank cell that reads like a missing column.
     """
-    if not metrics:
-        return {}
     resolved_field = resolve_bootstrap_cluster_field(rows, cluster_field)
+    if not metrics:
+        return {"bootstrap_ci_cluster_field": resolved_field}
     fields: dict[str, float | str] = {"bootstrap_ci_cluster_field": resolved_field}
     for name, metric in metrics.items():
         _, low, high = bootstrap_seed_metric(

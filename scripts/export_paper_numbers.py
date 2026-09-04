@@ -688,29 +688,61 @@ def _benchmark_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
     ]
 
 
-def _headline_rate(
-    artifacts: Artifacts, key: str
-) -> tuple[float, float, float, int, int, tuple[float, float] | None]:
-    """Pooled value, CI bounds, counts and optional seed-clustered CI."""
+CLUSTER_LABEL = {
+    eu.DEFAULT_BOOTSTRAP_CLUSTER_FIELD: "request-clustered",
+    eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD: "seed-clustered",
+}
+
+
+def cluster_note(cluster_field: str) -> str:
+    """How the primary interval was resampled, as the artifact recorded it.
+
+    A fixed string would go stale the moment the resampling unit changes, and a
+    slice that quietly fell back to the seed would still claim the request.
+    """
+    if not cluster_field:
+        return "pooled, resampling unit not recorded"
+    label = CLUSTER_LABEL.get(cluster_field, f"{cluster_field}-clustered")
+    return f"pooled, {label} CI"
+
+
+class HeadlineRate(NamedTuple):
+    """One pooled headline rate, both cluster bootstraps, and the unit used."""
+
+    value: float
+    ci_low: float
+    ci_high: float
+    n_numerator: int
+    n_denominator: int
+    seed_ci: tuple[float, float] | None
+    cluster_field: str
+
+
+def _headline_rate(artifacts: Artifacts, key: str) -> HeadlineRate:
     rows = [
         row
         for row in artifacts[HEADLINE_BOOTSTRAP_CI]
         if str(row["headline_key"]) == key
     ]
     row = _one(rows, f"{HEADLINE_BOOTSTRAP_CI}: headline_key={key}")
+    columns = artifacts.columns(HEADLINE_BOOTSTRAP_CI)
     seed_ci: tuple[float, float] | None = None
-    if {"seed_ci_low", "seed_ci_high"} <= artifacts.columns(HEADLINE_BOOTSTRAP_CI):
+    if {"seed_ci_low", "seed_ci_high"} <= columns:
         low = _number(row, "seed_ci_low", HEADLINE_BOOTSTRAP_CI)
         high = _number(row, "seed_ci_high", HEADLINE_BOOTSTRAP_CI)
         if math.isfinite(low) and math.isfinite(high):
             seed_ci = (low, high)
-    return (
-        _number(row, "value", HEADLINE_BOOTSTRAP_CI),
-        _number(row, "ci_low", HEADLINE_BOOTSTRAP_CI),
-        _number(row, "ci_high", HEADLINE_BOOTSTRAP_CI),
-        round(_number(row, "n_numerator", HEADLINE_BOOTSTRAP_CI)),
-        round(_number(row, "n_denominator", HEADLINE_BOOTSTRAP_CI)),
-        seed_ci,
+    return HeadlineRate(
+        value=_number(row, "value", HEADLINE_BOOTSTRAP_CI),
+        ci_low=_number(row, "ci_low", HEADLINE_BOOTSTRAP_CI),
+        ci_high=_number(row, "ci_high", HEADLINE_BOOTSTRAP_CI),
+        n_numerator=round(_number(row, "n_numerator", HEADLINE_BOOTSTRAP_CI)),
+        n_denominator=round(_number(row, "n_denominator", HEADLINE_BOOTSTRAP_CI)),
+        seed_ci=seed_ci,
+        # Snapshots written before the migration have no such column.
+        cluster_field=str(row.get("ci_cluster_field", "")).strip()
+        if "ci_cluster_field" in columns
+        else "",
     )
 
 
@@ -814,11 +846,19 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
                 f"{declared:.6f} disagrees with {MODALITY_TABLE} {derived:.6f}"
             )
 
-    strict_value, strict_low, strict_high, strict_num, strict_den, strict_seed = (
-        _headline_rate(artifacts, "strict_text_strengthening")
+    strict = _headline_rate(artifacts, "strict_text_strengthening")
+    broad = _headline_rate(artifacts, "broad_text_strengthening")
+    strict_value, strict_low, strict_high = strict.value, strict.ci_low, strict.ci_high
+    strict_num, strict_den, strict_seed = (
+        strict.n_numerator,
+        strict.n_denominator,
+        strict.seed_ci,
     )
-    broad_value, broad_low, broad_high, broad_num, broad_den, broad_seed = (
-        _headline_rate(artifacts, "broad_text_strengthening")
+    broad_value, broad_low, broad_high = broad.value, broad.ci_low, broad.ci_high
+    broad_num, broad_den, broad_seed = (
+        broad.n_numerator,
+        broad.n_denominator,
+        broad.seed_ci,
     )
     _cross_check_headlines(
         artifacts,
@@ -943,7 +983,9 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
             fmt_percent(_pooled(label_oc_pairs, "Task 2 label over-commitment")),
         ),
         Macro(
-            "numStrictOverall", fmt_percent(strict_value), "pooled, seed-clustered CI"
+            "numStrictOverall",
+            fmt_percent(strict_value),
+            cluster_note(strict.cluster_field),
         ),
         Macro(
             "numStrictOverallCI",
@@ -979,7 +1021,11 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
             ),
             "over models",
         ),
-        Macro("numBroadOverall", fmt_percent(broad_value), "pooled"),
+        Macro(
+            "numBroadOverall",
+            fmt_percent(broad_value),
+            cluster_note(broad.cluster_field),
+        ),
         Macro(
             "numBroadOverallCI", f"{fmt_percent(broad_low)}--{fmt_percent(broad_high)}"
         ),

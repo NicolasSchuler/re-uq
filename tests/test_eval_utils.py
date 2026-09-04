@@ -7279,6 +7279,33 @@ class BootstrapClusteringTest(unittest.TestCase):
         self.assertIn("weak_strengthening_90_seed_ci_low", risk)
         self.assertIn("weak_strengthening_90_seed_ci_high", risk)
 
+    def test_a_task_without_headline_metrics_still_names_its_cluster(self):
+        """A blank column reads like an absent one; the switch has to be visible."""
+        rows = [
+            {
+                "seed_id": row["seed_id"],
+                "batch_id": row["batch_id"],
+                "task": "task3",
+                "y_true": 1,
+                "y_pred": 1,
+            }
+            for row in self._rows()
+        ]
+
+        task3 = eu.headline_risk_ci_fields(rows, "task3", iterations=200)
+
+        # Task 3 has no headline risk metric, but its accuracy and Brier
+        # intervals are bootstrapped on the same unit as task 1 and 2, so the
+        # row has to name it rather than leave the column blank.
+        self.assertEqual(task3, {"bootstrap_ci_cluster_field": "batch_id"})
+
+    def test_a_metric_free_slice_reports_the_seed_when_it_fell_back(self):
+        rows = [{"seed_id": f"S{i:04d}", "task": "task3"} for i in range(8)]
+        self.assertEqual(
+            eu.cluster_ci_fields(rows, {}),
+            {"bootstrap_ci_cluster_field": "seed_id"},
+        )
+
     def test_ci_field_helpers_reuse_one_bootstrap_when_the_cluster_is_the_seed(self):
         rows = [
             {
