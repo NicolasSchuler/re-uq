@@ -599,10 +599,7 @@ def main() -> None:
             ),
         ],
     }
-    (output_dir / "provenance_manifest.json").write_text(
-        json.dumps(provenance, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    eu.write_json(output_dir / "provenance_manifest.json", provenance)
 
     print(
         json.dumps(

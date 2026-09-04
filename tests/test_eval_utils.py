@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import math
@@ -22,6 +23,7 @@ from scripts import (
     generate_evaluation_analysis as analysis_cli,
     plot_acse_global_embedding_projection as acse_global_projection,
     run_experiment_from_config as run_config_cli,
+    run_provenance as rp,
     run_task3_verification_from_config as task3_cli,
     show_run_progress,
     structured_outputs as so,
@@ -6430,6 +6432,378 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(seen["max_retries"], 0)
+
+
+def provider_profile(**overrides):
+    """Return a minimal valid provider profile, with ``overrides`` applied."""
+    profile = {
+        "provider_id": "local",
+        "profile_id": "local",
+        "base_url": "http://localhost:8000/v1",
+        "models": ["m1"],
+    }
+    profile.update(overrides)
+    return profile
+
+
+class CredentialBoundaryTest(unittest.TestCase):
+    """Credential-shaped provider data must never reach a durable artifact.
+
+    The pipeline's configuration contract is that secrets stay in the
+    environment and configs carry only the *name* of the variable holding
+    them. These tests pin that contract at the normalization boundary and at
+    every exporter that writes provider provenance to disk.
+    """
+
+    def raw_record_kwargs(self, **overrides):
+        item = eu.build_benchmark_items(export_report_seeds())[0]
+        kwargs = {
+            "run_id": "full-1",
+            "model": "m1",
+            "host": "http://localhost:8000/v1",
+            "task": "task1",
+            "item": item,
+            "sample_index": 0,
+            "sample_kind": "deterministic",
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "prompt_version": "v1",
+            "prompt": "prompt",
+            "completion": {
+                "ok": True,
+                "raw_text": '{"decision": "yes", "confidence": 90, "brief_reason": "ok"}',
+                "latency_s": 0.01,
+                "error": "",
+            },
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    def registry_kwargs(self, **overrides):
+        kwargs = {
+            "run_id": "full-1",
+            "run_group_id": "group1",
+            "provider_id": "local",
+            "profile_id": "local",
+            "model": "m1",
+            "dataset_id": "nice",
+            "variant": "must",
+            "tasks": ["task1"],
+            "expected_stochastic_samples": 0,
+            "started_at_utc": "2026-05-21T00:00:00Z",
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    # -- normalization boundary -------------------------------------------
+
+    def test_api_key_env_must_be_an_environment_variable_name(self):
+        for value in [
+            "sk-live-abcdef",
+            "OPENAI API KEY",
+            "1KEY",
+            "OPENAI-API-KEY",
+            "$OPENAI_API_KEY",
+            "Bearer abc",
+        ]:
+            with self.subTest(api_key_env=value):
+                with self.assertRaises(ValueError) as ctx:
+                    eu.normalize_provider_profile(provider_profile(api_key_env=value))
+                self.assertIn("api_key_env", str(ctx.exception))
+
+    def test_environment_variable_names_are_accepted_unchanged(self):
+        for value in ["OPENAI_API_KEY", "_KEY", "K1", "local_openai_api_key"]:
+            with self.subTest(api_key_env=value):
+                profile = eu.normalize_provider_profile(
+                    provider_profile(api_key_env=value)
+                )
+                self.assertEqual(profile["api_key_env"], value)
+
+    def test_credential_shaped_extra_body_keys_are_rejected(self):
+        for key in [
+            "authorization",
+            "Authorization",
+            "api_key",
+            "apiKey",
+            "api-key",
+            "token",
+            "auth_token",
+            "x-api-token",
+            "secret",
+            "client_secret",
+            "password",
+            "PASSWORD",
+            "bearer",
+            "cookie",
+            "Cookie",
+            "credentials",
+            "key",
+        ]:
+            with self.subTest(extra_body_key=key):
+                with self.assertRaises(ValueError) as ctx:
+                    eu.normalize_provider_profile(
+                        provider_profile(extra_body={key: "value"})
+                    )
+                self.assertIn("extra_body", str(ctx.exception))
+
+    def test_request_knobs_that_merely_mention_tokens_stay_allowed(self):
+        extra_body = {
+            "max_tokens": 256,
+            "min_tokens": 1,
+            "thinking": {"type": "disabled"},
+        }
+        profile = eu.normalize_provider_profile(
+            provider_profile(extra_body=dict(extra_body))
+        )
+        self.assertEqual(profile["extra_body"], extra_body)
+
+    # -- the shared validator ----------------------------------------------
+
+    def test_validator_reports_the_path_without_echoing_the_value(self):
+        with self.assertRaises(ValueError) as ctx:
+            eu.assert_no_credential_shaped_values(
+                {"profiles": [{"extra_body": {"authorization": "Bearer hunter2"}}]},
+                where="run config",
+            )
+        message = str(ctx.exception)
+        self.assertIn("run config", message)
+        self.assertIn("profiles[0].extra_body.authorization", message)
+        self.assertNotIn("hunter2", message)
+
+    def test_validator_accepts_variable_names_but_not_raw_keys(self):
+        eu.assert_no_credential_shaped_values(
+            {"api_key_env": "OPENAI_API_KEY"}, where="profile"
+        )
+        eu.assert_no_credential_shaped_values({"api_key_env": ""}, where="profile")
+        eu.assert_no_credential_shaped_values(
+            {"max_tokens": 256, "notes": "secret sauce"}, where="profile"
+        )
+        with self.assertRaises(ValueError):
+            eu.assert_no_credential_shaped_values(
+                {"api_key_env": "sk-live-abcdef"}, where="profile"
+            )
+
+    def test_validator_ignores_blank_credential_shaped_fields(self):
+        eu.assert_no_credential_shaped_values(
+            {"token": "", "api_key": None, "cookie": {}}, where="profile"
+        )
+
+    # -- durable exporters --------------------------------------------------
+
+    def test_raw_records_refuse_credential_shaped_request_extra_body(self):
+        with self.assertRaises(ValueError):
+            eu.build_raw_record(
+                **self.raw_record_kwargs(
+                    request_extra_body={"authorization": "Bearer hunter2"}
+                )
+            )
+
+    def test_raw_records_refuse_a_secret_pasted_into_api_key_env(self):
+        with self.assertRaises(ValueError):
+            eu.build_raw_record(**self.raw_record_kwargs(api_key_env="sk-live-abcdef"))
+
+    def test_raw_records_keep_legitimate_provider_provenance(self):
+        record = eu.build_raw_record(
+            **self.raw_record_kwargs(
+                request_extra_body={"max_tokens": 256},
+                api_key_env="OPENAI_API_KEY",
+            )
+        )
+        self.assertEqual(record["request_extra_body"], {"max_tokens": 256})
+        self.assertEqual(record["api_key_env"], "OPENAI_API_KEY")
+
+    def test_model_output_keys_are_not_treated_as_provider_credentials(self):
+        # The validator guards configuration-derived provenance; a model that
+        # happens to emit a credential-shaped key must not abort the run.
+        record = eu.build_raw_record(
+            **self.raw_record_kwargs(
+                completion={
+                    "ok": True,
+                    "raw_text": (
+                        '{"decision": "yes", "confidence": 90, '
+                        '"brief_reason": "ok", "token": "abc"}'
+                    ),
+                    "latency_s": 0.01,
+                    "error": "",
+                }
+            )
+        )
+        self.assertEqual(record["parse_status"], "ok")
+        self.assertEqual(record["parsed_json"]["token"], "abc")
+
+    def test_registry_rows_refuse_credential_shaped_request_extra_body(self):
+        with self.assertRaises(ValueError):
+            eu.run_registry_summary(
+                [],
+                [],
+                **self.registry_kwargs(request_extra_body={"api_key": "sk-live"}),
+            )
+
+    def test_registry_rows_refuse_a_secret_pasted_into_api_key_env(self):
+        with self.assertRaises(ValueError):
+            eu.run_registry_summary(
+                [], [], **self.registry_kwargs(api_key_env="sk-live-abcdef")
+            )
+
+    def test_registry_rows_keep_legitimate_provider_provenance(self):
+        row = eu.run_registry_summary(
+            [],
+            [],
+            **self.registry_kwargs(
+                api_key_env="OPENAI_API_KEY",
+                request_extra_body={"max_tokens": 256},
+            ),
+        )
+        self.assertEqual(row["api_key_env"], "OPENAI_API_KEY")
+        self.assertEqual(
+            row["request_extra_body"], eu.compact_json({"max_tokens": 256})
+        )
+
+
+class ConfigCopyAndBooleanParsingTest(unittest.TestCase):
+    """Loaded configuration is owned by the caller, and booleans are parsed."""
+
+    def test_load_config_returns_an_independent_copy_of_the_defaults(self):
+        missing = "config.this-file-does-not-exist.json"
+        first = eu.load_config(missing)
+        second = eu.load_config(missing)
+
+        self.assertEqual(first, eu.DEFAULT_CONFIG)
+        self.assertIsNot(first, eu.DEFAULT_CONFIG)
+        self.assertIsNot(first, second)
+        self.assertIsNot(first["llm"], eu.DEFAULT_CONFIG["llm"])
+
+        first["llm"]["concurrency"] = 999
+        first["llm"]["leaked_marker"] = True
+        self.assertNotIn("leaked_marker", eu.DEFAULT_CONFIG["llm"])
+        self.assertEqual(eu.load_config(missing), second)
+
+    def test_load_config_from_a_file_does_not_alias_the_defaults(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "config.json"
+            path.write_text(json.dumps({"llm": {"concurrency": 3}}), encoding="utf-8")
+
+            config = eu.load_config(path)
+            self.assertEqual(config["llm"]["concurrency"], 3)
+            self.assertIsNot(
+                config["llm"]["deterministic"],
+                eu.DEFAULT_CONFIG["llm"]["deterministic"],
+            )
+
+            config["llm"]["deterministic"]["temperature"] = 1.5
+            self.assertEqual(
+                eu.load_config(path)["llm"]["deterministic"]["temperature"],
+                eu.DEFAULT_CONFIG["llm"]["deterministic"]["temperature"],
+            )
+
+    def test_deep_update_copies_nested_containers_from_both_sides(self):
+        base = {"llm": {"concurrency": 1, "models": ["a"]}}
+        overrides = {"llm": {"models": ["z"]}}
+
+        merged = eu.deep_update(base, overrides)
+        self.assertIsNot(merged["llm"], base["llm"])
+        self.assertIsNot(merged["llm"]["models"], overrides["llm"]["models"])
+
+        merged["llm"]["concurrency"] = 99
+        merged["llm"]["models"].append("y")
+        self.assertEqual(base["llm"], {"concurrency": 1, "models": ["a"]})
+        self.assertEqual(overrides["llm"]["models"], ["z"])
+
+    def test_provider_booleans_parse_serialized_string_forms(self):
+        falsey = eu.normalize_provider_profile(
+            provider_profile(
+                json_mode="false",
+                json_schema="0",
+                send_seed="no",
+                requires_manual_server="False",
+            )
+        )
+        self.assertFalse(falsey["json_mode"])
+        self.assertEqual(falsey["structured_output"], "none")
+        self.assertFalse(falsey["send_seed"])
+        self.assertFalse(falsey["requires_manual_server"])
+
+        truthy = eu.normalize_provider_profile(
+            provider_profile(
+                json_mode="true",
+                send_seed="1",
+                requires_manual_server="yes",
+            )
+        )
+        self.assertTrue(truthy["json_mode"])
+        self.assertTrue(truthy["send_seed"])
+        self.assertTrue(truthy["requires_manual_server"])
+
+    def test_unparseable_provider_boolean_is_rejected(self):
+        for field in [
+            "json_mode",
+            "json_schema",
+            "send_seed",
+            "requires_manual_server",
+        ]:
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError) as ctx:
+                    eu.normalize_provider_profile(provider_profile(**{field: "maybe"}))
+                self.assertIn(field, str(ctx.exception))
+
+
+class ProvenanceHashingAndJsonWriterTest(unittest.TestCase):
+    """One hashing implementation and one manifest writer, byte-for-byte."""
+
+    def test_file_digests_match_whole_file_hashes(self):
+        payloads = {
+            "empty.bin": b"",
+            "small.txt": "café — naïve\n".encode(),
+            "multi_mib.bin": b"0123456789abcdef" * (3 * 1024 * 1024 // 16),
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name, payload in payloads.items():
+                path = Path(tmpdir) / name
+                path.write_bytes(payload)
+                with self.subTest(name=name):
+                    self.assertEqual(
+                        eu.sha256_file(path), hashlib.sha256(payload).hexdigest()
+                    )
+            self.assertEqual(
+                eu.sha256_file(Path(tmpdir) / "empty.bin"),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            )
+
+    def test_text_hashing_has_a_single_implementation(self):
+        self.assertIs(rp.sha256_text, eu.sha256_text)
+        self.assertEqual(
+            eu.sha256_text("café"),
+            hashlib.sha256("café".encode()).hexdigest(),
+        )
+
+    def test_write_json_matches_the_inline_manifest_serialization(self):
+        manifest = {
+            "z": 1,
+            "a": {"note": "café — naïve ✓", "values": [1, 2]},
+            "created_at_utc": "2026-01-01T00:00:00Z",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            inline = Path(tmpdir) / "inline.json"
+            inline.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            shared = Path(tmpdir) / "nested" / "shared.json"
+            eu.write_json(shared, manifest)
+            self.assertEqual(shared.read_bytes(), inline.read_bytes())
+
+    def test_benchmark_manifest_bytes_are_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            artifact = root / "data" / "processed" / "items.csv"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_text("item_id,text\n1,café\n", encoding="utf-8")
+
+            output = root / "outputs" / "manifest.json"
+            manifest = eu.write_benchmark_manifest([artifact], output, root=root)
+            self.assertEqual(
+                output.read_bytes(),
+                (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+            )
 
 
 if __name__ == "__main__":

@@ -19,7 +19,6 @@ here touches the paper-facing exports; see docs/context_ablation.md.
 from __future__ import annotations
 
 import argparse
-import json
 import math
 from collections.abc import Callable
 from pathlib import Path
@@ -321,19 +320,14 @@ def write_outputs(tables: dict[str, Any], output_prefix: Path) -> dict[str, Path
         "",
     ]
     md_path.write_text("\n".join(lines), encoding="utf-8")
-    provenance_path.write_text(
-        json.dumps(
-            {
-                "generated_at_utc": eu.utc_now_iso(),
-                "dataset_id": DATASET_ID,
-                "benchmark_variant": VARIANT,
-                "runs": tables["provenance"],
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+    eu.write_json(
+        provenance_path,
+        {
+            "generated_at_utc": eu.utc_now_iso(),
+            "dataset_id": DATASET_ID,
+            "benchmark_variant": VARIANT,
+            "runs": tables["provenance"],
+        },
     )
     return {
         "csv": csv_path,

@@ -9,6 +9,7 @@ points and notebooks should stay thin wrappers around these helpers.
 from __future__ import annotations
 
 import contextlib
+import copy
 import fcntl
 import hashlib
 import heapq
@@ -441,22 +442,30 @@ def project_root() -> Path:
 
 
 def deep_update(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    result = dict(base)
+    """Merge `overrides` into `base` and return an independently owned result.
+
+    Both inputs are left untouched and no nested container is shared with
+    either of them, so a caller that mutates the merged configuration cannot
+    reach back into `DEFAULT_CONFIG` or into the next call's result.
+    """
+    result: dict[str, Any] = copy.deepcopy(dict(base))
     for key, value in overrides.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = deep_update(result[key], value)
+        current = result.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            result[key] = deep_update(current, value)
         else:
-            result[key] = value
+            result[key] = copy.deepcopy(value)
     return result
 
 
 def load_config(path: str | Path = "config.example.json") -> dict[str, Any]:
+    """Load a config file merged over `DEFAULT_CONFIG` (never aliasing it)."""
     root = project_root()
     config_path = Path(path)
     if not config_path.is_absolute():
         config_path = root / config_path
     if not config_path.exists():
-        return DEFAULT_CONFIG
+        return copy.deepcopy(DEFAULT_CONFIG)
     with config_path.open("r", encoding="utf-8") as handle:
         return deep_update(DEFAULT_CONFIG, json.load(handle))
 
@@ -504,6 +513,96 @@ def bool_config(value: Any, name: str) -> bool:
     if normalized in {"0", "false", "no", "n", "off"}:
         return False
     raise ValueError(f"{name} must be a boolean value, got {value!r}")
+
+
+# --- Credential boundary -----------------------------------------------------
+# The configuration contract is that a config carries the *name* of the
+# environment variable holding a provider key (`api_key_env`), never the key.
+# Provider-specific request bodies (`extra_body`) are free-form, though, and
+# raw records, registry rows and exported Hydra profiles are durable artifacts
+# that end up in the repository. `assert_no_credential_shaped_values` is the
+# single fail-closed check every one of those exporters runs before writing.
+
+ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Matched against the key with non-alphanumeric runs folded to "_", so
+# "X-Api-Token" and "x_api_token" are treated alike. `max_tokens` is a request
+# knob, not a credential, so bare "token" only matches a whole key or a
+# `*_token` suffix.
+CREDENTIAL_KEY_SUBSTRINGS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "bearer",
+    "cookie",
+    "passwd",
+    "password",
+    "secret",
+)
+CREDENTIAL_KEY_NAMES = frozenset({"auth", "credential", "credentials", "key", "token"})
+
+
+def _normalized_key(key: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(key).strip().lower())
+
+
+def is_credential_shaped_key(key: Any) -> bool:
+    """True for keys whose value may carry a credential.
+
+    Keys ending in `_env` name an environment variable rather than holding its
+    value, so they are provenance and never match here; their *values* are
+    validated separately as environment-variable names.
+    """
+    normalized = _normalized_key(key)
+    if normalized.endswith("_env"):
+        return False
+    if normalized in CREDENTIAL_KEY_NAMES or normalized.endswith("_token"):
+        return True
+    return any(hint in normalized for hint in CREDENTIAL_KEY_SUBSTRINGS)
+
+
+def _is_blank(value: Any) -> bool:
+    return value is None or (
+        isinstance(value, (str, Mapping, list, tuple)) and len(value) == 0
+    )
+
+
+def assert_no_credential_shaped_values(
+    value: Any, *, where: str, _path: str = ""
+) -> None:
+    """Fail closed before `value` is written to a durable artifact.
+
+    Raises `ValueError` when a credential-shaped key carries a value, or when
+    an `*_env` key holds something that is not an environment-variable name
+    (the shape a pasted token has). The message names the offending path and
+    never echoes the value, so it is safe in logs and tracebacks.
+    """
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            path = f"{_path}.{key}" if _path else str(key)
+            if _normalized_key(key).endswith("_env"):
+                if not _is_blank(item) and not (
+                    isinstance(item, str) and ENV_VAR_NAME_RE.match(item)
+                ):
+                    raise ValueError(
+                        f"{where}: {path} must be the NAME of an environment "
+                        "variable (matching ^[A-Za-z_][A-Za-z0-9_]*$), not a "
+                        "credential value."
+                    )
+                continue
+            if is_credential_shaped_key(key) and not _is_blank(item):
+                raise ValueError(
+                    f"{where}: {path} is credential-shaped; secrets must stay "
+                    "in the environment and be referenced by an *_env key "
+                    "holding the variable name."
+                )
+            assert_no_credential_shaped_values(item, where=where, _path=path)
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            assert_no_credential_shaped_values(
+                item, where=where, _path=f"{_path}[{index}]"
+            )
 
 
 def resolve_llm_concurrency(
@@ -935,6 +1034,21 @@ def normalize_item_context(value: Any, field: str = "item_context") -> str:
     return normalized
 
 
+def _profile_bool(
+    profile: Mapping[str, Any], key: str, default: bool, profile_id: str
+) -> bool:
+    """Read a provider boolean, accepting the serialized string forms.
+
+    A profile that survived a round trip through YAML/JSON/CLI can carry
+    `"false"`, which is truthy under `bool()`; parsing it here means a
+    disabled knob stays disabled.
+    """
+    value = profile.get(key, default)
+    if value is None:
+        return default
+    return bool_config(value, f"profiles.{profile_id}.{key}")
+
+
 def normalize_provider_profile(
     profile: Mapping[str, Any],
     *,
@@ -957,14 +1071,26 @@ def normalize_provider_profile(
         raise ValueError(f"Provider profile {profile_id} is missing base_url.")
     if not models:
         raise ValueError(f"Provider profile {profile_id} must list at least one model.")
+    api_key_env = str(profile.get("api_key_env") or "LOCAL_OPENAI_API_KEY").strip()
+    if not ENV_VAR_NAME_RE.match(api_key_env):
+        raise ValueError(
+            f"Provider profile {profile_id} api_key_env must be the NAME of an "
+            "environment variable (matching ^[A-Za-z_][A-Za-z0-9_]*$), not a "
+            "credential value."
+        )
     extra_body = profile.get("extra_body") or {}
     if not isinstance(extra_body, Mapping):
         raise ValueError(f"Provider profile {profile_id} extra_body must be an object.")
-    json_mode = bool(profile.get("json_mode", False))
+    # Free-form request bodies are the one place a token can enter a config;
+    # reject it here so no downstream exporter ever sees it.
+    assert_no_credential_shaped_values(
+        extra_body, where=f"Provider profile {profile_id} extra_body"
+    )
+    json_mode = _profile_bool(profile, "json_mode", False, profile_id)
     structured_output = normalize_structured_output_mode(
         profile.get("structured_output"),
         json_mode=json_mode,
-        json_schema=bool(profile.get("json_schema", False)),
+        json_schema=_profile_bool(profile, "json_schema", False, profile_id),
     )
     json_mode = json_mode or structured_output in {
         "json_object",
@@ -992,9 +1118,7 @@ def normalize_provider_profile(
         "profile_id": profile_id,
         "provider_id": provider_id,
         "base_url": base_url,
-        "api_key_env": str(
-            profile.get("api_key_env") or "LOCAL_OPENAI_API_KEY"
-        ).strip(),
+        "api_key_env": api_key_env,
         "models": models,
         "concurrency": positive_int(
             profile.get("concurrency", DEFAULT_CONFIG["llm"]["concurrency"]),
@@ -1029,7 +1153,7 @@ def normalize_provider_profile(
             f"profiles.{profile_id}.fallback_batch_size",
         ),
         "seed": int(profile.get("seed", default_seed)),
-        "send_seed": bool(profile.get("send_seed", True)),
+        "send_seed": _profile_bool(profile, "send_seed", True, profile_id),
         "max_retries": nonnegative_int(
             profile.get("max_retries", DEFAULT_MAX_RETRIES),
             f"profiles.{profile_id}.max_retries",
@@ -1038,7 +1162,9 @@ def normalize_provider_profile(
             profile.get("batch_order", default_batch_order),
             f"profiles.{profile_id}.batch_order",
         ),
-        "requires_manual_server": bool(profile.get("requires_manual_server", False)),
+        "requires_manual_server": _profile_bool(
+            profile, "requires_manual_server", False, profile_id
+        ),
         "notes": str(profile.get("notes", "")).strip(),
     }
 
@@ -1434,11 +1560,14 @@ def utc_now_iso() -> str:
 
 
 def sha256_file(path: str | Path) -> str:
-    digest = hashlib.sha256()
+    """SHA-256 of a file's bytes.
+
+    `hashlib.file_digest` requires a freshly opened blocking binary file, which
+    is exactly what this helper opens; the digest is identical to hashing the
+    whole byte string.
+    """
     with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def sha256_text(text: str) -> str:
@@ -1478,15 +1607,12 @@ def write_benchmark_manifest(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     manifest = {
         "created_at_utc": utc_now_iso(),
         "metadata": metadata or {},
         "artifacts": [artifact_metadata(path, root=root) for path in paths],
     }
-    output_path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    write_json(output_path, manifest)
     return manifest
 
 
@@ -5182,6 +5308,14 @@ def build_raw_record(
             record[key] = item[key]
     if request_index is not None:
         record["request_index"] = request_index
+    # Raw JSONL is the most durable artifact in the repository. Check the
+    # configuration-derived provenance before it is handed to the writer;
+    # `parsed_json` is model output, not provider configuration, so a model
+    # that happens to emit a credential-shaped key must not abort a run.
+    assert_no_credential_shaped_values(
+        {key: value for key, value in record.items() if key != "parsed_json"},
+        where="raw record",
+    )
     return record
 
 
@@ -5612,7 +5746,7 @@ def run_instructor_completion_batch(
     first = jobs[0]
     task = str(first["task"])
     batch_prompt = batch_prompt_for_completion_jobs(jobs)
-    batch_prompt_hash = hashlib.sha256(batch_prompt.encode("utf-8")).hexdigest()
+    batch_prompt_hash = sha256_text(batch_prompt)
     batch_id = (
         f"{first['run_id']}:{first['model']}:{first['task']}:"
         f"{first['sample_kind']}:{first['sample_index']}:"
@@ -5692,7 +5826,7 @@ def run_completion_batch(
 
     first = jobs[0]
     batch_prompt = batch_prompt_for_completion_jobs(jobs)
-    batch_prompt_hash = hashlib.sha256(batch_prompt.encode("utf-8")).hexdigest()
+    batch_prompt_hash = sha256_text(batch_prompt)
     batch_response_format, batch_extra_body = resolve_response_format_args(
         str(first["task"]),
         structured_output=first.get("structured_output"),
@@ -7437,6 +7571,18 @@ def run_registry_summary(
     item_context: str = DEFAULT_ITEM_CONTEXT,
     notes: str = "",
 ) -> dict[str, Any]:
+    # `request_extra_body` is flattened into a JSON string below, which would
+    # hide a credential from a check on the finished row: validate the provider
+    # provenance while it is still structured.
+    assert_no_credential_shaped_values(
+        {
+            "api_key_env": api_key_env,
+            "base_url": base_url,
+            "request_extra_body": request_extra_body,
+            "server_model_probe": server_model_probe,
+        },
+        where="run registry row",
+    )
     task_list = normalize_task_filter(tasks)
     run_rows = [
         row

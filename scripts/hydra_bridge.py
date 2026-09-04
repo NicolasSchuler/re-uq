@@ -8,9 +8,14 @@ dictionary shape, builds the argparse-compatible namespace the runners expect,
 and exports an existing JSON run config back into `conf/` groups for migration.
 
 No secrets ever enter a config file: provider profiles carry `api_key_env`, the
-*name* of the environment variable holding the key. `resolved_config_yaml()`
-additionally masks anything key-shaped before the run's resolved composition is
-written to `data/processed/logs/<run_id>.resolved.yaml`.
+*name* of the environment variable holding the key. That contract is enforced,
+not merely documented. `eval_utils.normalize_provider_profile` rejects an
+`api_key_env` that is not an environment-variable name and any credential-shaped
+`extra_body` key; `run_config_to_hydra_yaml()` re-runs the same fail-closed
+check (`eval_utils.assert_no_credential_shaped_values`) before writing a single
+byte, since exported `conf/` groups are committed to the repository; and
+`resolved_config_yaml()` additionally masks anything key-shaped before the run's
+resolved composition is written to `data/processed/logs/<run_id>.resolved.yaml`.
 """
 
 from __future__ import annotations
@@ -32,39 +37,18 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 MASK_VALUE = "***MASKED***"
-# Substring hints, plus exact key names: `max_tokens` is a request knob, not a
-# credential, so bare "token" is only matched as a whole key name.
-SECRET_KEY_HINTS = (
-    "api_key",
-    "apikey",
-    "secret",
-    "password",
-    "auth_token",
-    "access_token",
-    "bearer",
-)
-SECRET_KEY_NAMES = frozenset({"token", "key", "authorization", "credentials"})
 CONFIG_GROUPS = ("profile", "dataset", "variant", "sampling", "logging", "experiment")
+
+# Masking and the fail-closed export check share one notion of "credential
+# shaped" (`eval_utils.is_credential_shaped_key`): `max_tokens` is a request
+# knob, `api_key_env` names an environment variable, and neither is a secret.
+_is_secret_key = eu.is_credential_shaped_key
 
 
 def _container(node: Any) -> Any:
     if isinstance(node, (DictConfig, ListConfig)):
         return OmegaConf.to_container(node, resolve=True)
     return node
-
-
-def _is_secret_key(key: str) -> bool:
-    """True for keys that may carry a credential.
-
-    `api_key_env` and friends hold the *name* of an environment variable, which
-    is provenance, not a secret, so `*_env` keys are never masked.
-    """
-    lowered = str(key).lower()
-    if lowered.endswith("_env"):
-        return False
-    return lowered in SECRET_KEY_NAMES or any(
-        hint in lowered for hint in SECRET_KEY_HINTS
-    )
 
 
 def mask_secrets(value: Any) -> Any:
@@ -225,6 +209,11 @@ def run_config_to_hydra_yaml(
     """
     source = Path(path)
     config = eu.load_run_config(source)
+    # Exported groups are committed alongside the paper artifacts, so this runs
+    # before the first `_write`: a rejected config leaves nothing on disk.
+    eu.assert_no_credential_shaped_values(
+        config, where=f"exported run config {source.name}"
+    )
     out = Path(output_dir) if output_dir is not None else eu.project_root() / "conf"
     preset = eu.safe_identifier(name or source.stem)
     written: dict[str, Path] = {}

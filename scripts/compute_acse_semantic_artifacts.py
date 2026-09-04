@@ -600,9 +600,7 @@ def compute_run_backend(
             str(output_dir / "task2_acse_calibration.csv"),
         ],
     }
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    eu.write_json(manifest_path, manifest)
     return manifest
 
 
@@ -704,10 +702,7 @@ def main() -> None:
         for row in all_manifests
     ]
     eu.write_csv_rows(output_root / eu.ACSE_SEMANTIC_MANIFEST_FILENAME, manifest_rows)
-    (output_root / "acse_semantic_artifact_manifest.json").write_text(
-        json.dumps(all_manifests, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    eu.write_json(output_root / "acse_semantic_artifact_manifest.json", all_manifests)
 
 
 if __name__ == "__main__":
