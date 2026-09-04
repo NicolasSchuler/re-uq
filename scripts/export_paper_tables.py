@@ -723,12 +723,11 @@ def score_cell(
         chosen, raw_rows, registry_label, raw_label, allow_missing_raw
     )
     scored_benchmark = eu.benchmark_rows_with_current_raw_outputs(benchmark, raw_rows)
+    sampling_plan = eu.SamplingPlan(
+        stochastic_samples=int(expected_stochastic_samples or 0)
+    )
     scores = (
-        eu.build_uq_scores(
-            scored_benchmark,
-            raw_rows,
-            expected_stochastic_samples=expected_stochastic_samples,
-        )
+        eu.build_uq_scores(scored_benchmark, raw_rows, sampling_plan=sampling_plan)
         if raw_rows
         else []
     )
@@ -744,6 +743,7 @@ def score_cell(
         "n_benchmark_items": len(scored_benchmark),
         "n_raw_rows": len(raw_rows),
         "expected_stochastic_samples": expected_stochastic_samples,
+        "sampling_plan": sampling_plan,
         "scores": scores,
         "raw_rows": raw_rows,
     }
@@ -796,6 +796,8 @@ def export_tables(
         scores = cell.pop("scores")
         # Raw rows carry the parse failures that never became score rows.
         raw_rows = cell.pop("raw_rows")
+        # The plan itself is not JSON; its provenance is the source it declares.
+        cell["sampling_plan_source"] = cell.pop("sampling_plan").source
         det_rows = task2_deterministic_rows(scores)
         consistency = stochastic_rows_by_method(scores, "modality_consistency")
         # Index the deterministic rows once; the per-model and per-modality
@@ -921,6 +923,7 @@ def export_tables(
         "bootstrap_samples": bootstrap_samples,
         "bootstrap_seed": BOOTSTRAP_SEED,
         "expected_stochastic_samples": expected_stochastic_samples,
+        "sampling_plan_source": eu.SAMPLING_PLAN_SOURCE_PLANNED,
         "run_group_id": run_group_id,
         "expected_batch_order": expected_batch_order,
         "expected_batch_size": expected_batch_size,

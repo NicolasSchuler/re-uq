@@ -24,6 +24,11 @@ from scripts import (
     generate_evaluation_analysis as analysis_cli,
 )
 
+# Deterministic-only fixtures plan no repeated samples, so the plan denominator
+# is inert and every group scores exactly the rows the run wrote.
+NO_STOCHASTIC_PLAN = eu.SamplingPlan(stochastic_samples=0)
+FIVE_SAMPLE_PLAN = eu.SamplingPlan(stochastic_samples=5)
+
 
 def _seeds():
     return [
@@ -200,7 +205,7 @@ class RepeatedSampleAgreementTest(unittest.TestCase):
                     parse_status="ok" if sample_index < 4 else "invalid_json",
                 )
             )
-        scores = eu.build_uq_scores(benchmark, raw_rows)
+        scores = eu.build_uq_scores(benchmark, raw_rows, sampling_plan=FIVE_SAMPLE_PLAN)
         stochastic = [
             row for row in scores if row["uq_method"] == "modality_consistency"
         ]
@@ -230,10 +235,14 @@ class RepeatedSampleAgreementTest(unittest.TestCase):
         self.assertTrue(
             any(
                 row["uq_method"] == "modality_consistency"
-                for row in eu.build_uq_scores(benchmark, raw_rows)
+                for row in eu.build_uq_scores(
+                    benchmark, raw_rows, sampling_plan=FIVE_SAMPLE_PLAN
+                )
             )
         )
-        guarded = eu.build_uq_scores(benchmark, raw_rows, min_valid_samples=3)
+        guarded = eu.build_uq_scores(
+            benchmark, raw_rows, min_valid_samples=3, sampling_plan=FIVE_SAMPLE_PLAN
+        )
         self.assertFalse(
             any(row["uq_method"] == "modality_consistency" for row in guarded)
         )
@@ -298,7 +307,9 @@ class LengthBloatMetricsTest(unittest.TestCase):
             item, model="m1", run_id="r1", requirement="The system must export reports."
         )
         raw["usage_completion_tokens"] = 42
-        score = eu.build_uq_scores(benchmark, [raw])[0]
+        score = eu.build_uq_scores(benchmark, [raw], sampling_plan=NO_STOCHASTIC_PLAN)[
+            0
+        ]
         self.assertEqual(score["requirement_word_count"], 5)
         self.assertEqual(
             score["source_word_count"], eu.word_count(item["source_statement"])
@@ -313,7 +324,9 @@ class LengthBloatMetricsTest(unittest.TestCase):
             item, model="m1", run_id="r1", requirement="The system must export reports."
         )
         raw["requirement_word_count"] = 11
-        score = eu.build_uq_scores(benchmark, [raw])[0]
+        score = eu.build_uq_scores(benchmark, [raw], sampling_plan=NO_STOCHASTIC_PLAN)[
+            0
+        ]
         self.assertEqual(score["requirement_word_count"], 11)
 
     def test_tercile_breakdown_reports_strict_and_broad_per_bucket(self):
@@ -360,7 +373,7 @@ class LengthBloatMetricsTest(unittest.TestCase):
             for item in benchmark
         ]
         summary = eu.metric_summary_by_model_task_method(
-            eu.build_uq_scores(benchmark, raw_rows)
+            eu.build_uq_scores(benchmark, raw_rows, sampling_plan=NO_STOCHASTIC_PLAN)
         )
         row = next(entry for entry in summary if entry["task"] == "task2")
         for field in [
@@ -388,7 +401,9 @@ class RunMatrixCiTest(unittest.TestCase):
             )
             for item in benchmark
         ]
-        scores = eu.build_uq_scores(benchmark, raw_rows)
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=NO_STOCHASTIC_PLAN
+        )
         summary = eu.metric_summary_by_model_task_method(scores)
         compare_matrix.annotate_text_drift_cis(summary, scores, bootstrap_samples=25)
         row = next(entry for entry in summary if entry["task"] == "task2")
@@ -519,6 +534,7 @@ class ContextAblationTableTest(unittest.TestCase):
             run_group_id="context-ablation-2026-09",
             include_smoke=False,
             bootstrap_samples=50,
+            sampling_plan=NO_STOCHASTIC_PLAN,
         )
 
         arms = {(r["item_context"], r["stratum"]): r for r in tables["arms"]}
@@ -580,6 +596,35 @@ class ContextAblationTableTest(unittest.TestCase):
             self.assertEqual(provenance["dataset_id"], "pure")
             self.assertIn("resolved_config_sha=doc-1", provenance["runs"][1]["notes"])
 
+    def test_delta_rows_report_the_complete_pair_cohort(self):
+        benchmark = self._pure_benchmark()
+        registry = [
+            self._registry_row("bare-1", "m1", "bare", "2026-09-02T00:00:00Z"),
+            self._registry_row("doc-1", "m1", "document", "2026-09-02T00:00:00Z"),
+        ]
+        bare = self._raw_rows(benchmark, "bare-1", "m1", strengthen_weak=False)
+        document = self._raw_rows(benchmark, "doc-1", "m1", strengthen_weak=True)
+        # The document arm never answered the last seed, so that seed has no pair.
+        orphan_seed = benchmark[-1]["seed_id"]
+        document = [row for row in document if row["seed_id"] != orphan_seed]
+
+        tables = context_ablation.build_tables(
+            benchmark,
+            registry,
+            bare + document,
+            run_group_id="context-ablation-2026-09",
+            include_smoke=False,
+            bootstrap_samples=50,
+            sampling_plan=NO_STOCHASTIC_PLAN,
+        )
+
+        deltas = {(r["stratum"], r["metric"]): r for r in tables["deltas"]}
+        overall = deltas[("all", "label_accuracy")]
+        seeds = {row["seed_id"] for row in benchmark}
+        self.assertEqual(overall["n_complete_pairs"], len(seeds) - 1)
+        self.assertEqual(overall["n_excluded_single_arm"], 1)
+        self.assertIn("n_complete_pairs", context_ablation.DELTA_FIELDS)
+
     def test_missing_arm_yields_empty_deltas_not_a_crash(self):
         benchmark = self._pure_benchmark()
         registry = [self._registry_row("bare-1", "m1", "bare", "2026-09-02T00:00:00Z")]
@@ -591,6 +636,7 @@ class ContextAblationTableTest(unittest.TestCase):
             run_group_id="context-ablation-2026-09",
             include_smoke=False,
             bootstrap_samples=10,
+            sampling_plan=NO_STOCHASTIC_PLAN,
         )
         self.assertEqual({r["item_context"] for r in tables["arms"]}, {"bare"})
         self.assertTrue(all(r["delta"] == "" for r in tables["deltas"]))
@@ -746,6 +792,181 @@ class SmokeTreeRoutingTest(unittest.TestCase):
             ):
                 analysis_cli.main()
             self.assertTrue((root / "outputs" / "analysis" / "uq_scores.csv").exists())
+
+
+class SamplingPlanThreadingTest(unittest.TestCase):
+    """AB#2: a run with 3 of 5 planned samples must read 3/5 in every caller."""
+
+    def _write_cell(self, root: Path, *, run_id: str, observed_samples: int) -> list:
+        benchmark = eu.build_benchmark_items(_seeds()[:2])
+        eu.write_csv_rows(
+            eu.artifact_path(
+                root / "data/processed/benchmark_items.csv", "nice", "must"
+            ),
+            benchmark,
+        )
+        raw_path = eu.model_outputs_raw_path(root, "nice", "must")
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        with raw_path.open("w", encoding="utf-8") as handle:
+            for item in benchmark:
+                handle.write(
+                    json.dumps(
+                        _task2_raw(
+                            item,
+                            model="m1",
+                            run_id=run_id,
+                            requirement="The system must export reports.",
+                        )
+                    )
+                    + "\n"
+                )
+                for sample_index in range(observed_samples):
+                    handle.write(
+                        json.dumps(
+                            _task2_raw(
+                                item,
+                                model="m1",
+                                run_id=run_id,
+                                requirement="The system must export reports.",
+                                sample_kind="stochastic",
+                                sample_index=sample_index,
+                            )
+                        )
+                        + "\n"
+                    )
+        return benchmark
+
+    def test_analysis_cli_threads_the_declared_plan_into_the_scores(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_cell(root, run_id="full-1", observed_samples=3)
+            argv = [
+                "generate_evaluation_analysis.py",
+                "--dataset",
+                "nice",
+                "--variant",
+                "must",
+                "--run-id",
+                "full-1",
+                "--expected-stochastic-samples",
+                "5",
+                "--output-dir",
+                str(root / "outputs" / "analysis"),
+                "--skip-manifest-check",
+                "--skip-registry-check",
+                "--skip-construct-review-check",
+                "--allow-partial",
+                "--bootstrap-iterations",
+                "5",
+            ]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(analysis_cli.eu, "project_root", return_value=root),
+                redirect_stdout(io.StringIO()),
+            ):
+                analysis_cli.main()
+
+            rows = [
+                row
+                for row in eu.read_csv_rows(
+                    root / "outputs" / "analysis" / "uq_scores.csv"
+                )
+                if row["uq_method"] == "modality_consistency"
+            ]
+            provenance = json.loads(
+                (root / "outputs" / "analysis" / "provenance_manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertTrue(rows)
+        self.assertEqual({row["valid_n"] for row in rows}, {"3"})
+        self.assertEqual({row["total_n"] for row in rows}, {"5"})
+        self.assertEqual({row["stochastic_complete"] for row in rows}, {"False"})
+        self.assertEqual(provenance["sampling_plan_source"], "planned")
+        self.assertEqual(provenance["expected_stochastic_samples"], 5)
+
+    def _run_matrix(self, root: Path, planned_samples: int) -> list:
+        config_path = root / f"run_config_{planned_samples}.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "run_group_id": "plan-group",
+                    "datasets": ["nice"],
+                    "benchmark_variants": ["must"],
+                    "stochastic": {
+                        "temperature": 0.7,
+                        "top_p": 1.0,
+                        "samples": planned_samples,
+                    },
+                    "profiles": [
+                        {
+                            "profile_id": "fake",
+                            "provider_id": "fake",
+                            "base_url": "http://127.0.0.1:1234/v1",
+                            "api_key_env": "LOCAL_OPENAI_API_KEY",
+                            "models": ["m1"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        argv = [
+            "compare_run_matrix.py",
+            "--config",
+            str(config_path),
+            "--bootstrap-samples",
+            "5",
+        ]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(compare_matrix.eu, "project_root", return_value=root),
+            redirect_stdout(io.StringIO()),
+        ):
+            compare_matrix.main()
+        summary_path = eu.artifact_path(
+            root / "outputs/run_matrix_summary.csv", "nice", "must"
+        )
+        return [
+            row
+            for row in eu.read_csv_rows(summary_path)
+            if row["uq_method"] == "modality_consistency"
+        ]
+
+    def test_run_matrix_threads_the_run_config_plan_into_the_scores(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            benchmark = self._write_cell(root, run_id="full-1", observed_samples=3)
+            eu.write_csv_rows(
+                eu.run_registry_path(root, "nice", "must"),
+                [
+                    {
+                        "run_id": "full-1",
+                        "run_group_id": "plan-group",
+                        "model": "m1",
+                        "dataset_id": "nice",
+                        "benchmark_variant": "must",
+                        "status": "complete",
+                    }
+                ],
+            )
+
+            planned_five = self._run_matrix(root, 5)
+            planned_three = self._run_matrix(root, 3)
+
+        self.assertTrue(planned_five)
+        # Five planned, three written: every group is incomplete and excluded
+        # from the agreement denominator.
+        self.assertEqual({row["agreement_n_complete"] for row in planned_five}, {"0"})
+        self.assertEqual(
+            {row["agreement_n_incomplete_excluded"] for row in planned_five},
+            {str(len(benchmark))},
+        )
+        self.assertEqual(
+            {row["agreement_n_complete"] for row in planned_three},
+            {str(len(benchmark))},
+        )
 
 
 class ExportPaperTablesTest(unittest.TestCase):
@@ -1331,6 +1552,29 @@ class ExportPaperTablesTest(unittest.TestCase):
 
             self.assertGreater(complete_count(complete_at_three), 0)
             self.assertEqual(complete_count(complete_at_five), 0)
+
+            def consistency_rows(cell):
+                return [
+                    row
+                    for row in cell["scores"]
+                    if str(row.get("uq_method", "")) == "modality_consistency"
+                ]
+
+            planned_at_five = consistency_rows(complete_at_five)
+            self.assertTrue(planned_at_five)
+            # Three samples were written, five were planned: 3/5, not 3/3.
+            self.assertEqual({row["valid_n"] for row in planned_at_five}, {3})
+            self.assertEqual({row["total_n"] for row in planned_at_five}, {5})
+            self.assertEqual(
+                {row["sampling_plan_source"] for row in planned_at_five}, {"planned"}
+            )
+            self.assertEqual(
+                {row["total_n"] for row in consistency_rows(complete_at_three)}, {3}
+            )
+            self.assertEqual(
+                complete_at_five["sampling_plan"],
+                eu.SamplingPlan(stochastic_samples=5),
+            )
             self.assertEqual(
                 export.build_parser().parse_args([]).expected_stochastic_samples,
                 export.DEFAULT_EXPECTED_STOCHASTIC_SAMPLES,

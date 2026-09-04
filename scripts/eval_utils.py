@@ -25,10 +25,11 @@ import zipfile
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from functools import cache
 from itertools import batched, pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from xml.etree import ElementTree as ET
 
 try:
@@ -1206,6 +1207,130 @@ def load_run_config(path: str | Path) -> dict[str, Any]:
                 f"column {exc.colno}: {exc.msg}"
             ) from exc
     return normalize_run_config(config)
+
+
+SAMPLING_PLAN_SOURCE_PLANNED = "planned"
+SAMPLING_PLAN_SOURCE_INFERRED = "inferred"
+SAMPLING_PLAN_SOURCES = (SAMPLING_PLAN_SOURCE_PLANNED, SAMPLING_PLAN_SOURCE_INFERRED)
+
+
+@dataclass(frozen=True, slots=True)
+class SamplingPlan:
+    """The repeated-sampling plan a run was executed under.
+
+    ``stochastic_samples`` is the number of stochastic samples the run PLANNED
+    per item. It is what makes a sample the run never wrote (crash, budget stop,
+    interrupted resume) visible as a missing observation rather than as absent
+    by design: three observed samples of a planned five are 3/5, not 3/3.
+    ``temperature`` and ``top_p`` are carried when the caller holds the run
+    config, so the sampling regime behind a score row stays reconstructable.
+
+    ``source`` is ``"planned"`` for a declared plan and ``"inferred"`` for the
+    explicitly requested exploratory mode that reconstructs the denominator from
+    whatever rows happen to exist. It is stamped on every score row and every
+    manifest the plan feeds, so an inferred denominator can never be read
+    downstream as a declared one.
+    """
+
+    stochastic_samples: int
+    temperature: float | None = None
+    top_p: float | None = None
+    source: str = SAMPLING_PLAN_SOURCE_PLANNED
+
+    def __post_init__(self) -> None:
+        if isinstance(self.stochastic_samples, bool) or not isinstance(
+            self.stochastic_samples, int
+        ):
+            raise ValueError(
+                "SamplingPlan.stochastic_samples must be an int, got "
+                f"{self.stochastic_samples!r}."
+            )
+        if self.stochastic_samples < 0:
+            raise ValueError(
+                "SamplingPlan.stochastic_samples must not be negative, got "
+                f"{self.stochastic_samples}."
+            )
+        if self.temperature is not None and not 0.0 <= float(self.temperature) <= 2.0:
+            raise ValueError(
+                f"SamplingPlan.temperature must be in [0, 2], got {self.temperature!r}."
+            )
+        if self.top_p is not None and not 0.0 < float(self.top_p) <= 1.0:
+            raise ValueError(
+                f"SamplingPlan.top_p must be in (0, 1], got {self.top_p!r}."
+            )
+        if self.source not in SAMPLING_PLAN_SOURCES:
+            raise ValueError(
+                f"SamplingPlan.source must be one of {SAMPLING_PLAN_SOURCES}, got "
+                f"{self.source!r}."
+            )
+
+    @classmethod
+    def from_run_config(cls, run_config: Mapping[str, Any]) -> SamplingPlan:
+        """Read the plan from a run config or from a project config `llm` block."""
+        stochastic = run_config.get("stochastic")
+        if not isinstance(stochastic, Mapping):
+            llm_config = run_config.get("llm")
+            stochastic = (
+                llm_config.get("stochastic")
+                if isinstance(llm_config, Mapping)
+                else None
+            )
+        if not isinstance(stochastic, Mapping):
+            raise ValueError(
+                "Run config declares no stochastic sampling block; a SamplingPlan "
+                "cannot be derived from it."
+            )
+        temperature = stochastic.get("temperature")
+        top_p = stochastic.get("top_p")
+        return cls(
+            stochastic_samples=int(stochastic.get("samples", 0) or 0),
+            temperature=None if temperature is None else float(temperature),
+            top_p=None if top_p is None else float(top_p),
+        )
+
+    @classmethod
+    def inferred_from_observations(cls) -> SamplingPlan:
+        """Exploratory plan whose denominator is whatever rows were written."""
+        return cls(stochastic_samples=0, source=SAMPLING_PLAN_SOURCE_INFERRED)
+
+    def total_samples(self, observed: int) -> int:
+        """Denominator for one stochastic group of ``observed`` written rows."""
+        return max(int(observed), self.stochastic_samples)
+
+
+# Prompt-sensitivity and other deterministic-only probes plan no repeated
+# samples at all, so their denominator is the row they wrote, by design.
+DETERMINISTIC_ONLY_SAMPLING_PLAN = SamplingPlan(stochastic_samples=0)
+
+
+def resolve_sampling_plan(
+    sampling_plan: SamplingPlan | None,
+    infer_plan_from_observations: bool,
+    *,
+    caller: str,
+) -> SamplingPlan:
+    """Return the plan a scoring call must use, or refuse to guess a denominator."""
+    if sampling_plan is not None and infer_plan_from_observations:
+        raise ValueError(
+            f"{caller}: pass either sampling_plan or "
+            "infer_plan_from_observations=True, not both."
+        )
+    if sampling_plan is not None:
+        if not isinstance(sampling_plan, SamplingPlan):
+            raise ValueError(
+                f"{caller}: sampling_plan must be a SamplingPlan, got "
+                f"{type(sampling_plan).__name__}."
+            )
+        return sampling_plan
+    if infer_plan_from_observations:
+        return SamplingPlan.inferred_from_observations()
+    raise ValueError(
+        f"{caller} requires an explicit SamplingPlan carrying the number of "
+        "stochastic samples the run planned per item. Pass "
+        "infer_plan_from_observations=True only for exploratory work where "
+        "reconstructing the denominator from the rows that happen to exist is "
+        "acceptable; those rows are stamped sampling_plan_source='inferred'."
+    )
 
 
 def filter_run_profiles(
@@ -6562,6 +6687,22 @@ def bootstrap_seed_metric(
     return float(point), float(low), float(high)
 
 
+class PairedDeltaCI(NamedTuple):
+    """Complete-pair paired bootstrap result for ``metric(b) - metric(a)``.
+
+    ``n_complete_pairs`` is the number of seed clusters observed in both arms
+    (the population the point estimate and the interval describe) and
+    ``n_excluded_single_arm`` the number of seed clusters dropped because only
+    one arm ever answered them.
+    """
+
+    delta: float
+    ci_low: float
+    ci_high: float
+    n_complete_pairs: int
+    n_excluded_single_arm: int
+
+
 def bootstrap_seed_metric_delta(
     rows_a: list[dict[str, Any]],
     rows_b: list[dict[str, Any]],
@@ -6569,20 +6710,24 @@ def bootstrap_seed_metric_delta(
     seed_field: str = "seed_id",
     iterations: int = 1000,
     seed: int = 20260518,
-) -> tuple[float, float, float]:
-    """Paired seed-clustered bootstrap for ``metric(rows_b) - metric(rows_a)``.
+) -> PairedDeltaCI:
+    """Complete-pair seed-clustered bootstrap for ``metric(rows_b) - metric(rows_a)``.
 
     The two arms score the same benchmark items under different conditions
     (for example `item_context` bare vs document), so their rows are paired by
-    seed. Each iteration draws one resample of the union of seed ids and
-    evaluates the metric on *both* arms restricted to those seeds before
-    differencing; resampling the arms independently would treat paired
-    observations as unrelated and overstate the interval. Returns
-    ``(delta_point, ci_low, ci_high)`` at the 2.5/97.5 percentiles; NaN when
-    either arm is empty.
+    seed. Each iteration draws one resample of the seed ids and evaluates the
+    metric on *both* arms restricted to those seeds before differencing;
+    resampling the arms independently would treat paired observations as
+    unrelated and overstate the interval.
+
+    Only a seed observed in both arms can form a pair, so the complete-pair
+    cohort is built once, before resampling. Single-arm seeds are counted and
+    excluded up front instead of entering the draw and contributing an
+    undefined difference to some replicates but not others, which would let the
+    effective number of pairs vary by replicate. Both the point estimate and
+    the 2.5/97.5 percentile interval describe that cohort; the delta is NaN
+    when no complete pair exists.
     """
-    if not rows_a or not rows_b:
-        return math.nan, math.nan, math.nan
 
     def by_seed(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         groups: dict[str, list[dict[str, Any]]] = {}
@@ -6591,22 +6736,32 @@ def bootstrap_seed_metric_delta(
         return groups
 
     groups_a, groups_b = by_seed(rows_a), by_seed(rows_b)
-    seed_keys = np.asarray(sorted(set(groups_a) | set(groups_b)), dtype=object)
-    point = metric(rows_b) - metric(rows_a)
+    paired = sorted(set(groups_a) & set(groups_b))
+    excluded = len(set(groups_a) ^ set(groups_b))
+    if not paired:
+        return PairedDeltaCI(math.nan, math.nan, math.nan, 0, excluded)
+
+    cohort_a = [row for key in paired for row in groups_a[key]]
+    cohort_b = [row for key in paired for row in groups_b[key]]
+    point = metric(cohort_b) - metric(cohort_a)
+    seed_keys = np.asarray(paired, dtype=object)
     rng = np.random.default_rng(seed)
     samples = []
     for _ in range(iterations):
         sample_a: list[dict[str, Any]] = []
         sample_b: list[dict[str, Any]] = []
         for seed_key in rng.choice(seed_keys, size=seed_keys.size, replace=True):
-            sample_a.extend(groups_a.get(str(seed_key), []))
-            sample_b.extend(groups_b.get(str(seed_key), []))
+            sample_a.extend(groups_a[str(seed_key)])
+            sample_b.extend(groups_b[str(seed_key)])
         samples.append(metric(sample_b) - metric(sample_a))
+    # Every replicate now draws both arms of a complete pair, so a non-finite
+    # replicate can only mean the metric itself is undefined on that resample,
+    # never that an arm was missing.
     sample_array = np.asarray([x for x in samples if not math.isnan(x)], dtype=float)
     if sample_array.size == 0:
-        return float(point), math.nan, math.nan
+        return PairedDeltaCI(float(point), math.nan, math.nan, len(paired), excluded)
     low, high = np.quantile(sample_array, [0.025, 0.975])
-    return float(point), float(low), float(high)
+    return PairedDeltaCI(float(point), float(low), float(high), len(paired), excluded)
 
 
 def score_from_distribution(
@@ -6852,9 +7007,11 @@ def build_uq_scores(
     benchmark_rows: list[dict[str, Any]],
     raw_rows: list[dict[str, Any]],
     min_valid_samples: int = 1,
-    expected_stochastic_samples: int | None = None,
+    *,
+    sampling_plan: SamplingPlan | None = None,
+    infer_plan_from_observations: bool = False,
 ) -> list[dict[str, Any]]:
-    """Build per-item UQ score rows.
+    """Build per-item UQ score rows under a declared :class:`SamplingPlan`.
 
     ``min_valid_samples`` drops stochastic groups with fewer than that many
     successfully parsed samples. Every stochastic row carries
@@ -6862,17 +7019,21 @@ def build_uq_scores(
     summaries must be restricted to complete rows, see
     :func:`repeated_sample_agreement_metrics`.
 
-    ``expected_stochastic_samples`` is the number of repeated samples the run
-    PLANNED per item. Without it ``total_n`` is only the number of rows that were
-    written, so a sample the run never wrote (crash, budget stop) is invisible and
-    the group is reported as complete. When given, ``total_n`` is
-    ``max(len(group), expected_stochastic_samples)`` and a missing sample counts
-    as a parse failure, i.e. ``stochastic_complete`` is False.
+    ``sampling_plan`` is required: ``total_n`` is
+    ``plan.total_samples(len(group))``, so a sample the run never wrote (crash,
+    budget stop) counts as a parse failure and the group reads as incomplete.
+    Inferring the denominator from the rows that happen to exist would report
+    three observed samples of a planned five as a complete 3/3; that behaviour
+    survives only behind ``infer_plan_from_observations=True``, which stamps
+    every row it produces with ``sampling_plan_source="inferred"``.
 
     Duplicate rows for one ``run_id`` + :func:`completion_record_key` (append-only
     raw files, resumed runs) are collapsed by :func:`dedupe_raw_rows` first, so a
     re-requested item cannot be double-counted or scored from its stale attempt.
     """
+    plan = resolve_sampling_plan(
+        sampling_plan, infer_plan_from_observations, caller="build_uq_scores"
+    )
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
     raw_rows = dedupe_raw_rows(raw_rows)
     raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, raw_rows)
@@ -6933,7 +7094,7 @@ def build_uq_scores(
 
     raw_frame = pd.DataFrame.from_records(raw_rows)
     if raw_frame.empty or "sample_kind" not in raw_frame.columns:
-        return scores
+        return _stamp_sampling_plan_source(scores, plan)
     stochastic_frame = raw_frame[raw_frame["sample_kind"] == "stochastic"]
 
     for (_, task, item_id, _), group_frame in stochastic_frame.groupby(
@@ -6956,7 +7117,7 @@ def build_uq_scores(
             "label_self_consistency" if task == "task1" else "modality_consistency"
         )
         # A sample that was never written is missing, not absent-by-design.
-        total_n = max(len(group), int(expected_stochastic_samples or 0))
+        total_n = plan.total_samples(len(group))
         scores.extend(
             distribution_score_rows(
                 valid[0],
@@ -6970,6 +7131,15 @@ def build_uq_scores(
         )
 
     scores.extend(build_ensemble_disagreement_scores(benchmark_rows, raw_rows))
+    return _stamp_sampling_plan_source(scores, plan)
+
+
+def _stamp_sampling_plan_source(
+    scores: list[dict[str, Any]], plan: SamplingPlan
+) -> list[dict[str, Any]]:
+    """Record on every score row which plan its denominator came from."""
+    for row in scores:
+        row["sampling_plan_source"] = plan.source
     return scores
 
 
@@ -8081,21 +8251,35 @@ def write_preliminary_result_snapshot(
     root: str | Path,
     variant: str | None = None,
     dataset_id: str | None = None,
-    expected_stochastic_samples: int = 5,
     include_baseline: bool = True,
+    *,
+    sampling_plan: SamplingPlan | None = None,
+    infer_plan_from_observations: bool = False,
 ) -> dict[str, Any]:
+    """Write the mid-run snapshot for the plan the run is executing under.
+
+    The snapshot is read while a run is still in flight, which is exactly when
+    unwritten samples exist, so it takes the same required
+    :class:`SamplingPlan` as :func:`build_uq_scores` and reports progress
+    against the same denominator.
+    """
+    plan = resolve_sampling_plan(
+        sampling_plan,
+        infer_plan_from_observations,
+        caller="write_preliminary_result_snapshot",
+    )
     paths = preliminary_result_paths(root, variant, dataset_id=dataset_id)
     scored_benchmark_rows = benchmark_rows_with_current_raw_outputs(
         benchmark_rows, raw_rows
     )
-    scores = build_uq_scores(scored_benchmark_rows, raw_rows)
+    scores = build_uq_scores(scored_benchmark_rows, raw_rows, sampling_plan=plan)
     if include_baseline:
         scores.extend(build_rule_baseline_scores(scored_benchmark_rows))
     summary = metric_summary_by_model_task_method(scores)
     progress = run_progress_summary(
         benchmark_rows,
         raw_rows,
-        expected_stochastic_samples=expected_stochastic_samples,
+        expected_stochastic_samples=plan.stochastic_samples,
     )
     score_fields = [
         "run_id",
@@ -8111,6 +8295,7 @@ def write_preliminary_result_snapshot(
         "total_n",
         "parse_failures",
         "stochastic_complete",
+        "sampling_plan_source",
         "requirement_word_count",
         "source_word_count",
         "length_ratio",
@@ -8238,6 +8423,8 @@ def write_preliminary_result_snapshot(
         "score_rows": len(scores),
         "summary_rows": len(summary),
         "progress_rows": len(progress),
+        "sampling_plan_source": plan.source,
+        "expected_stochastic_samples": plan.stochastic_samples,
     }
 
 
@@ -8346,7 +8533,10 @@ def build_rule_baseline_scores(
 def prompt_sensitivity_summary(
     benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    scores = build_uq_scores(benchmark_rows, raw_rows)
+    """Per-prompt Task 1 drift over the deterministic prompt-sensitivity probe."""
+    scores = build_uq_scores(
+        benchmark_rows, raw_rows, sampling_plan=DETERMINISTIC_ONLY_SAMPLING_PLAN
+    )
     frame = pd.DataFrame.from_records(scores)
     if frame.empty:
         return []

@@ -27,6 +27,11 @@ from scripts import (
     structured_outputs as so,
 )
 
+# Deterministic-only fixtures plan no repeated samples, so the plan denominator
+# is inert and every group scores exactly the rows the run wrote.
+NO_STOCHASTIC_PLAN = eu.SamplingPlan(stochastic_samples=0)
+FIVE_SAMPLE_PLAN = eu.SamplingPlan(stochastic_samples=5)
+
 
 def export_report_seeds():
     """Return the canonical single ``export reports`` seed row as a fresh list."""
@@ -809,7 +814,9 @@ class EvalUtilsTest(unittest.TestCase):
             },
         ]
 
-        scores = eu.build_uq_scores(benchmark, raw_rows)
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=NO_STOCHASTIC_PLAN
+        )
         score_by_item = {row["item_id"]: row for row in scores}
 
         self.assertEqual(
@@ -1832,7 +1839,9 @@ class EvalUtilsTest(unittest.TestCase):
                     },
                 )
             )
-        scores = eu.build_uq_scores(benchmark, raw_rows)
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=NO_STOCHASTIC_PLAN
+        )
         summary = eu.metric_summary_by_model_task_method(scores)
         self.assertEqual(len(scores), 4)
         self.assertEqual(summary[0]["accuracy"], 1.0)
@@ -1862,7 +1871,9 @@ class EvalUtilsTest(unittest.TestCase):
 
         scores = [
             row
-            for row in eu.build_uq_scores(benchmark, rows)
+            for row in eu.build_uq_scores(
+                benchmark, rows, sampling_plan=NO_STOCHASTIC_PLAN
+            )
             if row["uq_method"] == "verbalized_confidence"
         ]
 
@@ -1881,7 +1892,9 @@ class EvalUtilsTest(unittest.TestCase):
 
         scores = [
             row
-            for row in eu.build_uq_scores(benchmark, rows)
+            for row in eu.build_uq_scores(
+                benchmark, rows, sampling_plan=NO_STOCHASTIC_PLAN
+            )
             if row["uq_method"] == "verbalized_confidence"
         ]
 
@@ -1970,25 +1983,32 @@ class EvalUtilsTest(unittest.TestCase):
             for sample_index in range(4)
         ]
 
-        without_expectation = [
-            row
-            for row in eu.build_uq_scores(benchmark, rows)
-            if row["uq_method"] == "modality_consistency"
-        ]
-        with_expectation = [
+        inferred = [
             row
             for row in eu.build_uq_scores(
-                benchmark, rows, expected_stochastic_samples=5
+                benchmark, rows, infer_plan_from_observations=True
+            )
+            if row["uq_method"] == "modality_consistency"
+        ]
+        planned = [
+            row
+            for row in eu.build_uq_scores(
+                benchmark, rows, sampling_plan=FIVE_SAMPLE_PLAN
             )
             if row["uq_method"] == "modality_consistency"
         ]
 
-        self.assertEqual([row["total_n"] for row in without_expectation], [4])
-        self.assertTrue(without_expectation[0]["stochastic_complete"])
-        self.assertEqual([row["total_n"] for row in with_expectation], [5])
-        self.assertEqual(with_expectation[0]["valid_n"], 4)
-        self.assertEqual(with_expectation[0]["parse_failures"], 1)
-        self.assertFalse(with_expectation[0]["stochastic_complete"])
+        self.assertEqual([row["total_n"] for row in inferred], [4])
+        self.assertTrue(inferred[0]["stochastic_complete"])
+        self.assertEqual([row["total_n"] for row in planned], [5])
+        self.assertEqual(planned[0]["valid_n"], 4)
+        self.assertEqual(planned[0]["parse_failures"], 1)
+        self.assertFalse(planned[0]["stochastic_complete"])
+        # The exploratory denominator has to be visible downstream.
+        self.assertEqual(
+            {row["sampling_plan_source"] for row in inferred}, {"inferred"}
+        )
+        self.assertEqual({row["sampling_plan_source"] for row in planned}, {"planned"})
 
     def test_stale_raw_prompt_rows_are_excluded_from_scores(self):
         benchmark = eu.build_benchmark_items(
@@ -2026,13 +2046,20 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(
             eu.benchmark_rows_with_current_raw_outputs(benchmark, [raw]), []
         )
-        self.assertEqual(eu.build_uq_scores(benchmark, [raw]), [])
+        self.assertEqual(
+            eu.build_uq_scores(benchmark, [raw], sampling_plan=NO_STOCHASTIC_PLAN), []
+        )
 
         fresh = {**raw, "prompt": f'Source statement:\n"{item["source_statement"]}"'}
         self.assertEqual(
             len(eu.benchmark_rows_with_current_raw_outputs(benchmark, [fresh])), 1
         )
-        self.assertEqual(len(eu.build_uq_scores(benchmark, [fresh])), 1)
+        self.assertEqual(
+            len(
+                eu.build_uq_scores(benchmark, [fresh], sampling_plan=NO_STOCHASTIC_PLAN)
+            ),
+            1,
+        )
 
     def test_build_task3_items_scores_and_summary(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
@@ -2362,7 +2389,9 @@ class EvalUtilsTest(unittest.TestCase):
             )
         ]
 
-        scores = eu.build_uq_scores(benchmark, raw_rows)
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=NO_STOCHASTIC_PLAN
+        )
         summary = eu.metric_summary_by_model_task_method(scores)
 
         self.assertEqual(scores[0]["text_modality"], "mandatory")
@@ -2634,7 +2663,7 @@ class EvalUtilsTest(unittest.TestCase):
             }
             for index in range(5)
         ]
-        scores = eu.build_uq_scores(benchmark, raw_rows)
+        scores = eu.build_uq_scores(benchmark, raw_rows, sampling_plan=FIVE_SAMPLE_PLAN)
         by_method = {row["uq_method"]: row for row in scores}
 
         self.assertEqual(
@@ -2703,7 +2732,7 @@ class EvalUtilsTest(unittest.TestCase):
             }
         )
 
-        scores = eu.build_uq_scores(benchmark, raw_rows)
+        scores = eu.build_uq_scores(benchmark, raw_rows, sampling_plan=FIVE_SAMPLE_PLAN)
 
         self.assertTrue(all(row["valid_n"] == 4 for row in scores))
         self.assertTrue(all(row["total_n"] == 5 for row in scores))
@@ -2727,7 +2756,9 @@ class EvalUtilsTest(unittest.TestCase):
                 )
             )
 
-        scores = eu.build_uq_scores(benchmark, raw_rows)
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=NO_STOCHASTIC_PLAN
+        )
         ensemble = [
             row for row in scores if row["uq_method"] == "model_ensemble_disagreement"
         ]
@@ -2761,7 +2792,9 @@ class EvalUtilsTest(unittest.TestCase):
                 )
             )
 
-        scores = eu.build_uq_scores(benchmark, raw_rows)
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=NO_STOCHASTIC_PLAN
+        )
         ensemble = [
             row for row in scores if row["uq_method"] == "model_ensemble_disagreement"
         ]
@@ -4960,9 +4993,10 @@ class EvalUtilsTest(unittest.TestCase):
                 benchmark,
                 raw_rows,
                 tmpdir,
-                expected_stochastic_samples=5,
+                sampling_plan=FIVE_SAMPLE_PLAN,
             )
 
+            self.assertEqual(snapshot["sampling_plan_source"], "planned")
             self.assertGreater(snapshot["score_rows"], 0)
             self.assertGreater(snapshot["summary_rows"], 0)
             self.assertEqual(snapshot["progress_rows"], 1)
@@ -5770,27 +5804,71 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
 
         self.assertEqual(
             eu.bootstrap_seed_metric_delta(arm_a, arm_a, rate, iterations=100),
-            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0, 40, 0),
         )
-        point, low, high = eu.bootstrap_seed_metric_delta(
-            arm_a, arm_b, rate, iterations=300
-        )
+        result = eu.bootstrap_seed_metric_delta(arm_a, arm_b, rate, iterations=300)
+        point, low, high = result.delta, result.ci_low, result.ci_high
         self.assertAlmostEqual(point, 0.125)
         self.assertGreater(low, 0.0)
         self.assertLess(high, 0.3)
+        self.assertEqual(result.n_complete_pairs, 40)
+        self.assertEqual(result.n_excluded_single_arm, 0)
         self.assertEqual(
             eu.bootstrap_seed_metric_delta(arm_a, arm_b, rate, iterations=300),
-            (point, low, high),
+            result,
         )
         self.assertNotEqual(
             eu.bootstrap_seed_metric_delta(arm_a, arm_b, rate, iterations=300, seed=1)[
-                1:
+                1:3
             ],
             (low, high),
         )
         self.assertTrue(
-            all(math.isnan(v) for v in eu.bootstrap_seed_metric_delta([], arm_b, rate))
+            all(
+                math.isnan(value)
+                for value in eu.bootstrap_seed_metric_delta([], arm_b, rate)[:3]
+            )
         )
+
+    def test_bootstrap_seed_metric_delta_resamples_only_complete_pairs(self):
+        def rate(rows):
+            return sum(row["flag"] for row in rows) / len(rows)
+
+        paired_a = [{"seed_id": f"S{i:03d}", "flag": i % 2} for i in range(40)]
+        paired_b = [
+            {"seed_id": f"S{i:03d}", "flag": 1 if i >= 30 else i % 2} for i in range(40)
+        ]
+        # Two seeds were only ever observed in one arm, so they cannot be paired.
+        orphan_a = [*paired_a, {"seed_id": "S900", "flag": 1}]
+        orphan_b = [*paired_b, {"seed_id": "S901", "flag": 0}]
+
+        with_orphans = eu.bootstrap_seed_metric_delta(
+            orphan_a, orphan_b, rate, iterations=300
+        )
+        prefiltered = eu.bootstrap_seed_metric_delta(
+            paired_a, paired_b, rate, iterations=300
+        )
+
+        self.assertEqual(with_orphans.n_complete_pairs, 40)
+        self.assertEqual(with_orphans.n_excluded_single_arm, 2)
+        # Excluding before resampling makes the interval identical to the one
+        # computed on the pre-filtered complete-pair cohort.
+        self.assertEqual(with_orphans[:3], prefiltered[:3])
+
+    def test_bootstrap_seed_metric_delta_without_any_complete_pair_is_nan(self):
+        def rate(rows):
+            return sum(row["flag"] for row in rows) / len(rows)
+
+        disjoint = eu.bootstrap_seed_metric_delta(
+            [{"seed_id": "S001", "flag": 1}],
+            [{"seed_id": "S002", "flag": 0}],
+            rate,
+            iterations=50,
+        )
+
+        self.assertEqual(disjoint.n_complete_pairs, 0)
+        self.assertEqual(disjoint.n_excluded_single_arm, 2)
+        self.assertTrue(all(math.isnan(value) for value in disjoint[:3]))
 
     def test_batch_prompt_wrapper_sha_digests_the_rendered_wrapper(self):
         probe_jobs = [
@@ -6430,6 +6508,131 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(seen["max_retries"], 0)
+
+
+class SamplingPlanTest(unittest.TestCase):
+    """AB#2: paper-facing scoring declares its sampling plan instead of guessing."""
+
+    def test_plan_validates_its_fields(self):
+        plan = eu.SamplingPlan(stochastic_samples=5, temperature=0.7, top_p=1.0)
+
+        self.assertEqual(plan.stochastic_samples, 5)
+        self.assertEqual(plan.source, eu.SAMPLING_PLAN_SOURCE_PLANNED)
+        self.assertEqual(plan.total_samples(3), 5)
+        self.assertEqual(plan.total_samples(7), 7)
+        for kwargs in [
+            {"stochastic_samples": -1},
+            {"stochastic_samples": "5"},
+            {"stochastic_samples": True},
+            {"stochastic_samples": 5, "temperature": -0.5},
+            {"stochastic_samples": 5, "top_p": 0.0},
+            {"stochastic_samples": 5, "top_p": 1.5},
+            {"stochastic_samples": 5, "source": "guessed"},
+        ]:
+            with self.subTest(**kwargs), self.assertRaises(ValueError):
+                eu.SamplingPlan(**kwargs)
+
+    def test_plan_reads_the_run_config_stochastic_block(self):
+        plan = eu.SamplingPlan.from_run_config(
+            {"stochastic": {"samples": 5, "temperature": 0.7, "top_p": 0.95}}
+        )
+
+        self.assertEqual(
+            (plan.stochastic_samples, plan.temperature, plan.top_p), (5, 0.7, 0.95)
+        )
+        # Notebook CONFIG nests the same block under "llm".
+        self.assertEqual(
+            eu.SamplingPlan.from_run_config(
+                {"llm": {"stochastic": {"samples": 3}}}
+            ).stochastic_samples,
+            3,
+        )
+        shipped = eu.SamplingPlan.from_run_config(
+            eu.load_run_config(
+                Path(__file__).resolve().parents[1]
+                / "run_configs/full_matrix.example.json"
+            )
+        )
+        self.assertEqual(shipped.stochastic_samples, 5)
+        self.assertEqual(shipped.source, eu.SAMPLING_PLAN_SOURCE_PLANNED)
+
+    def test_scoring_refuses_to_infer_the_denominator_by_default(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        raw_rows = [
+            raw_record(
+                benchmark[0],
+                task="task1",
+                parsed_json={"decision": "yes", "confidence": 90.0, "brief_reason": ""},
+            )
+        ]
+
+        with self.assertRaises(ValueError) as missing:
+            eu.build_uq_scores(benchmark, raw_rows)
+        self.assertIn("infer_plan_from_observations", str(missing.exception))
+
+        with self.assertRaises(ValueError):
+            eu.build_uq_scores(
+                benchmark,
+                raw_rows,
+                sampling_plan=FIVE_SAMPLE_PLAN,
+                infer_plan_from_observations=True,
+            )
+
+    def test_every_scored_row_records_the_plan_source(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        raw_rows = [
+            raw_record(
+                item,
+                task="task1",
+                parsed_json={"decision": "yes", "confidence": 90.0, "brief_reason": ""},
+            )
+            for item in benchmark
+        ]
+
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=NO_STOCHASTIC_PLAN
+        )
+
+        self.assertTrue(scores)
+        self.assertEqual({row["sampling_plan_source"] for row in scores}, {"planned"})
+
+    def test_preliminary_snapshot_reports_three_of_five_as_incomplete(self):
+        benchmark = eu.build_benchmark_items(export_report_seeds())
+        item = next(row for row in benchmark if row["source_modality"] == "mandatory")
+        raw_rows = [
+            raw_record(
+                item,
+                task="task2",
+                parsed_json={
+                    "requirement": "The system must export reports.",
+                    "modality": "mandatory",
+                    "confidence": 0.9,
+                },
+                sample_kind="stochastic",
+            )
+            | {"sample_index": sample_index}
+            for sample_index in range(3)
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            snapshot = eu.write_preliminary_result_snapshot(
+                benchmark,
+                raw_rows,
+                tmpdir,
+                sampling_plan=FIVE_SAMPLE_PLAN,
+                include_baseline=False,
+            )
+            rows = [
+                row
+                for row in eu.read_csv_rows(snapshot["paths"]["scores"])
+                if row["uq_method"] == "modality_consistency"
+            ]
+
+        self.assertTrue(rows)
+        self.assertEqual({row["valid_n"] for row in rows}, {"3"})
+        self.assertEqual({row["total_n"] for row in rows}, {"5"})
+        self.assertEqual({row["stochastic_complete"] for row in rows}, {"False"})
+        self.assertEqual({row["sampling_plan_source"] for row in rows}, {"planned"})
 
 
 if __name__ == "__main__":

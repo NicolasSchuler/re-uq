@@ -9,7 +9,9 @@ comparison does (deterministic Task 2 rows), and writes one table:
   strengthening with seed-clustered CIs, and the README-style weak-intent
   rate where the stratum is weak-intent;
 * one delta row per model x stratum (`document - bare`) with a *paired*
-  seed-clustered bootstrap CI (`eu.bootstrap_seed_metric_delta`).
+  seed-clustered bootstrap CI over the complete-pair cohort
+  (`eu.bootstrap_seed_metric_delta`), reporting how many seeds were paired and
+  how many were dropped for having answered in one arm only.
 
 Outputs `outputs/context_ablation_summary.{csv,md}` and a provenance JSON
 listing the run ids and resolved-config digests behind every row. Nothing
@@ -37,6 +39,10 @@ DEFAULT_RUN_GROUP_ID = "context-ablation-2026-09"
 DEFAULT_OUTPUT_PREFIX = Path("outputs/context_ablation_summary")
 DEFAULT_BOOTSTRAP_SAMPLES = 1000
 BOOTSTRAP_SEED = 20260518
+# The ablation runs draw the paper's five stochastic samples per item. Only the
+# deterministic Task 2 rows are compared here, but scoring still declares the
+# plan those runs were executed under rather than inferring it.
+DEFAULT_STOCHASTIC_SAMPLES = 5
 STRATA = ("all", "weak_intent", "marker_M", "marker_O")
 METRICS: tuple[tuple[str, Callable[[list[dict[str, Any]]], float]], ...] = (
     ("label_accuracy", lambda rows: eu.task_accuracy(rows, "task2")),
@@ -70,6 +76,8 @@ DELTA_FIELDS = [
     "delta_ci_high",
     "n_bare",
     "n_document",
+    "n_complete_pairs",
+    "n_excluded_single_arm",
 ]
 
 
@@ -109,14 +117,17 @@ def select_arm_runs(
 
 
 def task2_scores(
-    benchmark: list[dict[str, Any]], raw_rows: list[dict[str, Any]]
+    benchmark: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+    *,
+    sampling_plan: eu.SamplingPlan,
 ) -> list[dict[str, Any]]:
     """Deterministic Task 2 score rows with the item's author marker joined on."""
     marker_by_item = {
         str(row["item_id"]): str(row.get("context_marker", "")) for row in benchmark
     }
     current = eu.benchmark_rows_with_current_raw_outputs(benchmark, raw_rows)
-    scores = eu.build_uq_scores(current, raw_rows)
+    scores = eu.build_uq_scores(current, raw_rows, sampling_plan=sampling_plan)
     return [
         {**row, "context_marker": marker_by_item.get(str(row["item_id"]), "")}
         for row in scores
@@ -194,16 +205,15 @@ def delta_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for metric_name, metric in METRICS:
-        if bare and document:
-            point, low, high = eu.bootstrap_seed_metric_delta(
-                bare,
-                document,
-                metric,
-                iterations=bootstrap_samples,
-                seed=BOOTSTRAP_SEED,
-            )
-        else:
-            point = low = high = math.nan
+        # The CI describes the seeds both arms answered; a seed only one arm
+        # answered is excluded before resampling and counted on the row.
+        paired = eu.bootstrap_seed_metric_delta(
+            bare,
+            document,
+            metric,
+            iterations=bootstrap_samples,
+            seed=BOOTSTRAP_SEED,
+        )
         rows.append(
             {
                 "model": model,
@@ -211,11 +221,13 @@ def delta_rows(
                 "metric": metric_name,
                 "bare": _finite(metric(bare)) if bare else "",
                 "document": _finite(metric(document)) if document else "",
-                "delta": _finite(point),
-                "delta_ci_low": _finite(low),
-                "delta_ci_high": _finite(high),
+                "delta": _finite(paired.delta),
+                "delta_ci_low": _finite(paired.ci_low),
+                "delta_ci_high": _finite(paired.ci_high),
                 "n_bare": len(bare),
                 "n_document": len(document),
+                "n_complete_pairs": paired.n_complete_pairs,
+                "n_excluded_single_arm": paired.n_excluded_single_arm,
             }
         )
     return rows
@@ -229,6 +241,7 @@ def build_tables(
     run_group_id: str,
     include_smoke: bool,
     bootstrap_samples: int,
+    sampling_plan: eu.SamplingPlan,
 ) -> dict[str, Any]:
     selected = select_arm_runs(
         registry_rows, run_group_id=run_group_id, include_smoke=include_smoke
@@ -244,7 +257,9 @@ def build_tables(
     for (model, arm), registry_row in sorted(selected.items()):
         run_id = str(registry_row["run_id"])
         scores_by_arm[(model, arm)] = task2_scores(
-            benchmark, raw_by_run.get((run_id, model), [])
+            benchmark,
+            raw_by_run.get((run_id, model), []),
+            sampling_plan=sampling_plan,
         )
         provenance.append(
             {
@@ -309,7 +324,9 @@ def write_outputs(tables: dict[str, Any], output_prefix: Path) -> dict[str, Path
         "Deterministic Task 2 rows of the `pure` cell, bare vs document context.",
         "Strata: `all`, `weak_intent` (source modality nice_to_have), `marker_M` /",
         "`marker_O` (the author's marker on the seed requirement). CIs are",
-        "seed-clustered bootstraps; delta CIs are paired over the same seeds.",
+        "seed-clustered bootstraps; delta CIs are paired over the seeds both",
+        "arms answered (`n_complete_pairs`), excluding single-arm seeds",
+        "(`n_excluded_single_arm`).",
         "",
         "## Arms",
         "",
@@ -353,6 +370,12 @@ def main(argv: list[str] | None = None) -> dict[str, Path]:
         default=DEFAULT_BOOTSTRAP_SAMPLES,
         help="Seed-clustered bootstrap resamples (0 disables the CIs).",
     )
+    parser.add_argument(
+        "--stochastic-samples",
+        type=int,
+        default=DEFAULT_STOCHASTIC_SAMPLES,
+        help="Stochastic samples per item the compared runs planned.",
+    )
     parser.add_argument("--output-prefix", type=Path, default=DEFAULT_OUTPUT_PREFIX)
     args = parser.parse_args(argv)
 
@@ -376,6 +399,7 @@ def main(argv: list[str] | None = None) -> dict[str, Path]:
         run_group_id=args.run_group_id,
         include_smoke=args.include_smoke,
         bootstrap_samples=args.bootstrap_samples,
+        sampling_plan=eu.SamplingPlan(stochastic_samples=args.stochastic_samples),
     )
     output_prefix = (
         args.output_prefix

@@ -471,7 +471,12 @@ def main() -> None:
         require_parse_quality("Task 3 run", task3_rows, args.max_parse_failure_rate)
         require_probability_confidence("Task 3 run", task3_rows)
 
-    scores = eu.build_uq_scores(result_benchmark, raw_rows)
+    # The plan the run was executed under, declared on the command line: a
+    # sample the run never wrote has to read as missing, not as absent.
+    sampling_plan = eu.SamplingPlan(
+        stochastic_samples=int(args.expected_stochastic_samples)
+    )
+    scores = eu.build_uq_scores(result_benchmark, raw_rows, sampling_plan=sampling_plan)
     score_embedding_backends = {
         str(row.get("semantic_embedding_backend", ""))
         for row in scores
@@ -581,7 +586,8 @@ def main() -> None:
         "task1_task2_parse_status": parse_status_counts(raw_rows),
         "task3_parse_status": parse_status_counts(task3_rows),
         "bootstrap_iterations": max(1, int(args.bootstrap_iterations)),
-        "expected_stochastic_samples": int(args.expected_stochastic_samples),
+        "expected_stochastic_samples": sampling_plan.stochastic_samples,
+        "sampling_plan_source": sampling_plan.source,
         "artifacts": [
             eu.artifact_metadata(benchmark_path, root=root),
             eu.artifact_metadata(raw_path, root=root),
