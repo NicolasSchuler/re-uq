@@ -137,14 +137,79 @@ def fake_completion(**kwargs: Any) -> dict[str, Any]:
     }
 
 
+class Task3SourceProfileMismatchError(ValueError):
+    """The requested profile has no Task 2 rows in the selected source run."""
+
+
+def _profiles_present(rows: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Distinct `profile_id` values on `rows`, with the legacy blank named."""
+    return tuple(
+        sorted(
+            {str(row.get("profile_id", "") or "") or eu.LEGACY_IDENTITY for row in rows}
+        )
+    )
+
+
 def source_rows_for_model(
-    source_rows: list[dict[str, Any]], model: str, profile_id: str
-) -> list[dict[str, Any]]:
+    source_rows: list[dict[str, Any]],
+    model: str,
+    profile_id: str,
+    *,
+    allow_profile_mismatch: bool = False,
+) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
+    """Task 2 rows of `model` under `profile_id`, and the profiles they came from.
+
+    Rows written before `profile_id` was recorded carry no profile at all. They
+    are accepted as this profile's own output -- a raw file is scoped to one
+    dataset/variant and predates the provider matrix -- and reported as
+    ``eval_utils.LEGACY_IDENTITY``.
+
+    Rows belonging to a DIFFERENT profile are never silently audited. Task 3
+    stamps the REQUESTED profile on every row it writes, so falling back to
+    "any row for this model" (as this function used to) attributes one
+    provider's extraction to another and leaves no trace of it in the artifact.
+    Without `allow_profile_mismatch` that raises
+    :class:`Task3SourceProfileMismatchError`; with it the mismatch is logged as a
+    warning and the profiles actually audited are returned so the caller can
+    record them in the run's audit provenance.
+
+    Returns ``([], ())`` when the source run holds no rows for `model` at all,
+    which is a different failure the caller reports separately.
+    """
     model_rows = [row for row in source_rows if str(row.get("model", "")) == str(model)]
+    if not model_rows:
+        return [], ()
     profile_rows = [
         row for row in model_rows if str(row.get("profile_id", "")) in {"", profile_id}
     ]
-    return profile_rows or model_rows
+    if profile_rows:
+        return profile_rows, _profiles_present(profile_rows)
+
+    other_profiles = _profiles_present(model_rows)
+    listed = ", ".join(repr(value) for value in other_profiles)
+    if not allow_profile_mismatch:
+        raise Task3SourceProfileMismatchError(
+            f"The Task 2 source run has rows for model {model!r}, but none under "
+            f"profile {profile_id!r}: they belong to profile(s) {listed}. Task 3 "
+            "audits the Task 2 output of the profile it is run under. Re-run with "
+            f"--profile {other_profiles[0]}, or pass "
+            "--allow-source-profile-mismatch to audit them anyway (the audited "
+            "source profile is then recorded in the run registry notes)."
+        )
+    eu.logger.warning(
+        "%s",
+        {
+            "warning": "task3_source_profile_mismatch",
+            "requested_profile_id": profile_id,
+            "audited_profile_ids": list(other_profiles),
+            "model": model,
+            "detail": (
+                f"auditing Task 2 rows of profile(s) {listed} under profile "
+                f"{profile_id!r} because --allow-source-profile-mismatch was passed"
+            ),
+        },
+    )
+    return model_rows, other_profiles
 
 
 def require_complete_task2_source(
@@ -183,6 +248,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-partial-source", action="store_true")
+    parser.add_argument(
+        "--allow-source-profile-mismatch",
+        action="store_true",
+        help=(
+            "Audit Task 2 rows produced under a DIFFERENT provider profile. Off "
+            "by default: the audited source profile is recorded in the registry "
+            "notes and the mismatch is logged as a warning."
+        ),
+    )
     return parser
 
 
@@ -225,6 +299,11 @@ class Task3Cell:
     variant: str
     run_id: str
     source_run_id: str
+    #: Profile(s) the audited Task 2 rows were produced under. Equal to
+    #: `(profile_id,)` for a normal cell; a different value means
+    #: `--allow-source-profile-mismatch` was used and is recorded in the
+    #: registry notes so the artifact says whose output was audited.
+    source_profile_ids: tuple[str, ...]
     started_at: str
     seed: int
     send_seed: bool
@@ -281,11 +360,14 @@ def resolve_source_rows(
     model: str,
     dataset_id: str,
     variant: str,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]], tuple[str, ...]]:
     """Locate the complete Task 2 run this cell audits.
 
-    Raises if no source run matches, if it holds no rows for `model`, or if it
-    is incomplete and `--allow-partial-source` was not passed.
+    Returns the source run id, its rows for this cell, and the profile(s) those
+    rows were produced under. Raises if no source run matches, if it holds no
+    rows for `model`, if its rows for `model` belong to another profile (see
+    :func:`source_rows_for_model`), or if it is incomplete and
+    `--allow-partial-source` was not passed.
     """
     args = matrix.args
     # A smoke-* source run lives in the parallel smoke tree.
@@ -305,8 +387,11 @@ def resolve_source_rows(
             f"{', '.join(f'{prefix}-*' for prefix in accepted_prefixes)}. "
             f"Searched {source_raw_path}."
         )
-    model_source_rows = source_rows_for_model(
-        source_rows, model, str(profile["profile_id"])
+    model_source_rows, source_profile_ids = source_rows_for_model(
+        source_rows,
+        model,
+        str(profile["profile_id"]),
+        allow_profile_mismatch=bool(args.allow_source_profile_mismatch),
     )
     if not model_source_rows:
         raise ValueError(
@@ -327,7 +412,7 @@ def resolve_source_rows(
             accepted_prefixes,
             expected_stochastic_samples=matrix.expected_stochastic_samples,
         )
-    return str(source_run_id), model_source_rows
+    return str(source_run_id), model_source_rows, source_profile_ids
 
 
 def plan_cell(
@@ -348,7 +433,7 @@ def plan_cell(
     """Resolve one Task 3 cell: its source run, audit items, and job plan."""
     args = matrix.args
     audit_mode = matrix.audit_mode
-    source_run_id, model_source_rows = resolve_source_rows(
+    source_run_id, model_source_rows, source_profile_ids = resolve_source_rows(
         matrix, profile, model, dataset_id, variant
     )
     benchmark = eu.read_csv_rows(
@@ -421,6 +506,7 @@ def plan_cell(
         variant=variant,
         run_id=run_id,
         source_run_id=source_run_id,
+        source_profile_ids=source_profile_ids,
         # A resumed cell keeps the start time its first attempt recorded.
         started_at=resume.started_at_utc if resume else eu.utc_now_iso(),
         seed=seed,
@@ -463,6 +549,12 @@ def registry_row(
 ) -> dict[str, Any]:
     """Summarize `raw_rows` as this cell's Task 3 registry row."""
     profile = cell.profile
+    # Provenance for the audited Task 2 output. The source profile is spelled
+    # out only when it is not this cell's own, so the note stays quiet on the
+    # normal path but a `--allow-source-profile-mismatch` run is self-describing.
+    source_note = f"audit_mode={matrix.audit_mode}; source_run_id={cell.source_run_id}"
+    if set(cell.source_profile_ids) - {cell.profile_id}:
+        source_note += f"; source_profile_id={','.join(cell.source_profile_ids)}"
     return eu.run_registry_summary(
         cell.items,
         raw_rows,
@@ -492,10 +584,7 @@ def registry_row(
         # it continues instead of restamping them with `mode=resume`.
         notes=cell.resume.notes
         if cell.resume
-        else rp.run_notes(
-            matrix.args,
-            f"audit_mode={matrix.audit_mode}; source_run_id={cell.source_run_id}",
-        ),
+        else rp.run_notes(matrix.args, source_note),
     )
 
 

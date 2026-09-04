@@ -368,8 +368,11 @@ Raw records are written to `data/processed/model_outputs_raw*.jsonl`
 A `truncated` response counts as a **parse failure**, not as a separate
 category, so `parse_success_rate` now reflects token-budget losses instead of
 hiding them. Run-level quality is summarised in the registry columns
-`batch_order`, `parse_status_histogram`, `retry_total`, `truncated_records`,
-`latency_p50_s`, `latency_p95_s`, and `usage_completion_tokens`. Per-run logs
+`batch_order`, `parse_status_histogram`, `parse_repairs`, `retry_total`,
+`truncated_records`, `latency_p50_s`, `latency_p95_s`, and
+`usage_completion_tokens`. `observed_records` counts logical observations
+and `observed_attempts` the physical raw rows behind them; the two differ
+only when a resume re-requested a failed cell. Per-run logs
 are written to `data/processed/logs/<run_id>.log`.
 
 **Batched-path caveat on the added fields.** The new provenance fields were at

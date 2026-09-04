@@ -86,6 +86,7 @@ Top-level fields in `conf/config.yaml`:
 | `dry_run` | Print planned job/batch/API-call counts and exit without provider calls or artifact writes, including for Task 3 |
 | `log_level` | Level for the `re_uq` logger |
 | `source_run_id`, `audit_mode`, `allow_partial_source` | Task 3 only |
+| `allow_source_profile_mismatch` | Task 3 only: audit Task 2 rows written under a *different* provider profile. Off by default (the run fails instead); when on, the audited source profile is recorded in the registry `notes` |
 
 ### Secrets
 

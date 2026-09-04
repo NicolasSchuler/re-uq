@@ -870,6 +870,7 @@ class SmokeArtifactIsolationTest(unittest.TestCase):
                 fake_completion=False,
                 dry_run=True,
                 allow_partial_source=True,
+                allow_source_profile_mismatch=False,
                 progress_every_records=None,
                 progress_every_seconds=None,
                 warn_after_records=None,
@@ -953,16 +954,24 @@ class RunnerDiagnosticsTest(unittest.TestCase):
                     )
 
     def test_parse_status_histogram_counts_truncated_as_a_failure(self):
+        # Four distinct observations: `live_run_counters` counts logical
+        # observations, so four rows of one item would collapse to one record.
         rows = [
-            {"parse_status": "ok", "latency_s": 1.0, "usage_completion_tokens": 10},
             {
+                "item_id": "i0",
+                "parse_status": "ok",
+                "latency_s": 1.0,
+                "usage_completion_tokens": 10,
+            },
+            {
+                "item_id": "i1",
                 "parse_status": "truncated",
                 "latency_s": 3.0,
                 "retry_count": 2,
                 "usage_completion_tokens": 5,
             },
-            {"parse_status": "invalid_json", "latency_s": 2.0},
-            {"parse_status": "weird_new_status"},
+            {"item_id": "i2", "parse_status": "invalid_json", "latency_s": 2.0},
+            {"item_id": "i3", "parse_status": "weird_new_status"},
         ]
         histogram = eu.parse_status_histogram(rows)
         self.assertEqual(histogram["truncated"], 1)

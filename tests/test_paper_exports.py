@@ -1153,12 +1153,24 @@ class ExportPaperTablesTest(unittest.TestCase):
 
     def test_absent_stochastic_group_is_counted_as_incomplete(self):
         strict_rows = [
-            {"model": "m1", "item_id": "a"},
-            {"model": "m1", "item_id": "b"},
+            {
+                "model": "m1",
+                "dataset_id": "nice",
+                "benchmark_variant": "must",
+                "item_id": "a",
+            },
+            {
+                "model": "m1",
+                "dataset_id": "nice",
+                "benchmark_variant": "must",
+                "item_id": "b",
+            },
         ]
         consistency = {
-            ("m1", "a"): {
+            ("m1", "nice", "must", "a"): {
                 "model": "m1",
+                "dataset_id": "nice",
+                "benchmark_variant": "must",
                 "item_id": "a",
                 "task": "task2",
                 "uq_method": "modality_consistency",

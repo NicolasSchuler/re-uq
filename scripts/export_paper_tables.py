@@ -34,7 +34,7 @@ import argparse
 import json
 import math
 from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -320,11 +320,50 @@ def task2_parse_failure_rate(raw_rows: Iterable[dict[str, Any]]) -> float:
     )
 
 
+#: Key every paper-facing join between a deterministic observation and its
+#: repeated-sample row uses.
+PaperJoinKey = tuple[str, str, str, str]
+
+
+def stamp_cell_identity(
+    scores: list[dict[str, Any]], dataset: str, variant: str
+) -> list[dict[str, Any]]:
+    """Record which cell a score row came from, in place.
+
+    ``build_uq_scores`` scores one (dataset, variant) cell at a time and its
+    rows carry no cell identity, because the cell is implied by the raw file
+    they were read from. The exporter pools four cells, so it stamps the
+    identity here (using the same spelling as the run registry) before anything
+    is pooled or joined; see :func:`paper_join_key`.
+    """
+    dataset_id = eu.normalize_dataset_id(dataset)
+    benchmark_variant = eu.normalize_benchmark_variant(variant)
+    for row in scores:
+        row["dataset_id"] = dataset_id
+        row["benchmark_variant"] = benchmark_variant
+    return scores
+
+
+def paper_join_key(row: Mapping[str, Any]) -> PaperJoinKey:
+    """``(model, dataset, variant, item)`` -- the identity a paper join needs.
+
+    Benchmark item ids are reused between the ``must`` and ``shall`` variants of
+    a family (all 720 ids overlap), so a ``(model, item)`` key silently collapses
+    the four-cell matrix onto one cell: a pooled agreement number kept one row
+    where four were measured, and a deterministic row could be joined to another
+    cell's repeated samples. Provider and profile are deliberately NOT part of
+    this key -- one paper cell selects exactly one run per model, and pooling
+    across providers is what the per-model tables are for.
+    """
+    identity = eu.ObservationIdentity.from_raw_row(row)
+    return (identity.model, identity.dataset_id, identity.variant, identity.item_id)
+
+
 def stochastic_rows_by_method(
     scores: list[dict[str, Any]], uq_method: str
-) -> dict[tuple[str, str], dict[str, Any]]:
+) -> dict[PaperJoinKey, dict[str, Any]]:
     return {
-        (str(row.get("model", "")), str(row.get("item_id", ""))): row
+        paper_join_key(row): row
         for row in scores
         if str(row.get("task", "")) == "task2"
         and str(row.get("uq_method", "")) == uq_method
@@ -333,7 +372,7 @@ def stochastic_rows_by_method(
 
 def agreement_for_strict_rows(
     strict_rows: Iterable[dict[str, Any]],
-    consistency: dict[tuple[str, str], dict[str, Any]],
+    consistency: dict[PaperJoinKey, dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Agreement metrics over every strict deterministic item.
 
@@ -341,9 +380,7 @@ def agreement_for_strict_rows(
     stochastic samples. Such an absent row is still an incomplete measurement
     and must be counted in the excluded population.
     """
-    strict_keys = {
-        (str(row.get("model", "")), str(row.get("item_id", ""))) for row in strict_rows
-    }
+    strict_keys = {paper_join_key(row) for row in strict_rows}
     present = [consistency[key] for key in strict_keys if key in consistency]
     metrics = eu.repeated_sample_agreement_metrics(present)
     metrics["agreement_n_incomplete_excluded"] += len(strict_keys) - len(present)
@@ -476,10 +513,7 @@ def confidence_snapshot_row(
     agreement, complete_consistency = agreement_for_strict_rows(
         strict_rows, consistency
     )
-    complete_keys = {
-        (str(row.get("model", "")), str(row.get("item_id", "")))
-        for row in complete_consistency
-    }
+    complete_keys = {paper_join_key(row) for row in complete_consistency}
 
     return {
         "dataset": dataset,
@@ -538,7 +572,7 @@ def per_model_row(
     variant: str,
     source_modality: str,
     det_rows: list[dict[str, Any]],
-    consistency: dict[tuple[str, str], dict[str, Any]],
+    consistency: dict[PaperJoinKey, dict[str, Any]],
     n_items: int,
     bootstrap_samples: int,
 ) -> dict[str, Any]:
@@ -731,6 +765,9 @@ def score_cell(
         if raw_rows
         else []
     )
+    # Stamp the cell before the caller pools four of them; `paper_join_key`
+    # reads it back.
+    stamp_cell_identity(scores, dataset, variant)
     return {
         "dataset": dataset,
         "variant": variant,
@@ -776,7 +813,7 @@ def export_tables(
     provenance_cells: list[dict[str, Any]] = []
     pooled_det_rows: list[dict[str, Any]] = []
     pooled_by_model: dict[str, list[dict[str, Any]]] = {}
-    pooled_consistency: dict[tuple[str, str], dict[str, Any]] = {}
+    pooled_consistency: dict[PaperJoinKey, dict[str, Any]] = {}
     pooled_items_by_model: dict[str, int] = {}
 
     for dataset, variant in cells:

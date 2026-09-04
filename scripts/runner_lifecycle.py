@@ -59,8 +59,9 @@ def common_runner_parser() -> argparse.ArgumentParser:
 
     Declared once so the two front doors cannot drift in type, default, or
     spelling. Task-specific options (`--task`, `--all-models`,
-    `--source-run-id`, `--audit-mode`, `--allow-partial-source`) and `--dry-run`
-    (whose help text differs between the runners) stay with their runner.
+    `--source-run-id`, `--audit-mode`, `--allow-partial-source`,
+    `--allow-source-profile-mismatch`) and `--dry-run` (whose help text differs
+    between the runners) stay with their runner.
     """
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--config", required=True, type=Path)
@@ -508,8 +509,14 @@ def execute_cell(execution: CellExecution) -> None:
     def refresh_live_progress(
         event_type: str, finished_at_utc: str = "", print_line: bool = True
     ) -> dict[str, Any]:
-        run_rows = eu.select_model_run_rows(
-            current_rows, cell.run_id, cell.model, execution.tasks
+        # One ledger per refresh, read through named accessors below: this cell
+        # may hold two raw rows for one planned job (a failed attempt plus the
+        # retry that superseded it), and every counter has to say which of the
+        # two numbers it means.
+        ledger = eu.AttemptLedger.from_raw_rows(
+            eu.select_model_run_rows(
+                current_rows, cell.run_id, cell.model, execution.tasks
+            )
         )
         pending_jobs_now = eu.pending_completion_jobs(
             cell.jobs, current_rows, cell.run_id
@@ -531,14 +538,17 @@ def execute_cell(execution: CellExecution) -> None:
             ),
         )
         if logging_config["write_progress_csv"]:
+            # Coverage against the plan: latest_logical_observations.
             eu.write_live_progress_csv(
                 cell.progress_path,
                 execution.progress_items,
-                run_rows,
+                ledger,
                 expected_stochastic_samples=execution.expected_stochastic_samples,
             )
+        # Splits the two views itself: records against `expected_records` are
+        # logical, API calls and run-quality diagnostics are physical attempts.
         counters = eu.live_run_counters(
-            run_rows,
+            ledger,
             expected_records=len(cell.jobs),
             expected_api_calls=cell.planned_api_calls,
             started_monotonic=started_monotonic,
@@ -563,10 +573,12 @@ def execute_cell(execution: CellExecution) -> None:
         if print_line and event_type in {"progress", "finish"}:
             eu.logger.info("%s", eu.format_live_progress_line(cell.run_id, counters))
         if event_type == "finish":
+            # Retries, latency, tokens, and tolerant-parse repairs describe
+            # provider work: every attempt counts, superseded ones included.
             eu.logger.info(
                 "%s",
                 eu.format_run_quality_line(
-                    cell.run_id, eu.run_quality_counters(run_rows)
+                    cell.run_id, eu.run_quality_counters(ledger.all_attempts)
                 ),
             )
         return counters

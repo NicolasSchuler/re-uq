@@ -49,3 +49,5 @@ class Task3RunnerArgs(RunnerArgs, Protocol):
     source_run_id: str | None
     audit_mode: str
     allow_partial_source: bool
+    #: Audit Task 2 rows produced under another provider profile.
+    allow_source_profile_mismatch: bool

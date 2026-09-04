@@ -4119,10 +4119,22 @@ class EvalUtilsTest(unittest.TestCase):
             self.assertEqual(rows[0]["config_sha"], row["config_sha"])
 
     def test_live_run_counters_and_warning_events(self):
+        # Distinct item ids: the counters count logical observations, so three
+        # rows of ONE observation would (correctly) collapse to one record.
         raw_rows = [
-            {"run_id": "r1", "request_index": 0, "parse_status": "ok"},
-            {"run_id": "r1", "request_index": 1, "parse_status": "invalid_json"},
-            {"run_id": "r1", "request_index": 2, "parse_status": "request_error"},
+            {"run_id": "r1", "item_id": "i0", "request_index": 0, "parse_status": "ok"},
+            {
+                "run_id": "r1",
+                "item_id": "i1",
+                "request_index": 1,
+                "parse_status": "invalid_json",
+            },
+            {
+                "run_id": "r1",
+                "item_id": "i2",
+                "request_index": 2,
+                "parse_status": "request_error",
+            },
         ]
 
         counters = eu.live_run_counters(
@@ -4804,7 +4816,8 @@ class EvalUtilsTest(unittest.TestCase):
 
             text = output.getvalue()
             self.assertIn("full-1: records 1/1", text)
-            self.assertIn("parse_status: {'request_error': 1}", text)
+            self.assertIn("parse_status (all_attempts): {'request_error': 1}", text)
+        self.assertIn("attempts: {'logical_observations': 1, 'raw_attempts': 1}", text)
 
     def test_run_completion_jobs_returns_records_from_fake_completion(self):
         item = {

@@ -563,6 +563,18 @@ TASK3_ONLY_CLI_OPTIONS: dict[str, CliOption] = {
         False,
         None,
     ),
+    "allow_source_profile_mismatch": (
+        "--allow-source-profile-mismatch",
+        False,
+        None,
+        None,
+        False,
+        (
+            "Audit Task 2 rows produced under a DIFFERENT provider profile. Off "
+            "by default: the audited source profile is recorded in the registry "
+            "notes and the mismatch is logged as a warning."
+        ),
+    ),
 }
 
 
@@ -1042,6 +1054,7 @@ class Task3RunnerLifecycleTest(unittest.TestCase):
             source_run_id=self.SOURCE_RUN_ID,
             audit_mode="blind",
             allow_partial_source=True,
+            allow_source_profile_mismatch=False,
             **overrides,
         )
         with (

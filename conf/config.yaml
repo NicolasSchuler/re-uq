@@ -59,6 +59,9 @@ log_level: INFO
 source_run_id: null
 audit_mode: blind
 allow_partial_source: false
+# Audit Task 2 rows written under a different provider profile (recorded
+# in the run registry notes when used).
+allow_source_profile_mismatch: false
 
 hydra:
   run:

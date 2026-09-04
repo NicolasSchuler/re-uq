@@ -26,7 +26,7 @@ import zipfile
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from functools import cache
 from itertools import batched, pairwise
 from pathlib import Path
@@ -364,7 +364,10 @@ RUN_REGISTRY_FIELDS = [
     "top_p",
     "config_sha",
     "expected_records",
+    # `observed_records` counts logical observations, `observed_attempts` the
+    # physical raw rows behind them; see AttemptLedger in Section 9.
     "observed_records",
+    "observed_attempts",
     "parse_success_rate",
     "deterministic_item_coverage",
     "stochastic_complete_item_rate",
@@ -385,6 +388,7 @@ RUN_REGISTRY_FIELDS = [
     "item_context",
     # Run-quality diagnostics (see run_quality_counters in Section 9).
     "parse_status_histogram",
+    "parse_repairs",
     "retry_total",
     "truncated_records",
     "latency_p50_s",
@@ -4091,6 +4095,10 @@ def dedupe_raw_rows(raw_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any
     earlier failure), or the last row of the group when none parsed. The relative
     order of the surviving rows follows the first appearance of each key so
     downstream ordering (and grouping) stays stable.
+
+    This is the implementation of :attr:`AttemptLedger.latest_logical_observations`
+    (Section 9); prefer the ledger when a caller needs to say which of the two
+    views of a raw file it is consuming.
     """
     rows = [dict(row) for row in raw_rows]
     first_position: dict[tuple[Any, ...], int] = {}
@@ -7489,6 +7497,190 @@ PARSE_STATUS_CATEGORIES = (
     "missing_batch_result",
 )
 
+#: Value an :class:`ObservationIdentity` field takes when the row it was built
+#: from does not carry that field at all.
+#:
+#: Raw JSONL rows written before the provider matrix existed have no
+#: ``provider_id``/``profile_id``, and no raw row has ever carried
+#: ``dataset_id``/``benchmark_variant`` -- those two travel with the FILE (see
+#: :func:`artifact_path`), not with the row. Substituting an explicit sentinel
+#: rather than an empty string keeps three properties:
+#:
+#: 1. a legacy row can never compare equal to a row that genuinely belongs to
+#:    another provider or profile, because "unknown" is its own value;
+#: 2. a plan built the same way (a legacy replay whose jobs also carry no
+#:    provider) still matches its own cached rows, so resume does not
+#:    re-request an entire old raw file;
+#: 3. the fallback is visible in every key, log line, and test, instead of
+#:    silently collapsing distinct cells onto one blank identity.
+LEGACY_IDENTITY = "legacy"
+
+#: The two views an :class:`AttemptLedger` exposes. Every metric derived from an
+#: append-only raw file must name the one it consumes.
+ATTEMPT_VIEW_ALL = "all_attempts"
+ATTEMPT_VIEW_LATEST = "latest_logical_observations"
+ATTEMPT_VIEWS = (ATTEMPT_VIEW_ALL, ATTEMPT_VIEW_LATEST)
+
+
+def _identity_field(row: Mapping[str, Any], *names: str, default: str = "") -> str:
+    """First non-empty value among `names`, else `default`."""
+    for name in names:
+        value = str(row.get(name, "") or "").strip()
+        if value:
+            return value
+    return default
+
+
+@dataclass(frozen=True, slots=True)
+class ObservationIdentity:
+    """What makes one planned observation distinct from every other one.
+
+    The pipeline used to reconstruct this from a different subset of fields at
+    every boundary: the resume cache keyed on
+    ``(model, task, item, sample_kind, sample_index)``, the Task 2 -> Task 3
+    handoff on ``model`` alone, and the paper joins on ``(model, item)``. All
+    three keys are ambiguous in the current four-cell x multi-provider matrix:
+    benchmark item ids are reused between the ``must`` and ``shall`` variants of
+    a family, and the same model is served by more than one provider profile.
+    This value type is the single answer, and every one of those boundaries
+    derives its key from it.
+
+    ``provider_id``/``profile_id`` come off the row; ``dataset_id``/``variant``
+    come off the row when it records them and otherwise from the caller's file
+    context (a raw JSONL file holds exactly one dataset/variant). Anything still
+    missing becomes :data:`LEGACY_IDENTITY` -- explicitly, never an empty
+    string. Recorded values always win over inherited context, so a row that
+    names its own cell is never re-labelled by the file it was read from.
+    """
+
+    provider_id: str
+    profile_id: str
+    model: str
+    dataset_id: str
+    variant: str
+    task: str
+    item_id: str
+    sample_kind: str
+    sample_index: int
+
+    @classmethod
+    def from_raw_row(
+        cls,
+        row: Mapping[str, Any],
+        *,
+        dataset_id: str | None = None,
+        variant: str | None = None,
+    ) -> ObservationIdentity:
+        """Build the identity of a raw row, a planned job, or a score row.
+
+        Planned jobs nest the benchmark item under ``item`` instead of carrying
+        ``item_id``, and the registry/score rows spell the cell
+        ``dataset_id``/``benchmark_variant`` while cell dicts spell it
+        ``dataset``/``variant``; all of those spellings resolve to one identity
+        so a job and the record it produced share a key.
+        """
+        item_id = _identity_field(row, "item_id")
+        nested_item = row.get("item")
+        if not item_id and isinstance(nested_item, Mapping):
+            item_id = _identity_field(nested_item, "item_id")
+        try:
+            sample_index = int(row.get("sample_index", 0) or 0)
+        except (TypeError, ValueError):
+            sample_index = 0
+        return cls(
+            provider_id=_identity_field(row, "provider_id", default=LEGACY_IDENTITY),
+            profile_id=_identity_field(row, "profile_id", default=LEGACY_IDENTITY),
+            model=_identity_field(row, "model"),
+            dataset_id=_identity_field(
+                row,
+                "dataset_id",
+                "dataset",
+                default=str(dataset_id or "").strip() or LEGACY_IDENTITY,
+            ),
+            variant=_identity_field(
+                row,
+                "benchmark_variant",
+                "variant",
+                default=str(variant or "").strip() or LEGACY_IDENTITY,
+            ),
+            task=_identity_field(row, "task"),
+            item_id=item_id,
+            sample_kind=_identity_field(row, "sample_kind"),
+            sample_index=sample_index,
+        )
+
+    @property
+    def record_key(self) -> tuple[str, str, str, str, str, str, str, str, int]:
+        """Hashable form used as a cache, dedup, and join key."""
+        return (
+            self.provider_id,
+            self.profile_id,
+            self.model,
+            self.dataset_id,
+            self.variant,
+            self.task,
+            self.item_id,
+            self.sample_kind,
+            self.sample_index,
+        )
+
+
+@dataclass(slots=True)
+class AttemptLedger:
+    """The two readings of an append-only raw file, side by side.
+
+    A raw JSONL file records physical ATTEMPTS: a request that failed and was
+    re-requested by a later resume leaves two rows for one planned observation.
+    Consumers disagreed about which of those two numbers they wanted, so the
+    same recovered run could read as ``2/1`` records, a degraded registry parse
+    rate, and ``1/1`` task progress at the same time.
+
+    This ledger holds both views and forces callers to name theirs:
+
+    - :attr:`all_attempts` -- every row, in file order. The view for anything
+      that describes provider work: API calls, retries, latency, tokens, and
+      the parse-status histogram of what the provider actually returned.
+    - :attr:`latest_logical_observations` -- one row per
+      ``run_id`` + :class:`ObservationIdentity`, keeping the last row whose
+      ``parse_status`` is ``ok`` (a successful retry supersedes the earlier
+      failure) or the last row of the group when none parsed. The view for
+      anything counted against a PLAN: coverage, completion rate, parse success
+      rate, and scoring.
+    """
+
+    all_attempts: list[dict[str, Any]]
+    #: Memoized `latest_logical_observations`. A live runner refreshes progress
+    #: every ~100 records over a growing raw file, and each refresh reads this
+    #: view several times; deduplicating once per ledger keeps that linear.
+    _latest: list[dict[str, Any]] | None = dataclass_field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    @classmethod
+    def from_raw_rows(
+        cls, raw_rows: Iterable[Mapping[str, Any]] | AttemptLedger
+    ) -> AttemptLedger:
+        """Accept rows or an existing ledger, so callers can pass either."""
+        if isinstance(raw_rows, AttemptLedger):
+            return raw_rows
+        return cls([dict(row) for row in raw_rows])
+
+    @property
+    def latest_logical_observations(self) -> list[dict[str, Any]]:
+        if self._latest is None:
+            self._latest = dedupe_raw_rows(self.all_attempts)
+        return self._latest
+
+    def view(self, view: str) -> list[dict[str, Any]]:
+        """The named view; raises rather than guessing which one was meant."""
+        if view == ATTEMPT_VIEW_ALL:
+            return self.all_attempts
+        if view == ATTEMPT_VIEW_LATEST:
+            return self.latest_logical_observations
+        raise ValueError(
+            f"Unknown attempt view {view!r}; expected one of {ATTEMPT_VIEWS}."
+        )
+
 
 def configure_run_logging(
     level: str | int = "INFO",
@@ -7565,15 +7757,25 @@ def _percentile(values: list[float], fraction: float) -> float | str:
     return float(ordered[index])
 
 
-def run_quality_counters(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+def run_quality_counters(
+    attempt_rows: Iterable[Mapping[str, Any]] | AttemptLedger,
+) -> dict[str, Any]:
     """Diagnostics shared by the registry row, the finish event, and the summary line.
 
     Covers the categorized parse-status histogram, retry volume, truncation
-    counts, latency percentiles, and provider-reported completion tokens.
-    Request-level fields are deduplicated by ``batch_id``; parse and truncation
-    statuses remain per output record.
+    counts, latency percentiles, provider-reported completion tokens, and the
+    tolerant-parse repair histogram. Request-level fields are deduplicated by
+    ``batch_id``; parse, repair, and truncation statuses remain per output
+    record.
+
+    View: :data:`ATTEMPT_VIEW_ALL`. Everything here describes physical provider
+    work -- what was sent, what came back, how long it took -- so a failed
+    attempt that a later resume superseded still belongs in these counts. Pass
+    :attr:`AttemptLedger.all_attempts` explicitly at the call site; the
+    plan-facing counters live in :func:`live_run_counters` and
+    :func:`run_progress_summary`.
     """
-    rows = list(raw_rows)
+    rows = AttemptLedger.from_raw_rows(attempt_rows).all_attempts
     histogram = parse_status_histogram(rows)
     retry_total = 0
     truncated_records = 0
@@ -7621,6 +7823,9 @@ def run_quality_counters(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str, Any
             truncated_records += 1
     return {
         "parse_status_histogram": histogram,
+        # A response the tolerant parser had to repair is `ok`, so it is
+        # invisible in the histogram above; report the repairs next to it.
+        "parse_repairs": parse_repair_counts(rows),
         "retry_total": retry_total,
         "truncated_records": truncated_records,
         "latency_p50_s": _percentile(latencies, 0.50),
@@ -7639,8 +7844,14 @@ def format_run_quality_line(run_id: str, quality: Mapping[str, Any]) -> str:
         if latency_p50 != "" and latency_p95 != ""
         else "latency_p50 unknown, latency_p95 unknown"
     )
+    repairs = {
+        key: value
+        for key, value in dict(quality.get("parse_repairs", {}) or {}).items()
+        if value
+    }
     return (
         f"{run_id}: parse_status {nonzero or 'all ok'}, "
+        f"repairs {repairs or 'none'}, "
         f"retries {int(quality.get('retry_total', 0) or 0)}, "
         f"truncated {int(quality.get('truncated_records', 0) or 0)}, "
         f"{latency_label}, "
@@ -7650,19 +7861,24 @@ def format_run_quality_line(run_id: str, quality: Mapping[str, Any]) -> str:
 
 def run_progress_summary(
     benchmark_rows: list[dict[str, Any]],
-    raw_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]] | AttemptLedger,
     expected_stochastic_samples: int = 5,
+    *,
+    view: str = ATTEMPT_VIEW_LATEST,
 ) -> list[dict[str, Any]]:
     """Per (run, model, task) coverage and parse-rate summary.
 
-    Duplicate rows for one ``run_id`` + :func:`completion_record_key` are
-    collapsed by :func:`dedupe_raw_rows` first, so a resumed run cannot report a
-    record_completion_rate above 1.0 (or hide a failed attempt behind its retry).
+    View: :data:`ATTEMPT_VIEW_LATEST` by default. Progress is measured against a
+    PLAN, so a failed request that a later resume re-requested successfully is
+    one observation, not two: the run reads ``1/1`` rather than ``2/1`` with a
+    depressed parse rate. Pass ``view=ATTEMPT_VIEW_ALL`` to summarize physical
+    attempts instead (useful when auditing how much work a recovery cost).
     """
-    if not raw_rows:
+    ledger = AttemptLedger.from_raw_rows(raw_rows)
+    rows = ledger.view(view)
+    if not rows:
         return []
-    raw_rows = dedupe_raw_rows(raw_rows)
-    frame = pd.DataFrame.from_records(raw_rows)
+    frame = pd.DataFrame.from_records(rows)
     required = {"run_id", "model", "task", "item_id", "sample_kind", "parse_status"}
     if frame.empty or not required.issubset(frame.columns):
         return []
@@ -7762,18 +7978,24 @@ def complete_run_ids_from_progress(
     return complete
 
 
-def completion_record_key(row: Mapping[str, Any]) -> tuple[str, str, str, str, int]:
-    item_id = row.get("item_id", "")
-    nested_item = row.get("item")
-    if not item_id and isinstance(nested_item, Mapping):
-        item_id = nested_item.get("item_id", "")
-    return (
-        str(row.get("model", "")),
-        str(row.get("task", "")),
-        str(item_id),
-        str(row.get("sample_kind", "")),
-        int(row.get("sample_index", 0)),
-    )
+def completion_record_key(
+    row: Mapping[str, Any],
+    *,
+    dataset_id: str | None = None,
+    variant: str | None = None,
+) -> tuple[str, str, str, str, str, str, str, str, int]:
+    """Cache/dedup key of one planned observation, from its full identity.
+
+    Thin wrapper over :meth:`ObservationIdentity.from_raw_row` so the resume
+    cache, :func:`dedupe_raw_rows`, and batch reconstruction cannot drift apart.
+    Provider and profile are part of the key, so a cell run under a different
+    provider is never mistaken for one that is already complete; fields a legacy
+    row does not carry fall back to :data:`LEGACY_IDENTITY` on BOTH sides of the
+    comparison, which is what keeps an old raw file resumable.
+    """
+    return ObservationIdentity.from_raw_row(
+        row, dataset_id=dataset_id, variant=variant
+    ).record_key
 
 
 def pending_completion_jobs(
@@ -7781,10 +8003,17 @@ def pending_completion_jobs(
     raw_rows: Iterable[Mapping[str, Any]],
     run_id: str,
 ) -> list[dict[str, Any]]:
+    """The planned jobs `run_id` has no usable cached record for.
+
+    A record is reusable only when it shares the full
+    :class:`ObservationIdentity` of the planned job -- provider and profile
+    included, so a cell re-run under a second provider is planned in full rather
+    than served from the first provider's rows.
+    """
     # Map each completed record to the job_config_sha it was produced under so
     # resume can re-run rows whose planned config has since changed. Legacy rows
     # predate the field and fall back to the old key-only match.
-    completed: dict[tuple[str, str, str, str, int], str] = {}
+    completed: dict[tuple[str, str, str, str, str, str, str, str, int], str] = {}
     for row in raw_rows:
         if (
             str(row.get("run_id", "")) == str(run_id)
@@ -7864,10 +8093,18 @@ def run_registry_summary(
         and str(row.get("model", "")) == str(model)
         and str(row.get("task", "")) in set(task_list)
     ]
+    # This row reports both readings of the raw file and says which is which:
+    # `observed_records` / `parse_success_rate` / coverage count LOGICAL
+    # observations against the plan, while `observed_attempts`,
+    # `observed_api_calls`, and the run-quality block count physical attempts.
+    ledger = AttemptLedger.from_raw_rows(run_rows)
+    observation_rows = ledger.latest_logical_observations
+    attempt_rows = ledger.all_attempts
     progress = run_progress_summary(
         benchmark_rows,
-        run_rows,
+        ledger,
         expected_stochastic_samples=expected_stochastic_samples,
+        view=ATTEMPT_VIEW_LATEST,
     )
     task_progress = [
         row for row in progress if str(row.get("task", "")) in set(task_list)
@@ -7886,14 +8123,17 @@ def run_registry_summary(
         if benchmark_item_count
         else 0
     )
-    observed_records = len(run_rows)
+    observed_records = len(observation_rows)
+    observed_attempts = len(attempt_rows)
     observed_api_calls = len(
         {
             str(row.get("batch_id") or f"single:{row.get('request_index', index)}")
-            for index, row in enumerate(run_rows)
+            for index, row in enumerate(attempt_rows)
         }
     )
-    ok_records = sum(1 for row in run_rows if str(row.get("parse_status", "")) == "ok")
+    ok_records = sum(
+        1 for row in observation_rows if str(row.get("parse_status", "")) == "ok"
+    )
     deterministic_coverages = [
         float(row.get("deterministic_item_coverage", 0) or 0) for row in task_progress
     ]
@@ -7908,18 +8148,22 @@ def run_registry_summary(
     )
     resolved_status = status or ("complete" if complete else "partial")
     config_row = next(
-        (row for row in run_rows if str(row.get("sample_kind", "")) == "deterministic"),
-        run_rows[0] if run_rows else {},
+        (
+            row
+            for row in observation_rows
+            if str(row.get("sample_kind", "")) == "deterministic"
+        ),
+        observation_rows[0] if observation_rows else {},
     )
     run_config_shas = sorted(
         {
             str(row.get("job_config_sha", ""))
-            for row in run_rows
+            for row in observation_rows
             if row.get("job_config_sha")
         }
     )
     config_sha = sha256_text("\n".join(run_config_shas)) if run_config_shas else ""
-    quality = run_quality_counters(run_rows)
+    quality = run_quality_counters(attempt_rows)
     return {
         "run_id": run_id,
         "run_group_id": run_group_id,
@@ -7935,7 +8179,11 @@ def run_registry_summary(
         "top_p": config_row.get("top_p", ""),
         "config_sha": config_sha,
         "expected_records": expected_records,
+        # Logical observations (AttemptLedger.latest_logical_observations).
         "observed_records": observed_records,
+        # Physical rows behind them (AttemptLedger.all_attempts); larger than
+        # observed_records exactly when a resume re-requested a failed cell.
+        "observed_attempts": observed_attempts,
         "parse_success_rate": ok_records / observed_records if observed_records else "",
         "deterministic_item_coverage": min(deterministic_coverages)
         if deterministic_coverages
@@ -7966,6 +8214,9 @@ def run_registry_summary(
                 for key, value in quality["parse_status_histogram"].items()
                 if value
             }
+        ),
+        "parse_repairs": compact_json(
+            {key: value for key, value in quality["parse_repairs"].items() if value}
         ),
         "retry_total": quality["retry_total"],
         "truncated_records": quality["truncated_records"],
@@ -8151,22 +8402,43 @@ def run_progress_live_path(
 
 
 def live_run_counters(
-    raw_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]] | AttemptLedger,
     *,
     expected_records: int,
     expected_api_calls: int,
     started_monotonic: float | None = None,
     now_monotonic: float | None = None,
 ) -> dict[str, Any]:
-    observed_records = len(raw_rows)
-    ok_records = sum(1 for row in raw_rows if str(row.get("parse_status", "")) == "ok")
+    """Live progress counters for one cell, from both views of its raw rows.
+
+    ``expected_records`` is a count of PLANNED jobs, so every counter compared
+    against it -- ``observed_records``, the completion rate, parse/error rates,
+    throughput, and the ETA -- reads
+    :attr:`AttemptLedger.latest_logical_observations`. A failed request that a
+    resume re-requested successfully is therefore one record at 100%, not two
+    records at 200% with half the parse rate (which is what used to trip the
+    parse-failure warning on a recovered run).
+
+    ``observed_attempts``, ``observed_api_calls``, and the
+    :func:`run_quality_counters` block read :attr:`AttemptLedger.all_attempts`:
+    those describe what the provider was actually asked to do.
+    """
+    ledger = AttemptLedger.from_raw_rows(raw_rows)
+    observation_rows = ledger.latest_logical_observations
+    attempt_rows = ledger.all_attempts
+    observed_records = len(observation_rows)
+    ok_records = sum(
+        1 for row in observation_rows if str(row.get("parse_status", "")) == "ok"
+    )
     request_error_records = sum(
-        1 for row in raw_rows if str(row.get("parse_status", "")) == "request_error"
+        1
+        for row in observation_rows
+        if str(row.get("parse_status", "")) == "request_error"
     )
     observed_api_calls = len(
         {
             str(row.get("batch_id") or f"single:{row.get('request_index', index)}")
-            for index, row in enumerate(raw_rows)
+            for index, row in enumerate(attempt_rows)
         }
     )
     elapsed_s = 0.0
@@ -8185,9 +8457,10 @@ def live_run_counters(
         eta_s = remaining_records / records_per_s if records_per_s > 0 else ""
     parse_failure_records = observed_records - ok_records
     return {
-        **run_quality_counters(raw_rows),
+        **run_quality_counters(attempt_rows),
         "expected_records": int(expected_records),
         "observed_records": observed_records,
+        "observed_attempts": len(attempt_rows),
         "record_completion_rate": observed_records / expected_records
         if expected_records
         else math.nan,
@@ -8253,13 +8526,15 @@ def append_run_event(path: str | Path, event: Mapping[str, Any]) -> None:
 def write_live_progress_csv(
     path: str | Path,
     benchmark_rows: list[dict[str, Any]],
-    raw_rows: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]] | AttemptLedger,
     expected_stochastic_samples: int,
 ) -> None:
+    """Publish per-task progress for one cell (logical-observation view)."""
     progress = run_progress_summary(
         benchmark_rows,
         raw_rows,
         expected_stochastic_samples=expected_stochastic_samples,
+        view=ATTEMPT_VIEW_LATEST,
     )
     write_csv_rows(path, progress, fieldnames=RUN_PROGRESS_FIELDS)
 

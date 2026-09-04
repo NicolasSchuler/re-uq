@@ -154,6 +154,9 @@ def run_args_namespace(
         source_run_id=raw.get("source_run_id") or None,
         audit_mode=str(raw.get("audit_mode") or eu.OFFICIAL_TASK3_AUDIT_MODE),
         allow_partial_source=bool(raw.get("allow_partial_source", False)),
+        allow_source_profile_mismatch=bool(
+            raw.get("allow_source_profile_mismatch", False)
+        ),
         # Logging overrides are already merged into run_config["logging"]; the
         # runners still read these argparse-style attributes.
         progress_every_records=logging_cfg.get("progress_every_records"),

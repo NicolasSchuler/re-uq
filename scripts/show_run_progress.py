@@ -155,21 +155,27 @@ def print_progress(
         model=model,
         profile_id=profile_id,
     )
-    expected_records = int(
-        registry_row.get("expected_records", len(raw_rows)) or len(raw_rows)
-    )
+    # A raw file records physical attempts; a resumed run holds a failed
+    # attempt and the retry that superseded it. Read both views by name so each
+    # line below says which one it is reporting.
+    ledger = eu.AttemptLedger.from_raw_rows(raw_rows)
+    # Without a registry row there is no plan to compare against, so fall back
+    # to the observations themselves -- logical ones, to match the counter.
+    observed = len(ledger.latest_logical_observations)
+    expected_records = int(registry_row.get("expected_records", observed) or observed)
     expected_api_calls = int(registry_row.get("expected_api_calls", 0) or 0)
     counters = eu.live_run_counters(
-        raw_rows,
+        ledger,
         expected_records=expected_records,
         expected_api_calls=expected_api_calls,
     )
     progress = eu.run_progress_summary(
-        planned_benchmark_rows(benchmark, registry_row, raw_rows),
-        raw_rows,
+        planned_benchmark_rows(benchmark, registry_row, ledger.all_attempts),
+        ledger,
         expected_stochastic_samples=expected_stochastic_samples(
             registry_row, len(benchmark)
         ),
+        view=eu.ATTEMPT_VIEW_LATEST,
     )
 
     print(eu.format_live_progress_line(run_id, counters))
@@ -188,13 +194,22 @@ def print_progress(
             },
         )
     print(
-        "parse_status:",
-        dict(Counter(str(row.get("parse_status", "")) for row in raw_rows)),
+        "attempts:",
+        {
+            "logical_observations": len(ledger.latest_logical_observations),
+            "raw_attempts": len(ledger.all_attempts),
+        },
     )
-    quality = eu.run_quality_counters(raw_rows)
-    print("run_quality:", eu.format_run_quality_line(run_id, quality))
+    # Per attempt: what the provider actually returned, retries included.
+    print(
+        "parse_status (all_attempts):",
+        dict(Counter(str(row.get("parse_status", "")) for row in ledger.all_attempts)),
+    )
+    quality = eu.run_quality_counters(ledger.all_attempts)
+    print("run_quality (all_attempts):", eu.format_run_quality_line(run_id, quality))
     if progress:
-        print("task_progress:")
+        # Per planned observation: a retried request counts once.
+        print("task_progress (latest_logical_observations):")
         for row in progress:
             print(
                 " ",

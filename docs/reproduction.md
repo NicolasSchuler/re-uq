@@ -351,7 +351,16 @@ Every profile targets an OpenAI-compatible chat-completions endpoint; that is th
 
 ### Registry Columns
 
-The run registry gained per-run quality columns: `batch_order`, `parse_status_histogram`, `retry_total`, `truncated_records`, `latency_p50_s`, `latency_p95_s`, `usage_completion_tokens`. A `truncated` response counts as a **parse failure**, so a run with a low `parse_success_rate` and a nonzero `truncated_records` is a token-budget problem, not a prompt problem.
+The run registry gained per-run quality columns: `batch_order`, `parse_status_histogram`, `parse_repairs`, `retry_total`, `truncated_records`, `latency_p50_s`, `latency_p95_s`, `usage_completion_tokens`. A `truncated` response counts as a **parse failure**, so a run with a low `parse_success_rate` and a nonzero `truncated_records` is a token-budget problem, not a prompt problem. `parse_repairs` counts responses the tolerant parser had to repair before they validated; those are `ok` in `parse_status_histogram`, so this is the only column that shows them.
+
+A raw JSONL file records physical **attempts**, and a resume re-requests a
+failed cell, so one planned observation can leave two rows. The registry
+reports both readings and says which is which: `observed_records`,
+`parse_success_rate`, and the two coverage columns count **logical
+observations** (a failed attempt superseded by a successful retry is one
+record that parsed), while `observed_attempts`, `observed_api_calls`, and the
+quality columns count **every attempt**. `scripts/show_run_progress.py` labels
+its sections the same way.
 
 ## 9. Embedding And Figure Scripts
 
