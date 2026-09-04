@@ -31,56 +31,17 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 
 # Emits one "dataset<TAB>variant<TAB>profile<TAB>model<TAB>source_run_id" line
-# per config cell that has a complete full Task 2 source run.
+# per config cell that has a complete full Task 2 source run. The resolution
+# itself lives in scripts/task3_sources.py so this queue and any other driver
+# pick the same source run.
 resolve_cells() {
-  RE_UQ_TASK3_CONFIG="$CONFIG" RE_UQ_TASK3_SKIP="$SKIP_PROFILES" "$PY" - <<'PY'
-import os
-import sys
-
-sys.path.insert(0, "scripts")
-import eval_utils as eu
-
-config = eu.load_run_config(os.environ["RE_UQ_TASK3_CONFIG"])
-skip = {value.strip() for value in os.environ.get("RE_UQ_TASK3_SKIP", "").split(",") if value.strip()}
-root = eu.project_root()
-
-for dataset_id in config["datasets"]:
-    for variant in config["benchmark_variants"]:
-        prefix = "full" if variant == "must" else f"full-{variant}"
-        benchmark_path = eu.artifact_path(root / "data/processed/benchmark_items.csv", dataset_id, variant)
-        benchmark = eu.read_csv_rows(benchmark_path)
-        registry_path = eu.run_registry_path(root, dataset_id, variant)
-        registry_rows = eu.read_csv_rows(registry_path) if registry_path.exists() else []
-        for profile in config["profiles"]:
-            if profile["profile_id"] in skip:
-                continue
-            for model in profile["models"]:
-                candidates = [
-                    row
-                    for row in registry_rows
-                    if str(row.get("profile_id", "")) == profile["profile_id"]
-                    and str(row.get("model", "")) == model
-                    and eu.run_id_matches_prefix(row.get("run_id", ""), prefix)
-                    and not eu.registry_row_compatibility_issues(
-                        row,
-                        run_group_id=config["run_group_id"],
-                        benchmark_item_count=len(benchmark),
-                        expected_stochastic_samples=int(config["stochastic"]["samples"]),
-                        required_tasks=("task2",),
-                        expected_batch_order=profile.get("batch_order", config["batch_order"]),
-                        expected_batch_size=int(profile["batch_size"]),
-                    )
-                ]
-                if not candidates:
-                    print(
-                        f"skip: no complete {prefix}-* Task 2 run for "
-                        f"{dataset_id}/{variant} {profile['profile_id']}/{model} in {registry_path}",
-                        file=sys.stderr,
-                    )
-                    continue
-                source_run_id = sorted(candidates, key=lambda row: str(row.get("started_at_utc", "")))[-1]["run_id"]
-                print("\t".join([dataset_id, variant, profile["profile_id"], model, source_run_id]))
-PY
+  local skip_args=()
+  local profile
+  IFS=',' read -ra skip_list <<< "$SKIP_PROFILES"
+  for profile in "${skip_list[@]}"; do
+    [[ -n "$profile" ]] && skip_args+=(--skip-profile "$profile")
+  done
+  "$PY" scripts/task3_sources.py --config "$CONFIG" "${skip_args[@]}"
 }
 
 while IFS=$'\t' read -r dataset variant profile model source_run_id; do

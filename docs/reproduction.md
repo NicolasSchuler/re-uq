@@ -17,6 +17,9 @@ This is the command-first path for reproducing the publication artifacts. The no
 | Monitor a live run | `.venv/bin/python scripts/show_run_progress.py --dataset mlm_tapt --run-id RUN_ID --watch 30` |
 | Compare completed cells | `.venv/bin/python scripts/compare_run_matrix.py --config run_configs/current_run.json --dataset mlm_tapt` |
 | Document-context ablation table | `.venv/bin/python scripts/compare_context_ablation.py` (after `+experiment=context_ablation`; see [`context_ablation.md`](context_ablation.md)) |
+| Batching ablation table | `.venv/bin/python scripts/compare_batching_ablation.py` (after the three `+experiment=batching_ablation` arms) |
+| Weak-phrasing probe | `.venv/bin/python scripts/run_weak_modality_probe.py --config run_configs/current_run.json --profile zai --model glm-5.1 --dataset nice --mode full` |
+| Resolve Task 3 source runs | `.venv/bin/python scripts/task3_sources.py --config run_configs/current_run.json` |
 | Export cross-cell paper tables | `.venv/bin/python scripts/export_paper_tables.py` (selects the rerun group `provider-matrix-v2-2026-05`; add `--run-group-id provider-matrix-2026-05 --models glm-4.5-air glm-4.7 glm-5 glm-5-turbo glm-5.1 kit.gemma4-31b-it` for the archived runs) |
 | Recompute request- and seed-clustered CIs without touching `outputs/` | `.venv/bin/python scripts/export_paper_tables.py --output-dir /tmp/reuq-cluster-ci` (see §6) |
 | Regenerate the manuscript's number macros | `.venv/bin/python scripts/export_paper_numbers.py --strict` (add `--output manuscript/numbers.tex` to write the paper; the default writes `outputs/paper_numbers.tex` and prints a macro-level diff). `--strict` refuses to write when a macro would carry a non-finite value or a consistency check disagrees, so the manuscript never receives a `nan` |

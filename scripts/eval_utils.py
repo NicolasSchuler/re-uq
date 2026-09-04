@@ -1563,16 +1563,19 @@ SMOKE_TREE_ENV_VAR = "RE_UQ_SMOKE_TREE"
 def is_smoke_run_id(run_id: Any) -> bool:
     """True for run ids produced by smoke/fake Task 1/2/3 runs.
 
-    Task 3 inserts optional audit-mode and benchmark-variant components before
-    ``smoke`` (for example ``task3-declared-text-shall-smoke-*``), so checking
-    only the historical ``task3-smoke-*`` prefix misses valid smoke runs.
+    Runners other than Task 1/2 put their own components before ``smoke``:
+    Task 3 an optional audit mode and benchmark variant
+    (``task3-declared-text-shall-smoke-*``), the weak-phrasing probe its name
+    (``weak-modality-probe-shall-smoke-*``). Checking only the historical
+    ``task3-smoke-*`` prefix would route their smoke runs into the real tree.
     """
     value = str(run_id or "").strip()
     if value.startswith(SMOKE_RUN_PREFIX):
         return True
     return bool(
         re.match(
-            r"^task3(?:-declared-(?:text|source))?(?:-shall)?-smoke-",
+            r"^(?:task3(?:-declared-(?:text|source))?|weak-modality-probe)"
+            r"(?:-shall)?-smoke-",
             value,
         )
     )
