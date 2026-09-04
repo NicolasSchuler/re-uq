@@ -29,7 +29,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from sklearn.decomposition import PCA
+from sklearn.base import clone
+from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -153,6 +154,17 @@ def stamp_text_condition(row: dict[str, Any], condition: str) -> dict[str, Any]:
     }
 
 
+def requirements_digest(requirements: list[str]) -> str:
+    """Bind a requirement-only embedding cache to the exact texts it was built from.
+
+    A row count cannot tell a stale cache of equal length apart from the right
+    one, so every reader of the cache compares this instead.
+    """
+    return hashlib.sha256(
+        ("mlx\x00" + "\x00".join(requirements)).encode("utf-8")
+    ).hexdigest()
+
+
 def embed_requirement_only(
     requirements: list[str],
     *,
@@ -161,22 +173,25 @@ def embed_requirement_only(
     reuse_cache: bool,
 ) -> np.ndarray:
     """Embed each row's requirement text with MLX, deduplicating first."""
-    # Bind the cache to the exact requirement texts (and backend), not just the row
-    # count, so a stale cache from a different run of equal length is not reused.
-    requirements_digest = hashlib.sha256(
-        ("mlx\x00" + "\x00".join(requirements)).encode("utf-8")
-    ).hexdigest()
+    digest = requirements_digest(requirements)
     if reuse_cache and cache_path.exists():
         cached = np.load(cache_path, allow_pickle=False)
+        # --reqonly-cache can be pointed at any .npz, so every key this reads is
+        # optional; a file written by something else falls through to re-embedding
+        # instead of raising.
         cached_digest = (
             str(cached["requirements_digest"])
             if "requirements_digest" in cached.files
             else ""
         )
-        if (
-            int(cached["n_rows"]) == len(requirements)
-            and cached_digest == requirements_digest
-        ):
+        cached_rows = (
+            int(cached["n_rows"])
+            if "n_rows" in cached.files
+            else cached["embeddings"].shape[0]
+            if "embeddings" in cached.files
+            else -1
+        )
+        if cached_rows == len(requirements) and cached_digest == digest:
             print(
                 f"[reqonly-mlx] reuse cache {cache_path} ({cached['embeddings'].shape})"
             )
@@ -205,7 +220,7 @@ def embed_requirement_only(
         embeddings=row_embeddings.astype(np.float32),
         n_rows=np.asarray(len(requirements)),
         dim=np.asarray(row_embeddings.shape[1]),
-        requirements_digest=np.asarray(requirements_digest),
+        requirements_digest=np.asarray(digest),
     )
     print(f"[reqonly-mlx] cached -> {cache_path} ({row_embeddings.shape})")
     return row_embeddings.astype(np.float32, copy=False)
@@ -294,26 +309,54 @@ def model_steps(model_name: str, random_state: int) -> list[Any]:
     raise ValueError(f"Unknown model: {model_name}")
 
 
-def make_estimator(
-    model_name: str, random_state: int, *, pca_components: int | None = None
-) -> Any:
-    """Build the probe estimator, optionally with PCA as its first pipeline step.
+class FoldSafeSVD(TruncatedSVD):
+    """``TruncatedSVD`` that clamps its rank to what the training fold supports.
 
-    Putting PCA in the pipeline is what makes the projection fold-local: the
-    estimator is fitted on the training rows of one fold, so the axes the held-out
-    rows are transformed into were chosen without them. Callers that pass features
-    which are already reduced leave ``pca_components`` at ``None``.
+    When a vectorizer is fitted inside the pipeline, the fold's vocabulary size is
+    unknown until ``fit`` runs, so the component count cannot be clamped by the
+    caller the way a dense matrix allows.
+    """
+
+    def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
+        n_samples, n_features = X.shape
+        self.n_components = max(1, min(self.n_components, n_samples, n_features - 1))
+        return super().fit_transform(X, y)
+
+
+def make_estimator(
+    model_name: str,
+    random_state: int,
+    *,
+    pca_components: int | None = None,
+    text_vectorizer: Any | None = None,
+) -> Any:
+    """Build the probe estimator, with the vectorizer and PCA as pipeline steps.
+
+    Putting both in the pipeline is what makes them fold-local: the estimator is
+    fitted on the training rows of one fold, so neither the vocabulary and idf
+    weights nor the axes the held-out rows are transformed into were chosen with
+    them. Callers that pass features which are already reduced leave
+    ``pca_components`` at ``None``.
+
+    A text vectorizer produces a sparse matrix, which ``PCA`` cannot centre, so
+    the reducer is the truncated SVD that ``TfidfVectorizer`` output calls for.
     """
     steps = model_steps(model_name, random_state)
     if pca_components is not None:
         steps.insert(
             0,
-            PCA(
+            FoldSafeSVD(n_components=pca_components, random_state=random_state)
+            if text_vectorizer is not None
+            else PCA(
                 n_components=pca_components,
                 svd_solver="randomized",
                 random_state=random_state,
             ),
         )
+    if text_vectorizer is not None:
+        # A fresh clone per fold: a fitted vectorizer would carry the previous
+        # fold's vocabulary into this one.
+        steps.insert(0, clone(text_vectorizer))
     return steps[0] if len(steps) == 1 else make_pipeline(*steps)
 
 
@@ -405,6 +448,7 @@ def fold_metrics(
     n_splits: int,
     random_state: int,
     pca_components: int | None = None,
+    text_vectorizer: Any | None = None,
 ) -> list[dict[str, Any]]:
     if len(np.unique(y_raw)) < 2:
         return []
@@ -423,14 +467,24 @@ def fold_metrics(
     for fold_index, (train_index, test_index) in enumerate(
         splitter.split(X, y, groups=groups)
     ):
-        # PCA cannot exceed the rank the training fold can support.
+        # PCA cannot exceed the rank the training fold can support. With a
+        # vectorizer in the pipeline the feature count is only known at fit time,
+        # so FoldSafeSVD finishes the clamping there.
         fold_components = (
             None
             if pca_components is None
-            else max(1, min(pca_components, len(train_index), X.shape[1]))
+            else max(
+                1,
+                min(pca_components, len(train_index))
+                if text_vectorizer is not None
+                else min(pca_components, len(train_index), X.shape[1]),
+            )
         )
         estimator = make_estimator(
-            model_name, random_state + fold_index, pca_components=fold_components
+            model_name,
+            random_state + fold_index,
+            pca_components=fold_components,
+            text_vectorizer=text_vectorizer,
         )
         estimator.fit(X[train_index], y[train_index])
         pred = estimator.predict(X[test_index])

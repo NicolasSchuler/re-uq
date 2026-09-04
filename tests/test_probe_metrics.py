@@ -20,6 +20,7 @@ from unittest import mock
 
 import numpy as np
 from sklearn.decomposition import PCA
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.pipeline import Pipeline
 
@@ -345,6 +346,66 @@ class FoldLocalProjectionTest(unittest.TestCase):
                 # entered the projection that later transforms it.
                 self.assertEqual(len(seen_ids), row["n_train"])
                 self.assertEqual(len(all_ids - seen_ids), row["n_test"])
+
+    def test_the_text_vectorizer_is_fitted_only_on_the_training_rows(self) -> None:
+        """The vocabulary and idf weights leak just as readily as PCA axes do."""
+        _, y, groups = _grouped_binary_fixture()
+        texts = np.asarray(
+            [f"row {index} lorem ipsum dolor" for index in range(y.size)], dtype=object
+        )
+        fitted_on: list[list[str]] = []
+
+        class RecordingVectorizer(TfidfVectorizer):
+            def fit_transform(self, raw_documents, y=None):
+                fitted_on.append(list(raw_documents))
+                return super().fit_transform(raw_documents, y)
+
+        fold_rows = separability_probe.fold_metrics(
+            X=texts,
+            y_raw=y,
+            groups=groups,
+            target="sample_strict_text_overcommit",
+            model_name="logreg",
+            scope="global",
+            n_splits=3,
+            random_state=5,
+            pca_components=3,
+            text_vectorizer=RecordingVectorizer(analyzer="char_wb", ngram_range=(3, 5)),
+        )
+
+        self.assertEqual(len(fold_rows), 3)
+        self.assertEqual(len(fitted_on), len(fold_rows))
+        all_texts = set(texts.tolist())
+        for row, seen in zip(fold_rows, fitted_on, strict=True):
+            with self.subTest(fold=row["fold"]):
+                self.assertEqual(len(set(seen)), row["n_train"])
+                self.assertEqual(len(all_texts - set(seen)), row["n_test"])
+
+    def test_each_fold_gets_its_own_vectorizer(self) -> None:
+        """A shared instance would carry one fold's vocabulary into the next."""
+        _, y, groups = _grouped_binary_fixture()
+        texts = np.asarray(
+            [f"row {index} lorem ipsum dolor" for index in range(y.size)], dtype=object
+        )
+        vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5))
+
+        separability_probe.fold_metrics(
+            X=texts,
+            y_raw=y,
+            groups=groups,
+            target="sample_strict_text_overcommit",
+            model_name="logreg",
+            scope="global",
+            n_splits=3,
+            random_state=5,
+            pca_components=3,
+            text_vectorizer=vectorizer,
+        )
+
+        self.assertFalse(
+            hasattr(vectorizer, "vocabulary_"),
+            "the caller's vectorizer must never be fitted",
+        )
 
     def test_fold_projection_differs_from_a_globally_fitted_projection(self) -> None:
         """Guards against a projection that is fold-local in name only."""

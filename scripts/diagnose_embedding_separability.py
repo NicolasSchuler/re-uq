@@ -15,6 +15,13 @@ under-reports:
 For every cell it reports AUROC *and* AUPRC against the prevalence baseline, so
 the rare-positive collapse is visible as lift-over-chance rather than hidden
 behind an AUROC near 0.5.
+
+Nothing is fitted before the fold split. Dimensionality reduction and the TF-IDF
+vocabulary are pipeline steps, so both are fitted on the training rows of each
+fold; fitting either once over all observations would let a held-out fold help
+choose the axes and the vocabulary it is later scored in, which inflates every
+number in ``probe_grid_summary.csv`` -- the file the paper figure and
+``export_paper_numbers.py`` read.
 """
 
 from __future__ import annotations
@@ -25,7 +32,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 try:
@@ -74,49 +80,34 @@ WITHIN_TARGETS = [
 WITHIN_SCOPES = ["recommended", "optional", "nice_to_have"]
 
 
-def reduce_features(
-    matrix: Any, n_components: int, random_state: int, sparse: bool
-) -> tuple[np.ndarray, float]:
-    n_components = min(n_components, matrix.shape[0] - 1, matrix.shape[1])
-    if sparse:
-        reducer = TruncatedSVD(n_components=n_components, random_state=random_state)
-    else:
-        reducer = PCA(
-            n_components=n_components,
-            svd_solver="randomized",
-            random_state=random_state,
-        )
-    reduced = reducer.fit_transform(matrix)
-    return np.asarray(reduced, dtype=np.float32), float(
-        np.sum(reducer.explained_variance_ratio_)
-    )
-
-
 def build_feature_sets(
     sample_rows: list[dict[str, Any]],
     cached_mlx_prefixed: np.ndarray,
     *,
-    n_components: int,
-    random_state: int,
     mlx_batch: int,
     cache_dir: Path,
     reuse_cache: bool,
 ) -> dict[str, dict[str, Any]]:
+    """The four substrates, unreduced and unvectorized.
+
+    Nothing is fitted here. Dimensionality reduction and the TF-IDF vocabulary
+    are pipeline steps that ``run_grid`` hands to ``fold_metrics``, so they are
+    fitted on the training rows of each fold; fitting them once over all
+    observations would let a held-out fold help choose the axes and the
+    vocabulary it is later scored in.
+    """
     semantic_texts = [str(row.get("semantic_text", "")) for row in sample_rows]
     requirements = [str(row.get("requirement", "")) for row in sample_rows]
     features: dict[str, dict[str, Any]] = {}
 
     # --- MLX prefixed: cached embeddings (label leaks into the string) ---
-    reduced, var = reduce_features(
-        cached_mlx_prefixed, n_components, random_state, sparse=False
-    )
     features["mlx::prefixed"] = {
-        "X": reduced,
-        "explained_variance": var,
+        "X": np.asarray(cached_mlx_prefixed, dtype=np.float32),
+        "text_vectorizer": None,
         "backend": "mlx",
         "text": "prefixed",
     }
-    print(f"[mlx::prefixed] {reduced.shape} explained_var={var:.3f}")
+    print(f"[mlx::prefixed] {features['mlx::prefixed']['X'].shape}")
 
     # --- MLX requirement-only: re-embed the generated wording alone ---
     reqonly = embed_requirement_only(
@@ -125,36 +116,27 @@ def build_feature_sets(
         cache_path=cache_dir / "task2_reqonly_mlx_embeddings.npz",
         reuse_cache=reuse_cache,
     )
-    reduced, var = reduce_features(reqonly, n_components, random_state, sparse=False)
     features["mlx::reqonly"] = {
-        "X": reduced,
-        "explained_variance": var,
+        "X": np.asarray(reqonly, dtype=np.float32),
+        "text_vectorizer": None,
         "backend": "mlx",
         "text": "reqonly",
     }
-    print(f"[mlx::reqonly] {reduced.shape} explained_var={var:.3f}")
-    del reqonly
+    print(f"[mlx::reqonly] {features['mlx::reqonly']['X'].shape}")
 
     # --- TF-IDF char n-gram: prefixed vs requirement-only ---
     for tag, corpus in (("prefixed", semantic_texts), ("reqonly", requirements)):
-        vectorizer = TfidfVectorizer(
-            analyzer="char_wb", ngram_range=(3, 5), lowercase=True
-        )
-        sparse_matrix = vectorizer.fit_transform(
-            [text if text else "<empty response>" for text in corpus]
-        )
-        reduced, var = reduce_features(
-            sparse_matrix, n_components, random_state, sparse=True
-        )
         features[f"tfidf::{tag}"] = {
-            "X": reduced,
-            "explained_variance": var,
+            "X": np.asarray(
+                [text if text else "<empty response>" for text in corpus], dtype=object
+            ),
+            "text_vectorizer": TfidfVectorizer(
+                analyzer="char_wb", ngram_range=(3, 5), lowercase=True
+            ),
             "backend": "tfidf",
             "text": tag,
         }
-        print(
-            f"[tfidf::{tag}] vocab={len(vectorizer.vocabulary_)} svd={reduced.shape} explained_var={var:.3f}"
-        )
+        print(f"[tfidf::{tag}] {len(corpus)} texts, vocabulary fitted per fold")
 
     return features
 
@@ -166,7 +148,9 @@ def run_grid(
     models: list[str],
     n_splits: int,
     random_state: int,
+    pca_components: int,
 ) -> list[dict[str, Any]]:
+    """Score every feature set, with reduction and vectorization inside the fold."""
     source_modalities = np.asarray(
         [str(row.get("source_modality", "")) for row in sample_rows], dtype=object
     )
@@ -203,6 +187,8 @@ def run_grid(
                             scope=scope_name,
                             n_splits=n_splits,
                             random_state=random_state,
+                            pca_components=pca_components,
+                            text_vectorizer=payload["text_vectorizer"],
                         ):
                             row.update(
                                 {
@@ -305,8 +291,6 @@ def main() -> None:
     features = build_feature_sets(
         sample_rows,
         cached_mlx_prefixed,
-        n_components=args.pca_components,
-        random_state=args.random_state,
         mlx_batch=args.mlx_batch,
         cache_dir=output_dir,
         reuse_cache=not args.no_cache,
@@ -319,6 +303,7 @@ def main() -> None:
         models=args.models,
         n_splits=args.n_splits,
         random_state=args.random_state,
+        pca_components=args.pca_components,
     )
     summary = summarize_grid(fold_rows)
 
@@ -333,9 +318,10 @@ def main() -> None:
         "models": args.models,
         "pca_components": args.pca_components,
         "n_splits": args.n_splits,
-        "explained_variance": {
-            key: payload["explained_variance"] for key, payload in features.items()
-        },
+        # Fitted per fold, so there is no single explained-variance figure to
+        # report and no globally fitted vocabulary to size.
+        "reduction": "fold-local",
+        "text_vectorizer": "fold-local",
         "global_targets": GLOBAL_TARGETS,
         "within_targets": WITHIN_TARGETS,
         "within_scopes": WITHIN_SCOPES,

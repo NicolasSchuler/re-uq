@@ -72,6 +72,12 @@ except ModuleNotFoundError:  # pragma: no cover
 # auditable and nothing is hardcoded. ``decimals`` controls the value label
 # (3 for the Table-1 numbers so they read as exact matches).
 #
+# The ``expect`` values below still date from the grid that fitted PCA and the
+# TF-IDF vocabulary over all rows at once. That leak is fixed in
+# diagnose_embedding_separability.py, so every one of them moves and must be
+# re-pinned from the rerun's probe_grid_summary.csv; resolve_bars() fails loudly
+# until they are.
+#
 # Context bars use the de-circularized requirement-text-only, item-grouped
 # substrate (the label is NOT baked into the embedded string). The prefixed
 # source_modality probe scores 0.96 only because the modality word is literally

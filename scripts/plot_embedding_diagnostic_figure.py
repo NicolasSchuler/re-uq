@@ -46,6 +46,7 @@ try:
         load_embeddings_and_rows,
         manifest_rows,
     )
+    from probe_acse_embedding_separability import requirements_digest
 except ModuleNotFoundError:  # pragma: no cover
     from scripts import eval_utils as eu
     from scripts.plot_acse_global_embedding_projection import (
@@ -53,6 +54,7 @@ except ModuleNotFoundError:  # pragma: no cover
         load_embeddings_and_rows,
         manifest_rows,
     )
+    from scripts.probe_acse_embedding_separability import requirements_digest
 
 SOURCE_ORDER = ["mandatory", "recommended", "optional", "nice_to_have"]
 SOURCE_LABEL = {
@@ -146,15 +148,30 @@ def prepare_projection_inputs(
     per distinct string is plotted; stacking identical points would otherwise
     make the maps unreadable.
     """
-    cache = np.load(
-        diagnostic_dir / "task2_reqonly_mlx_embeddings.npz", allow_pickle=False
-    )
+    cache_path = diagnostic_dir / "task2_reqonly_mlx_embeddings.npz"
+    cache = np.load(cache_path, allow_pickle=False)
     reqonly = cache["embeddings"].astype(np.float32, copy=False)
     rows = manifest_rows(manifest_path, "mlx:")
     _, sample_rows = load_embeddings_and_rows(rows)
     if len(sample_rows) != reqonly.shape[0]:
         raise ValueError(
             f"row/embedding mismatch: {len(sample_rows)} vs {reqonly.shape[0]}"
+        )
+    # A row count alone cannot tell a stale cache of equal length apart from the
+    # right one, which is why the probe writes the digest; the probe's
+    # --reqonly-cache flag can also overwrite this file from another run.
+    requirements = [str(row.get("requirement", "")) for row in sample_rows]
+    expected_digest = requirements_digest(requirements)
+    cached_digest = (
+        str(cache["requirements_digest"])
+        if "requirements_digest" in cache.files
+        else ""
+    )
+    if cached_digest != expected_digest:
+        raise ValueError(
+            f"{cache_path} was written for different requirement text "
+            f"({cached_digest or 'no digest recorded'} != {expected_digest}); "
+            "re-run diagnose_embedding_separability.py to rebuild it."
         )
 
     seen: set[str] = set()

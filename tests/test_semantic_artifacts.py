@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 from scripts import (
     compute_acse_semantic_artifacts as semantic_cache,
@@ -487,6 +488,119 @@ class EmbeddingDiagnosticContractTest(unittest.TestCase):
         self.assertEqual(matrix.dtype, np.float32)
         np.testing.assert_array_equal(matrix[0], matrix[2])
         self.assertFalse(np.array_equal(matrix[0], matrix[1]))
+
+    def test_a_foreign_cache_without_n_rows_is_re_embedded_not_a_key_error(
+        self,
+    ) -> None:
+        """--reqonly-cache invites pointing the flag at any existing .npz."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "foreign.npz"
+            np.savez_compressed(
+                cache_path, embeddings=np.zeros((3, 2), dtype=np.float32)
+            )
+            calls: list[list[str]] = []
+            with mock.patch.object(
+                embedding_diagnostic.eu,
+                "semantic_embedding_matrix",
+                side_effect=lambda texts, **_: self._fake_embedding_matrix(
+                    calls, texts
+                ),
+            ):
+                matrix = embedding_diagnostic.embed_requirement_only(
+                    ["beta", "alpha", "beta"],
+                    batch_size=8,
+                    cache_path=cache_path,
+                    reuse_cache=True,
+                )
+
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(np.array_equal(matrix, np.zeros((3, 2), dtype=np.float32)))
+
+    def test_feature_sets_are_unfitted_substrates(self) -> None:
+        """Nothing may be fitted before the fold split, so nothing is fitted here."""
+        rows = [
+            {
+                "semantic_text": f"modality: optional requirement: r{i}",
+                "requirement": f"r{i}",
+            }
+            for i in range(4)
+        ]
+        cached = np.arange(4 * 6, dtype=np.float32).reshape(4, 6)
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            mock.patch.object(
+                embedding_diagnostic,
+                "embed_requirement_only",
+                return_value=np.arange(4 * 5, dtype=np.float32).reshape(4, 5),
+            ),
+        ):
+            features = embedding_diagnostic.build_feature_sets(
+                rows,
+                cached,
+                mlx_batch=8,
+                cache_dir=Path(tmpdir),
+                reuse_cache=False,
+            )
+
+        self.assertEqual(
+            sorted(features),
+            ["mlx::prefixed", "mlx::reqonly", "tfidf::prefixed", "tfidf::reqonly"],
+        )
+        # Full embedding width: a globally reduced matrix would be 128 columns.
+        self.assertEqual(features["mlx::prefixed"]["X"].shape, (4, 6))
+        self.assertEqual(features["mlx::reqonly"]["X"].shape, (4, 5))
+        self.assertIsNone(features["mlx::prefixed"]["text_vectorizer"])
+        for key in ["tfidf::prefixed", "tfidf::reqonly"]:
+            with self.subTest(key=key):
+                self.assertEqual(features[key]["X"].dtype, object)
+                vectorizer = features[key]["text_vectorizer"]
+                self.assertIsNotNone(vectorizer)
+                self.assertFalse(hasattr(vectorizer, "vocabulary_"))
+        self.assertEqual(
+            list(features["tfidf::reqonly"]["X"]), ["r0", "r1", "r2", "r3"]
+        )
+
+    def test_run_grid_reduces_inside_each_fold(self) -> None:
+        """The grid is what writes probe_grid_summary.csv, so it must pass it on."""
+        rows = []
+        for index in range(24):
+            rows.append(
+                {
+                    "seed_id": f"S{index // 2:03d}",
+                    "item_id": f"I{index:03d}",
+                    "source_modality": "recommended",
+                    "dataset_id": "nice",
+                    "benchmark_variant": "must",
+                    "requirement": f"the system {'shall' if index % 2 else 'may'} r{index}",
+                    "semantic_text": f"modality: recommended requirement: r{index}",
+                    "deterministic_strict_text_overcommit": str(index % 2),
+                    "sample_strict_text_overcommit": str(index % 2),
+                }
+            )
+        features = {
+            "tfidf::reqonly": {
+                "X": np.asarray([row["requirement"] for row in rows], dtype=object),
+                "text_vectorizer": TfidfVectorizer(
+                    analyzer="char_wb", ngram_range=(3, 5)
+                ),
+                "backend": "tfidf",
+                "text": "reqonly",
+            }
+        }
+        fold_rows = embedding_diagnostic.run_grid(
+            features,
+            rows,
+            models=["logreg"],
+            n_splits=3,
+            random_state=7,
+            pca_components=4,
+        )
+
+        self.assertTrue(fold_rows)
+        for row in fold_rows:
+            with self.subTest(target=row["target"], fold=row["fold"]):
+                # fold_metrics only records this key when reduction is fold-local.
+                self.assertIn("pca_components_fold", row)
 
     def test_grid_summary_reports_auprc_lift_over_prevalence(self) -> None:
         fold_rows = []

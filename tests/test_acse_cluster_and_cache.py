@@ -32,6 +32,7 @@ from scripts import (
     eval_utils as eu,
     plot_acse_embedding_visualizations as acse_viz,
     plot_embedding_diagnostic_figure as diagnostic_figure,
+    probe_acse_embedding_separability as separability_probe,
 )
 
 THRESHOLD = 0.35
@@ -515,7 +516,14 @@ class EmbeddingProjectionPrepTest(unittest.TestCase):
         eu.write_csv_rows(artifact_dir / "task2_acse_samples.csv", samples)
         eu.write_csv_rows(artifact_dir / "task2_acse_items.csv", items)
         np.savez_compressed(
-            diagnostic_dir / "task2_reqonly_mlx_embeddings.npz", embeddings=embeddings
+            diagnostic_dir / "task2_reqonly_mlx_embeddings.npz",
+            embeddings=embeddings,
+            n_rows=np.asarray(len(samples)),
+            requirements_digest=np.asarray(
+                separability_probe.requirements_digest(
+                    [str(row["requirement"]) for row in samples]
+                )
+            ),
         )
 
         manifest_path = root / eu.ACSE_SEMANTIC_MANIFEST_FILENAME
@@ -610,6 +618,29 @@ class EmbeddingProjectionPrepTest(unittest.TestCase):
         self.assertNotEqual(
             prepared.rng.random(), np.random.default_rng(20260527).random()
         )
+
+    def test_a_same_length_cache_for_other_text_is_rejected(self) -> None:
+        """Row count alone cannot tell this cache apart from the right one."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            diagnostic_dir, manifest_path = self._build_fixture(Path(tmpdir))
+            cache_path = diagnostic_dir / "task2_reqonly_mlx_embeddings.npz"
+            cached = np.load(cache_path, allow_pickle=False)
+            np.savez_compressed(
+                cache_path,
+                embeddings=cached["embeddings"],
+                n_rows=cached["n_rows"],
+                requirements_digest=np.asarray(
+                    separability_probe.requirements_digest(["other text"])
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "different requirement text"):
+                diagnostic_figure.prepare_projection_inputs(
+                    diagnostic_dir=diagnostic_dir,
+                    manifest_path=manifest_path,
+                    method="pca",
+                    per_modality=3,
+                    random_state=20260527,
+                )
 
     def test_supplementary_figure_calls_the_shared_helper(self) -> None:
         from scripts import plot_embedding_diagnostic_tsne_supp as supp
