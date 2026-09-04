@@ -51,8 +51,9 @@ def _task2_raw(
     sample_kind="deterministic",
     sample_index=0,
     parse_status="ok",
+    batch_id=None,
 ):
-    return {
+    record = {
         "run_id": run_id,
         "model": model,
         "task": "task2",
@@ -76,6 +77,36 @@ def _task2_raw(
         "parse_status": parse_status,
         "error": "",
     }
+    # Left off by default so the shared fixtures keep exercising the
+    # seed-clustered fallback; batched fixtures opt in explicitly.
+    if batch_id is not None:
+        record["batch_id"] = batch_id
+    return record
+
+
+def _batched_task2_raw(benchmark, *, model, run_id, requirement, seeds_per_request=2):
+    """Task 2 raw rows batched the way the archived runs sent them.
+
+    Consecutive whole seeds share one request, so a request contains all four
+    source conditions of each of its seeds.
+    """
+    by_seed = {}
+    for item in benchmark:
+        by_seed.setdefault(item["seed_id"], []).append(item)
+    rows = []
+    for index, seed_id in enumerate(sorted(by_seed)):
+        request = index // seeds_per_request
+        rows.extend(
+            _task2_raw(
+                item,
+                model=model,
+                run_id=run_id,
+                requirement=requirement,
+                batch_id=f"{run_id}:{model}:task2:deterministic:0:{request}",
+            )
+            for item in by_seed[seed_id]
+        )
+    return rows
 
 
 class TextModalityDetectorTest(unittest.TestCase):
@@ -426,6 +457,38 @@ class RunMatrixCiTest(unittest.TestCase):
         ]:
             self.assertIn(field, compare_matrix.SUMMARY_FIELDS)
 
+    def test_annotate_text_drift_cis_reports_both_clusters(self):
+        benchmark = eu.build_benchmark_items(_seeds())
+        raw_rows = _batched_task2_raw(
+            benchmark,
+            model="m1",
+            run_id="r1",
+            requirement="The system must export reports.",
+        )
+        scores = eu.build_uq_scores(
+            benchmark, raw_rows, sampling_plan=NO_STOCHASTIC_PLAN
+        )
+
+        summary = eu.metric_summary_by_model_task_method(scores)
+        compare_matrix.annotate_text_drift_cis(summary, scores, bootstrap_samples=50)
+        row = next(entry for entry in summary if entry["task"] == "task2")
+
+        self.assertEqual(row["bootstrap_ci_cluster_field"], "batch_id")
+        self.assertGreaterEqual(
+            row["strict_text_over_commitment_ci_high"]
+            - row["strict_text_over_commitment_ci_low"],
+            row["strict_text_over_commitment_seed_ci_high"]
+            - row["strict_text_over_commitment_seed_ci_low"],
+        )
+        for field in [
+            "bootstrap_ci_cluster_field",
+            "text_over_commitment_seed_ci_low",
+            "text_over_commitment_seed_ci_high",
+            "strict_text_over_commitment_seed_ci_low",
+            "strict_text_over_commitment_seed_ci_high",
+        ]:
+            self.assertIn(field, compare_matrix.SUMMARY_FIELDS)
+
 
 class ContextAblationTableTest(unittest.TestCase):
     """The ablation table pairs the two arms on the same items and seeds."""
@@ -469,7 +532,14 @@ class ContextAblationTableTest(unittest.TestCase):
             **overrides,
         }
 
-    def _raw_rows(self, benchmark, run_id, model, *, strengthen_weak):
+    def _raw_rows(
+        self, benchmark, run_id, model, *, strengthen_weak, seeds_per_request=None
+    ):
+        """One arm's raw rows, optionally batched `seeds_per_request` per request."""
+        request_of = {
+            seed_id: index // (seeds_per_request or 1)
+            for index, seed_id in enumerate(sorted({r["seed_id"] for r in benchmark}))
+        }
         rows = []
         for item in benchmark:
             requirement = item["source_statement"].replace("MAY", "may")
@@ -477,7 +547,18 @@ class ContextAblationTableTest(unittest.TestCase):
                 # A strict strengthening: explicit modal, high confidence.
                 requirement = f"The system must {item['capability_text']}."
             rows.append(
-                _task2_raw(item, model=model, run_id=run_id, requirement=requirement)
+                _task2_raw(
+                    item,
+                    model=model,
+                    run_id=run_id,
+                    requirement=requirement,
+                    batch_id=None
+                    if seeds_per_request is None
+                    else (
+                        f"{run_id}:{model}:task2:deterministic:0:"
+                        f"{request_of[item['seed_id']]}"
+                    ),
+                )
             )
         return rows
 
@@ -624,6 +705,65 @@ class ContextAblationTableTest(unittest.TestCase):
         self.assertEqual(overall["n_complete_pairs"], len(seeds) - 1)
         self.assertEqual(overall["n_excluded_single_arm"], 1)
         self.assertIn("n_complete_pairs", context_ablation.DELTA_FIELDS)
+
+    def test_ablation_rows_report_request_and_seed_clustered_intervals(self):
+        benchmark = self._pure_benchmark()
+        registry = [
+            self._registry_row("bare-1", "m1", "bare", "2026-09-02T00:00:00Z"),
+            self._registry_row("doc-1", "m1", "document", "2026-09-02T00:00:00Z"),
+        ]
+        # Three seeds per request, so a request is strictly coarser than a seed
+        # and the two arms carry different request ids for the same seeds.
+        bare = self._raw_rows(
+            benchmark, "bare-1", "m1", strengthen_weak=False, seeds_per_request=3
+        )
+        document = self._raw_rows(
+            benchmark, "doc-1", "m1", strengthen_weak=True, seeds_per_request=3
+        )
+
+        tables = context_ablation.build_tables(
+            benchmark,
+            registry,
+            bare + document,
+            run_group_id="context-ablation-2026-09",
+            include_smoke=False,
+            bootstrap_samples=100,
+            sampling_plan=NO_STOCHASTIC_PLAN,
+        )
+
+        arms = {(r["item_context"], r["stratum"]): r for r in tables["arms"]}
+        deltas = {(r["stratum"], r["metric"]): r for r in tables["deltas"]}
+        arm = arms[("document", "all")]
+        delta = deltas[("all", "strict_text_strengthening")]
+
+        self.assertEqual(arm["bootstrap_ci_cluster_field"], "batch_id")
+        self.assertGreaterEqual(
+            arm["strict_text_strengthening_ci_high"]
+            - arm["strict_text_strengthening_ci_low"],
+            arm["strict_text_strengthening_seed_ci_high"]
+            - arm["strict_text_strengthening_seed_ci_low"],
+        )
+        # Pairing stays by seed; only the resampling unit is the request.
+        self.assertEqual(delta["delta_cluster_field"], "batch_id")
+        self.assertEqual(delta["n_delta_clusters"], 2)
+        self.assertEqual(delta["n_complete_pairs"], 6)
+        self.assertGreaterEqual(
+            delta["delta_ci_high"] - delta["delta_ci_low"],
+            delta["delta_seed_ci_high"] - delta["delta_seed_ci_low"],
+        )
+        for field in (
+            "bootstrap_ci_cluster_field",
+            "strict_text_strengthening_seed_ci_low",
+            "broad_text_strengthening_seed_ci_high",
+        ):
+            self.assertIn(field, context_ablation.ARM_FIELDS)
+        for field in (
+            "delta_cluster_field",
+            "n_delta_clusters",
+            "delta_seed_ci_low",
+            "delta_seed_ci_high",
+        ):
+            self.assertIn(field, context_ablation.DELTA_FIELDS)
 
     def test_missing_arm_yields_empty_deltas_not_a_crash(self):
         benchmark = self._pure_benchmark()
@@ -1316,6 +1456,24 @@ class ExportPaperTablesTest(unittest.TestCase):
             self.assertEqual(set(headline), {"m1", "m2"})
             self.assertEqual(headline["m1"]["n_valid"], len(benchmark))
 
+            # Both cluster bootstraps reach the per-model and headline tables.
+            for field in [
+                "strengthening_ci_cluster_field",
+                "broad_strengthening_seed_ci_low",
+                "broad_strengthening_seed_ci_high",
+                "strict_strengthening_seed_ci_low",
+                "strict_strengthening_seed_ci_high",
+            ]:
+                self.assertIn(field, export.PER_MODEL_FIELDS)
+                self.assertIn(field, weak_m1)
+            headline_ci = {
+                row["headline_key"]: row for row in result["headline_ci_rows"]
+            }
+            strict_ci = headline_ci["strict_text_strengthening"]
+            self.assertIn("seed_ci_low", strict_ci)
+            self.assertIn("seed_ci_high", strict_ci)
+            self.assertIn("ci_cluster_field", strict_ci)
+
             for path in result["paths"].values():
                 self.assertTrue(Path(path).exists())
             self.assertTrue((output_dir / "paper_per_model_modality_table.md").exists())
@@ -1624,6 +1782,9 @@ class ExportPaperTablesTest(unittest.TestCase):
                 "headline_key": "strict_text_strengthening",
                 "ci_low": 0.05,
                 "ci_high": 0.15,
+                "seed_ci_low": 0.08,
+                "seed_ci_high": 0.12,
+                "ci_cluster_field": "batch_id",
                 "bootstrap_samples": 1000,
             }
         ]
@@ -1633,10 +1794,18 @@ class ExportPaperTablesTest(unittest.TestCase):
                 task2_rows, confidence_rows, blind_rows, ci_rows
             )
         }
-        self.assertEqual(rows["strict_text_strengthening"]["value_ci_low"], 0.05)
-        self.assertEqual(rows["strict_text_strengthening"]["value_ci_high"], 0.15)
-        self.assertEqual(rows["strict_text_strengthening"]["bootstrap_samples"], 1000)
+        strict = rows["strict_text_strengthening"]
+        self.assertEqual(strict["value_ci_low"], 0.05)
+        self.assertEqual(strict["value_ci_high"], 0.15)
+        self.assertEqual(strict["bootstrap_samples"], 1000)
+        # The request-clustered interval is the reported one; the narrower
+        # seed-clustered pair travels alongside it.
+        self.assertEqual(strict["value_seed_ci_low"], 0.08)
+        self.assertEqual(strict["value_seed_ci_high"], 0.12)
+        self.assertEqual(strict["value_ci_cluster_field"], "batch_id")
         self.assertEqual(rows["broad_text_strengthening"]["value_ci_low"], "")
+        self.assertEqual(rows["broad_text_strengthening"]["value_seed_ci_low"], "")
+        self.assertEqual(rows["broad_text_strengthening"]["value_ci_cluster_field"], "")
 
 
 class BenchmarkGroundTruthDocTest(unittest.TestCase):

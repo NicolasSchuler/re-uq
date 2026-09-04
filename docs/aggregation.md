@@ -23,9 +23,20 @@ The scoring unit is **one model answer for one benchmark item**.
   way but is reported on its own and never enters any pooled or macro figure.
 - Score rows are produced by `build_uq_scores`
   (`scripts/eval_utils.py:5606`). Every row carries `run_id`, `model`, `task`,
-  `uq_method`, `item_id`, `seed_id`, `source_modality`, `valid_n`, `total_n`,
-  `parse_failures`, `stochastic_complete`, and `sampling_plan_source`, built by
-  `score_base` (`scripts/eval_utils.py:6703`).
+  `uq_method`, `item_id`, `seed_id`, `batch_id`, `sample_batch_ids`,
+  `source_modality`, `valid_n`, `total_n`, `parse_failures`,
+  `stochastic_complete`, and `sampling_plan_source`, built by
+  `score_base` (`scripts/eval_utils.py`, Section 9).
+- `batch_id` is the provider **request** the answer was decided in, forwarded
+  from the raw record (`<run_id>:<model>:<task>:<sample_kind>:<sample_index>:<min>-<max>`).
+  Every archived run sent 16 items per request — four whole seeds x four source
+  conditions — so a request contains whole seeds and clustering by request
+  nests clustering by seed. It is the default bootstrap cluster, see Section 6.
+  `sample_batch_ids` lists every contributing request, semicolon-joined; it
+  equals `batch_id` for a deterministic row and names all five sample requests
+  for a collapsed stochastic row (whose `batch_id` is its representative
+  sample's request). Both are blank for rows that were never batched: legacy
+  runs, single-item requests, synthesised completions, and the rule baseline.
 - `build_uq_scores` requires a `SamplingPlan`: the number of stochastic samples
   the run *planned* per item, threaded from the run config by every caller.
   `total_n` is `max(observed, planned)`, so three written samples of a planned
@@ -190,36 +201,81 @@ in every cell.
 
 ## 6. Bootstrap procedure
 
-All confidence intervals are **seed-clustered nonparametric bootstraps**
-(`bootstrap_seed_metric`, `scripts/eval_utils.py:5352`):
+All confidence intervals are **clustered nonparametric bootstraps**
+(`bootstrap_seed_metric`, `scripts/eval_utils.py`, Section 7):
 
-1. Group the score rows by `seed_id`. The four source-modality variants of one
-   seed share a capability and are not independent, so the seed is the
-   resampling unit, not the item.
-2. Draw `n_seeds` seeds with replacement and concatenate their rows.
+1. Group the score rows by the cluster field. The default is the provider
+   **request** (`batch_id`, `DEFAULT_BOOTSTRAP_CLUSTER_FIELD`), not the seed:
+   every archived run sent 16 items per request, so one request carries four
+   whole seeds x four source conditions. The item is not independent of its
+   seed (the four source-modality variants share a capability) and the seed is
+   not independent of its request — strict text strengthening is all-or-none
+   within each `(request, source condition)` group, and unreadable text
+   modality is all-or-none per request. Because a request contains whole
+   seeds, request clustering *nests* seed clustering and is the conservative
+   choice.
+2. Draw `n_clusters` clusters with replacement and concatenate their rows.
 3. Recompute the metric on the resampled rows; repeat `iterations` times
    (default 1000).
 4. Report the 2.5% and 97.5% percentiles of the resampled values as
    `*_ci_low` / `*_ci_high`; the point estimate is the metric on the observed
    rows.
 
+The seed-clustered interval is reported alongside the primary one as
+`*_seed_ci_low` / `*_seed_ci_high`, and `bootstrap_ci_cluster_field` records
+which field the primary interval actually used.
+
+Read the seed-clustered column with one caveat: `seed_id` is only unique within
+a dataset, not across benchmark variants, so the `must` and `shall` renderings
+of one capability share an id and land in the same cluster. Pooling the four
+paper cells therefore yields 360 seed clusters (2 datasets x 180 seeds) against
+1080 request clusters. `batch_id` embeds the run id and is globally unique, so
+the primary interval is unaffected.
+
+Rows fall back to clustering on `seed_id` unless **every** row carries a
+non-blank `batch_id` (`resolve_bootstrap_cluster_field`). A partially populated
+column — legacy runs, single-item requests, synthesised completions, the rule
+baseline — would otherwise collapse all unbatched rows into one meaningless
+cluster. When the fallback engages the two intervals coincide, only one
+bootstrap runs, and `bootstrap_ci_cluster_field` reads `seed_id`.
+
 The RNG seed is fixed at `20260518` (`BOOTSTRAP_SEED` in
 `scripts/export_paper_tables.py` and `scripts/compare_run_matrix.py`), so the
 intervals are reproducible.
 
-Entry points:
+Entry points, and the columns each writes:
 
-- `text_over_commitment_ci_fields` (`scripts/eval_utils.py:7868`) — broad and
-  strict text strengthening with counts and CI bounds.
+- `cluster_ci_fields` (`scripts/eval_utils.py`, Section 10) — the shared shape:
+  `{metric}_ci_low` / `{metric}_ci_high`, `{metric}_seed_ci_low` /
+  `{metric}_seed_ci_high`, and one `bootstrap_ci_cluster_field` per row.
+- `text_over_commitment_ci_fields` (`scripts/eval_utils.py`, Section 10) — broad
+  and strict text strengthening with counts and both intervals.
 - `headline_risk_ci_fields` (`scripts/eval_utils.py`, Section 10) — Task 1/2
   high-confidence risks used by `scripts/generate_evaluation_analysis.py`.
-- `annotate_text_drift_cis` (`scripts/compare_run_matrix.py:52`) — per run and
+- `annotate_text_drift_cis` (`scripts/compare_run_matrix.py`) — per run and
   model in the run-matrix table, `--bootstrap-samples` controls the resamples.
+- `scripts/export_paper_tables.py` — `broad_strengthening_ci_*` /
+  `strict_strengthening_ci_*` plus their `*_seed_ci_*` pairs and
+  `strengthening_ci_cluster_field` in the per-model and headline tables, and
+  `ci_low` / `ci_high` / `seed_ci_low` / `seed_ci_high` / `ci_cluster_field` in
+  `paper_headline_bootstrap_ci.csv`.
 - `scripts/aggregate_paper_headline_metrics.py --regenerate-snapshots` — pools
-  the deterministic rows across all requested cells, bootstraps over seeds, and
-  appends `value_ci_low` / `value_ci_high` / `bootstrap_samples` to the headline
-  table (`attach_bootstrap_cis`,
-  `scripts/aggregate_paper_headline_metrics.py:272`).
+  the deterministic rows across all requested cells, bootstraps over requests,
+  and appends `value_ci_low` / `value_ci_high` / `value_seed_ci_low` /
+  `value_seed_ci_high` / `value_ci_cluster_field` / `bootstrap_samples` to the
+  headline table (`attach_bootstrap_cis`).
+- `scripts/compare_context_ablation.py` — arm rows carry
+  `*_ci_*` / `*_seed_ci_*` / `bootstrap_ci_cluster_field`; delta rows carry
+  `delta_ci_*`, `delta_seed_ci_*`, `delta_cluster_field` and
+  `n_delta_clusters`. The paired delta **pairs by seed and resamples by
+  request**: the two arms are separate runs whose request ids differ, but the
+  partition of seeds into requests is the same, and a seed's four source
+  conditions sit in one request, so a request carries whole pairs.
+
+The snapshots committed under `outputs/` predate this change: their
+`*_ci_low` / `*_ci_high` columns are seed-clustered and they carry no
+`*_seed_ci_*` or cluster-field column. Regenerating them (Section 8) produces
+request-clustered primaries and the seed-clustered pair alongside.
 
 ## 7. Answer length and bloat
 

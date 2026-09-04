@@ -6,12 +6,17 @@ comparison does (deterministic Task 2 rows), and writes one table:
 
 * one row per model x arm x stratum (`all`, `weak_intent`, `marker_M`,
   `marker_O`) with n, declared-label accuracy, strict and broad text
-  strengthening with seed-clustered CIs, and the README-style weak-intent
-  rate where the stratum is weak-intent;
+  strengthening with request-clustered CIs (the seed-clustered pair alongside
+  as `*_seed_ci_*`), and the README-style weak-intent rate where the stratum
+  is weak-intent;
 * one delta row per model x stratum (`document - bare`) with a *paired*
-  seed-clustered bootstrap CI over the complete-pair cohort
+  cluster bootstrap CI over the complete-pair cohort
   (`eu.bootstrap_seed_metric_delta`), reporting how many seeds were paired and
-  how many were dropped for having answered in one arm only.
+  how many were dropped for having answered in one arm only. Pairing is by
+  seed — the same capability seen bare and in its document — while resampling
+  is by request: a seed's four source conditions sit in one request, so the
+  pair is never split and the request is only the coarser unit. Both intervals
+  are written (`delta_ci_*` request-clustered, `delta_seed_ci_*` by seed).
 
 Outputs `outputs/context_ablation_summary.{csv,md}` and a provenance JSON
 listing the run ids and resolved-config digests behind every row. Nothing
@@ -59,9 +64,14 @@ ARM_FIELDS = [
     "strict_text_strengthening",
     "strict_text_strengthening_ci_low",
     "strict_text_strengthening_ci_high",
+    "strict_text_strengthening_seed_ci_low",
+    "strict_text_strengthening_seed_ci_high",
     "broad_text_strengthening",
     "broad_text_strengthening_ci_low",
     "broad_text_strengthening_ci_high",
+    "broad_text_strengthening_seed_ci_low",
+    "broad_text_strengthening_seed_ci_high",
+    "bootstrap_ci_cluster_field",
     "weak_strict_text_strengthening_90",
 ]
 DELTA_FIELDS = [
@@ -73,6 +83,10 @@ DELTA_FIELDS = [
     "delta",
     "delta_ci_low",
     "delta_ci_high",
+    "delta_seed_ci_low",
+    "delta_seed_ci_high",
+    "delta_cluster_field",
+    "n_delta_clusters",
     "n_bare",
     "n_document",
     "n_complete_pairs",
@@ -181,9 +195,20 @@ def arm_row(
         "strict_text_strengthening": ci["strict_text_over_commitment"],
         "strict_text_strengthening_ci_low": ci["strict_text_over_commitment_ci_low"],
         "strict_text_strengthening_ci_high": ci["strict_text_over_commitment_ci_high"],
+        "strict_text_strengthening_seed_ci_low": ci[
+            "strict_text_over_commitment_seed_ci_low"
+        ],
+        "strict_text_strengthening_seed_ci_high": ci[
+            "strict_text_over_commitment_seed_ci_high"
+        ],
         "broad_text_strengthening": ci["text_over_commitment"],
         "broad_text_strengthening_ci_low": ci["text_over_commitment_ci_low"],
         "broad_text_strengthening_ci_high": ci["text_over_commitment_ci_high"],
+        "broad_text_strengthening_seed_ci_low": ci["text_over_commitment_seed_ci_low"],
+        "broad_text_strengthening_seed_ci_high": ci[
+            "text_over_commitment_seed_ci_high"
+        ],
+        "bootstrap_ci_cluster_field": ci.get("bootstrap_ci_cluster_field", ""),
         "weak_strict_text_strengthening_90": _weak_strict_90(rows)
         if stratum == "weak_intent"
         else "",
@@ -206,10 +231,21 @@ def delta_rows(
     for metric_name, metric in METRICS:
         # The CI describes the seeds both arms answered; a seed only one arm
         # answered is excluded before resampling and counted on the row.
+        # Pairing stays by seed — the same capability under two contexts — and
+        # only the resampling unit moves to the request; a seed's four source
+        # conditions sit in one request, so the pair is never split.
         paired = eu.bootstrap_seed_metric_delta(
             bare,
             document,
             metric,
+            iterations=bootstrap_samples,
+            seed=BOOTSTRAP_SEED,
+        )
+        by_seed = eu.bootstrap_seed_metric_delta(
+            bare,
+            document,
+            metric,
+            cluster_field=eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
             iterations=bootstrap_samples,
             seed=BOOTSTRAP_SEED,
         )
@@ -223,6 +259,10 @@ def delta_rows(
                 "delta": _finite(paired.delta),
                 "delta_ci_low": _finite(paired.ci_low),
                 "delta_ci_high": _finite(paired.ci_high),
+                "delta_seed_ci_low": _finite(by_seed.ci_low),
+                "delta_seed_ci_high": _finite(by_seed.ci_high),
+                "delta_cluster_field": paired.cluster_field,
+                "n_delta_clusters": paired.n_clusters,
                 "n_bare": len(bare),
                 "n_document": len(document),
                 "n_complete_pairs": paired.n_complete_pairs,

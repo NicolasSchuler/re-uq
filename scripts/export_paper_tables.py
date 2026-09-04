@@ -166,11 +166,16 @@ PER_MODEL_FIELDS = [
     "broad_strengthening_rate",
     "broad_strengthening_ci_low",
     "broad_strengthening_ci_high",
+    "broad_strengthening_seed_ci_low",
+    "broad_strengthening_seed_ci_high",
     "strict_strengthening_n",
     "strict_strengthening_denominator",
     "strict_strengthening_rate",
     "strict_strengthening_ci_low",
     "strict_strengthening_ci_high",
+    "strict_strengthening_seed_ci_low",
+    "strict_strengthening_seed_ci_high",
+    "strengthening_ci_cluster_field",
     "strict_high_conf_share_90",
     "agreement_n_complete",
     "agreement_n_incomplete_excluded",
@@ -576,7 +581,12 @@ def per_model_row(
     n_items: int,
     bootstrap_samples: int,
 ) -> dict[str, Any]:
-    """One disaggregated row: counts, rates, seed-clustered CIs, and length."""
+    """One disaggregated row: counts, rates, both cluster CIs, and length.
+
+    ``*_ci_low`` / ``*_ci_high`` are request-clustered (the reported interval);
+    ``*_seed_ci_low`` / ``*_seed_ci_high`` are the seed-clustered pair and
+    ``strengthening_ci_cluster_field`` names the unit actually used.
+    """
     text_rows = [
         row
         for row in det_rows
@@ -612,6 +622,12 @@ def per_model_row(
         "broad_strengthening_ci_high": ci_fields.get(
             "text_over_commitment_ci_high", ""
         ),
+        "broad_strengthening_seed_ci_low": ci_fields.get(
+            "text_over_commitment_seed_ci_low", ""
+        ),
+        "broad_strengthening_seed_ci_high": ci_fields.get(
+            "text_over_commitment_seed_ci_high", ""
+        ),
         "strict_strengthening_n": len(strict_rows),
         "strict_strengthening_denominator": len(text_rows),
         "strict_strengthening_rate": ci_fields.get("strict_text_over_commitment", ""),
@@ -620,6 +636,15 @@ def per_model_row(
         ),
         "strict_strengthening_ci_high": ci_fields.get(
             "strict_text_over_commitment_ci_high", ""
+        ),
+        "strict_strengthening_seed_ci_low": ci_fields.get(
+            "strict_text_over_commitment_seed_ci_low", ""
+        ),
+        "strict_strengthening_seed_ci_high": ci_fields.get(
+            "strict_text_over_commitment_seed_ci_high", ""
+        ),
+        "strengthening_ci_cluster_field": ci_fields.get(
+            "bootstrap_ci_cluster_field", ""
         ),
         "strict_high_conf_share_90": _share_at_least(
             strict_rows, HIGH_CONFIDENCE_THRESHOLD
@@ -902,29 +927,26 @@ def export_tables(
         iterations=bootstrap_samples,
         seed=BOOTSTRAP_SEED,
     )
+    # `ci_low` / `ci_high` are request-clustered (the reported interval);
+    # `seed_ci_low` / `seed_ci_high` are the seed-clustered pair.
     headline_ci_rows = [
         {
-            "headline_key": "broad_text_strengthening",
-            "value": pooled_ci.get("text_over_commitment", ""),
-            "ci_low": pooled_ci.get("text_over_commitment_ci_low", ""),
-            "ci_high": pooled_ci.get("text_over_commitment_ci_high", ""),
-            "n_numerator": pooled_ci.get("text_over_commitment_n_numerator", ""),
-            "n_denominator": pooled_ci.get("text_over_commitment_n_denominator", ""),
+            "headline_key": headline_key,
+            "value": pooled_ci.get(metric_name, ""),
+            "ci_low": pooled_ci.get(f"{metric_name}_ci_low", ""),
+            "ci_high": pooled_ci.get(f"{metric_name}_ci_high", ""),
+            "seed_ci_low": pooled_ci.get(f"{metric_name}_seed_ci_low", ""),
+            "seed_ci_high": pooled_ci.get(f"{metric_name}_seed_ci_high", ""),
+            "ci_cluster_field": pooled_ci.get("bootstrap_ci_cluster_field", ""),
+            "n_numerator": pooled_ci.get(f"{metric_name}_n_numerator", ""),
+            "n_denominator": pooled_ci.get(f"{metric_name}_n_denominator", ""),
             "bootstrap_samples": bootstrap_samples,
             "bootstrap_seed": BOOTSTRAP_SEED,
-        },
-        {
-            "headline_key": "strict_text_strengthening",
-            "value": pooled_ci.get("strict_text_over_commitment", ""),
-            "ci_low": pooled_ci.get("strict_text_over_commitment_ci_low", ""),
-            "ci_high": pooled_ci.get("strict_text_over_commitment_ci_high", ""),
-            "n_numerator": pooled_ci.get("strict_text_over_commitment_n_numerator", ""),
-            "n_denominator": pooled_ci.get(
-                "strict_text_over_commitment_n_denominator", ""
-            ),
-            "bootstrap_samples": bootstrap_samples,
-            "bootstrap_seed": BOOTSTRAP_SEED,
-        },
+        }
+        for headline_key, metric_name in (
+            ("broad_text_strengthening", "text_over_commitment"),
+            ("strict_text_strengthening", "strict_text_over_commitment"),
+        )
     ]
 
     suffix = "" if overwrite_snapshots else REGENERATED_SUFFIX
