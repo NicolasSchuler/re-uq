@@ -10742,6 +10742,44 @@ def text_strengthening_rate(rows: list[dict[str, Any]], strict: bool = False) ->
     return sum(1 for row in text_rows if _truthy(row.get(key))) / len(text_rows)
 
 
+def weak_intent_strict_strengthening_rate(
+    rows: list[dict[str, Any]], threshold: float | None = None
+) -> float:
+    """Strict text strengthening over readable weak stakeholder-intent rows.
+
+    The denominator is the deterministic Task 2 rows whose *source* modality is
+    ``nice_to_have`` and whose generated text yielded a modality at all, which
+    is the denominator the per-model RQ1 table prints.
+
+    ``threshold`` gates the numerator on verbalized confidence:
+    ``threshold=0.90`` reproduces ``strict_text_high_conf_overcommit_90`` (the
+    ``\\numWeakStrict`` headline), while ``None`` counts every strict
+    strengthening regardless of how confidently it was asserted. The two
+    coincide only pooled -- per model and per cell they differ -- so the RQ
+    table carries both.
+    """
+    weak_rows = [
+        row
+        for row in rows
+        if str(row.get("task", "")) == "task2"
+        and str(row.get("source_modality", "")) == "nice_to_have"
+    ]
+    readable = [
+        row
+        for row in weak_rows
+        if str(row.get("text_modality_parse_status", "")) == "ok"
+    ]
+    if not readable:
+        return math.nan
+    numerator = sum(
+        1
+        for row in readable
+        if _truthy(row.get("strict_text_overcommit"))
+        and (threshold is None or float(row.get("confidence", 0.0) or 0.0) >= threshold)
+    )
+    return numerator / len(readable)
+
+
 def text_over_commitment_ci_fields(
     rows: list[dict[str, Any]],
     iterations: int = 1000,

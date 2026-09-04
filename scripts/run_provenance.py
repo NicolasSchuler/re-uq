@@ -104,6 +104,27 @@ def record_resume(
     return resumed_at
 
 
+def registry_note_field(notes: Any, key: str) -> str:
+    """Read one ``key=value`` field back out of a registry ``notes`` string.
+
+    The inverse of :func:`run_notes` and of the extras the runners pass it
+    (``audit_mode=...``, ``source_run_id=...``). Kept here so the parser cannot
+    drift from the writer above it. Returns "" when the field is absent.
+    """
+    for part in str(notes or "").split(";"):
+        name, separator, value = part.partition("=")
+        if separator and name.strip() == key:
+            return value.strip()
+    return ""
+
+
+def registry_source_run_id(row: Any) -> str:
+    """The Task 2 run a Task 3 registry row audited ("" when it says nothing)."""
+    return registry_note_field(
+        row.get("notes", "") if hasattr(row, "get") else row, "source_run_id"
+    )
+
+
 def run_notes(args: Any, extra: str = "") -> str:
     """Registry `notes` value for a run launched with `args`.
 

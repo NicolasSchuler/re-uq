@@ -84,6 +84,74 @@ def _task2_raw(
     return record
 
 
+def _task1_raw(item, *, model, run_id, decision="yes", confidence=0.95, batch_id=None):
+    """One Task 1 entailment answer for `item`.
+
+    `decision="yes"` on a non-mandatory source is the unsupported acceptance
+    the RQ1 table counts; `y_true` is derived from the item by the scorer.
+    """
+    record = {
+        "run_id": run_id,
+        "model": model,
+        "task": "task1",
+        "item_id": item["item_id"],
+        "seed_id": item["seed_id"],
+        "source_modality": item["source_modality"],
+        "sample_index": 0,
+        "sample_kind": "deterministic",
+        "confidence_scale": "0_1",
+        "prompt_version": "v2-conf01",
+        "raw_text": "",
+        "parsed_json": {
+            "decision": decision,
+            "confidence": confidence,
+            "brief_reason": "fixture",
+        },
+        "parse_status": "ok",
+        "error": "",
+    }
+    if batch_id is not None:
+        record["batch_id"] = batch_id
+    return record
+
+
+def _task3_raw(
+    item, *, model, run_id, relation, audit_mode="blind", confidence=0.9, batch_id=None
+):
+    """One blind-audit verdict on `model`'s own Task 2 answer for `item`.
+
+    The `item_id` is the one `eval_utils.build_task3_verification_items`
+    generates, so the exporter's recomputed items and these rows join.
+    """
+    record = {
+        "run_id": run_id,
+        "model": model,
+        "task": "task3",
+        "item_id": (
+            f"{item['item_id']}__task3__{eu.safe_identifier(model)}"
+            f"__{eu.safe_identifier(audit_mode)}"
+        ),
+        "seed_id": item["seed_id"],
+        "source_modality": item["source_modality"],
+        "sample_index": 0,
+        "sample_kind": "deterministic",
+        "confidence_scale": "0_1",
+        "prompt_version": "v2-conf01",
+        "raw_text": "",
+        "parsed_json": {
+            "relation": relation,
+            "confidence": confidence,
+            "evidence_phrase": "",
+            "brief_reason": "fixture",
+        },
+        "parse_status": "ok",
+        "error": "",
+    }
+    if batch_id is not None:
+        record["batch_id"] = batch_id
+    return record
+
+
 def _batched_task2_raw(benchmark, *, model, run_id, requirement, seeds_per_request=2):
     """Task 2 raw rows batched the way the archived runs sent them.
 
@@ -1109,7 +1177,13 @@ class SamplingPlanThreadingTest(unittest.TestCase):
         )
 
 
-class ExportPaperTablesTest(unittest.TestCase):
+class CellFixture:
+    """Writes one synthetic paper cell: registry, raw rows, and its audits.
+
+    Shared by the export tests and the RQ-table tests rather than inherited
+    between them, so neither class re-runs the other's cases.
+    """
+
     def _write_cell(self, root: Path, dataset: str, variant: str) -> list[dict]:
         benchmark = eu.build_benchmark_items(_seeds())
         benchmark_path = eu.artifact_path(
@@ -1208,8 +1282,66 @@ class ExportPaperTablesTest(unittest.TestCase):
                         )
                         + "\n"
                     )
+                # Task 1: both models accept every candidate, so the weak-source
+                # rows are unsupported acceptances at p >= 0.90.
+                for model, run_id in [("m1", "full-new"), ("m2", "full-m2")]:
+                    handle.write(
+                        json.dumps(_task1_raw(item, model=model, run_id=run_id)) + "\n"
+                    )
+        self._write_task3_cell(root, dataset, variant, benchmark)
         return benchmark
 
+    def _write_task3_cell(
+        self, root: Path, dataset: str, variant: str, benchmark: list[dict]
+    ) -> None:
+        """Blind audits of the Task 2 runs `_write_cell` selects.
+
+        m1 flags its own strengthening, m2 calls everything preserved; the
+        registry `notes` name the audited Task 2 run, which is what
+        `select_task3_cell_runs` pins on.
+        """
+        prefix = "task3" if variant == "must" else f"task3-{variant}"
+        audits = [
+            ("m1", "full-new", f"{prefix}-m1", "strengthens"),
+            ("m2", "full-m2", f"{prefix}-m2", "preserves"),
+        ]
+        eu.write_csv_rows(
+            eu.task3_registry_path(root, dataset, variant),
+            [
+                {
+                    "run_id": run_id,
+                    "run_group_id": export.DEFAULT_PAPER_RUN_GROUP_ID,
+                    "model": model,
+                    "status": "complete",
+                    "tasks": "task3",
+                    "expected_records": len(benchmark) * 6,
+                    "observed_records": len(benchmark) * 6,
+                    "deterministic_item_coverage": 1.0,
+                    "stochastic_complete_item_rate": 1.0,
+                    "batch_size": export.DEFAULT_PAPER_BATCH_SIZE,
+                    "batch_order": export.DEFAULT_PAPER_BATCH_ORDER,
+                    "started_at_utc": "2026-02-02T00:00:00Z",
+                    "notes": f"mode=full; audit_mode=blind; source_run_id={source}",
+                }
+                for model, source, run_id, _ in audits
+            ],
+        )
+        raw_path = eu.task3_raw_path(root, dataset, variant)
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        with raw_path.open("w", encoding="utf-8") as handle:
+            for item in benchmark:
+                for model, _, run_id, relation in audits:
+                    handle.write(
+                        json.dumps(
+                            _task3_raw(
+                                item, model=model, run_id=run_id, relation=relation
+                            )
+                        )
+                        + "\n"
+                    )
+
+
+class ExportPaperTablesTest(CellFixture, unittest.TestCase):
     def test_select_cell_runs_prefers_latest_and_drops_smoke_azure_incomplete(self):
         rows = [
             {
@@ -1894,3 +2026,561 @@ class BenchmarkGroundTruthDocTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerModelRqTableTest(CellFixture, unittest.TestCase):
+    """`paper_per_model_rq_table.csv`: the source of `tab:rq1` / `tab:rq23`.
+
+    Reuses the two-model cell fixture, where m1 rewrites every source as
+    mandatory (so every non-mandatory source is strengthened) and m2 echoes the
+    source (so none is), and both models audit their own answers blind.
+    """
+
+    def _export(self, root, **kwargs):
+        return export.export_tables(
+            root,
+            [("mlm_tapt", "must")],
+            ["m1", "m2"],
+            ["azure."],
+            root / "outputs",
+            bootstrap_samples=kwargs.pop("bootstrap_samples", 25),
+            **kwargs,
+        )
+
+    def _rows(self, result):
+        return {
+            (row["model"], row["dataset"], row["variant"]): row
+            for row in result["rq_rows"]
+        }
+
+    def test_row_set_is_one_per_model_plus_one_per_cell_plus_all(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_cell(root, "mlm_tapt", "must")
+            self._write_cell(root, "nice", "must")
+            result = export.export_tables(
+                root,
+                [("mlm_tapt", "must"), ("nice", "must")],
+                ["m1", "m2"],
+                ["azure."],
+                root / "outputs",
+                bootstrap_samples=25,
+            )
+
+            keys = set(self._rows(result))
+            self.assertEqual(
+                keys,
+                {
+                    ("m1", "all", "all"),
+                    ("m2", "all", "all"),
+                    ("all", "mlm_tapt", "must"),
+                    ("all", "nice", "must"),
+                    ("all", "all", "all"),
+                },
+            )
+            # The model x cell interior is deliberately absent.
+            self.assertNotIn(("m1", "mlm_tapt", "must"), keys)
+            grand = self._rows(result)[("all", "all", "all")]
+            self.assertEqual(grand["n_models_pooled"], 2)
+            self.assertEqual(grand["n_cells_pooled"], 2)
+
+    def test_counts_match_the_slice_definitions(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            benchmark = self._write_cell(root, "mlm_tapt", "must")
+            rows = self._rows(self._export(root))
+            m1 = rows[("m1", "all", "all")]
+
+            # 24 items = 6 seeds x 4 source conditions; m1 answers all of them.
+            self.assertEqual(m1["task2_n"], len(benchmark))
+            self.assertEqual(m1["task2_n_readable"], len(benchmark))
+            self.assertEqual(m1["task2_weak_n"], len(benchmark) // 4)
+            self.assertEqual(m1["task2_weak_n_readable"], len(benchmark) // 4)
+            # Every non-mandatory source is rewritten as mandatory.
+            self.assertEqual(
+                m1["task2_strict_strengthening_n"], 3 * len(benchmark) // 4
+            )
+            self.assertEqual(
+                m1["task2_strict_strengthening_denominator"], len(benchmark)
+            )
+            self.assertEqual(m1["task2_no_cue_n"], 0)
+            # Task 1 accepts every candidate; the weak-source items are the
+            # unsupported acceptances.
+            self.assertEqual(m1["task1_n"], len(benchmark))
+            self.assertEqual(
+                m1["task1_unsupported_acceptance_90_n"],
+                m1["task1_unsupported_acceptance_90_denominator"],
+            )
+            self.assertEqual(m1["task1_accuracy"], 0.25)
+
+            m2 = rows[("m2", "all", "all")]
+            self.assertEqual(m2["task2_strict_strengthening_n"], 0)
+            self.assertEqual(m2["task2_strict_strengthening_rate"], 0.0)
+
+    def test_weak_strict_and_weak_strict_high_conf_are_separate_columns(self):
+        """`tab:rq1` prints the ungated rate; `\\numWeakStrict` is the 0.90 one."""
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            benchmark = self._write_cell(root, "mlm_tapt", "must")
+            # Re-write m1's weak answers with a confidence below the gate.
+            raw_path = eu.model_outputs_raw_path(root, "mlm_tapt", "must")
+            records = [json.loads(line) for line in raw_path.read_text().splitlines()]
+            for record in records:
+                if (
+                    record["model"] == "m1"
+                    and record["run_id"] == "full-new"
+                    and record["task"] == "task2"
+                    and record["source_modality"] == "nice_to_have"
+                    and isinstance(record.get("parsed_json"), dict)
+                ):
+                    record["parsed_json"]["confidence"] = 0.5
+            raw_path.write_text(
+                "\n".join(json.dumps(record) for record in records) + "\n"
+            )
+
+            m1 = self._rows(self._export(root))[("m1", "all", "all")]
+
+            weak_items = len(benchmark) // 4
+            self.assertEqual(m1["task2_weak_strict_strengthening_n"], weak_items)
+            self.assertEqual(m1["task2_weak_strict_high_conf_90_n"], 0)
+            self.assertNotEqual(
+                m1["task2_weak_strict_strengthening_rate"],
+                m1["task2_weak_strict_high_conf_90_rate"],
+            )
+
+    def test_task3_verdicts_are_joined_to_the_strict_strengthened_answers(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            benchmark = self._write_cell(root, "mlm_tapt", "must")
+            rows = self._rows(self._export(root))
+            m1 = rows[("m1", "all", "all")]
+
+            # The denominator is m1's strict-strengthened answers, not all of
+            # its Task 3 verdicts.
+            self.assertEqual(
+                m1["task3_strict_flagged_denominator"],
+                m1["task2_strict_strengthening_n"],
+            )
+            self.assertEqual(m1["task3_strict_unaudited_n"], 0)
+            # m1 flags every one of them; m2 has nothing to flag.
+            self.assertEqual(m1["task3_strict_flagged_rate"], 1.0)
+            self.assertEqual(m1["task3_strict_called_preserved_rate"], 0.0)
+            self.assertEqual(rows[("m2", "all", "all")]["task3_strict_flagged_n"], 0)
+            self.assertEqual(3 * len(benchmark) // 4, m1["task3_strict_joined_n"])
+
+    def test_no_task3_leaves_the_audit_columns_blank(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_cell(root, "mlm_tapt", "must")
+            m1 = self._rows(self._export(root, include_task3=False))[
+                ("m1", "all", "all")
+            ]
+
+            self.assertEqual(m1["task3_n"], 0)
+            self.assertEqual(m1["task3_strict_flagged_rate"], "")
+            self.assertEqual(m1["task3_strict_flagged_ci_low"], "")
+            # The Task 2 columns are unaffected.
+            self.assertGreater(m1["task2_strict_strengthening_n"], 0)
+
+    def test_missing_task3_audit_fails_closed(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_cell(root, "mlm_tapt", "must")
+            eu.task3_registry_path(root, "mlm_tapt", "must").unlink()
+
+            with self.assertRaises(ValueError) as caught:
+                self._export(root)
+            self.assertIn("No compatible complete Task 3 audit", str(caught.exception))
+
+            # ...and can be downgraded deliberately.
+            rows = self._rows(self._export(root, allow_missing_task3=True))
+            self.assertEqual(rows[("m1", "all", "all")]["task3_n"], 0)
+
+    def test_task3_audit_of_another_task2_run_is_not_selected(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_cell(root, "mlm_tapt", "must")
+            registry_path = eu.task3_registry_path(root, "mlm_tapt", "must")
+            registry_rows = eu.read_csv_rows(registry_path)
+            for row in registry_rows:
+                row["notes"] = "mode=full; audit_mode=blind; source_run_id=full-old"
+            eu.write_csv_rows(registry_path, registry_rows)
+
+            with self.assertRaises(ValueError) as caught:
+                self._export(root)
+            self.assertIn("source_run_id", str(caught.exception))
+
+    def test_task3_rows_auditing_another_model_are_refused(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            benchmark = self._write_cell(root, "mlm_tapt", "must")
+            # m1's audit run answers about m2's item ids.
+            raw_path = eu.task3_raw_path(root, "mlm_tapt", "must")
+            records = [json.loads(line) for line in raw_path.read_text().splitlines()]
+            for record in records:
+                if record["model"] == "m1":
+                    record["item_id"] = record["item_id"].replace("__m1__", "__m2__")
+            raw_path.write_text(
+                "\n".join(json.dumps(record) for record in records) + "\n"
+            )
+
+            with self.assertRaises(ValueError) as caught:
+                self._export(root)
+            self.assertIn("audit another model", str(caught.exception))
+            self.assertTrue(benchmark)
+
+    def test_task3_rows_from_a_different_generation_are_refused(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_cell(root, "mlm_tapt", "must")
+            raw_path = eu.task3_raw_path(root, "mlm_tapt", "must")
+            records = [json.loads(line) for line in raw_path.read_text().splitlines()]
+            records[0]["item_id"] = "S9999_mandatory__task3__m1__blind"
+            raw_path.write_text(
+                "\n".join(json.dumps(record) for record in records) + "\n"
+            )
+
+            with self.assertRaises(ValueError) as caught:
+                self._export(root)
+            self.assertIn("different Task 2 generation", str(caught.exception))
+
+    def test_request_clustered_interval_is_primary_when_rows_carry_a_batch_id(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_cell(root, "mlm_tapt", "must")
+            seed_clustered = self._rows(self._export(root))[("m1", "all", "all")]
+            # The shared fixture writes no batch_id, so the primary interval
+            # falls back to the seed and the two pairs coincide.
+            self.assertEqual(seed_clustered["task2_ci_cluster_field"], "seed_id")
+            self.assertEqual(
+                seed_clustered["task2_strict_strengthening_ci_low"],
+                seed_clustered["task2_strict_strengthening_seed_ci_low"],
+            )
+
+    def test_provenance_records_the_cohort_split_and_the_audit_runs(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_cell(root, "mlm_tapt", "must")
+            result = self._export(root, local_models=["m2"])
+            provenance = json.loads(
+                result["paths"]["provenance"].read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(provenance["models_hosted"], ["m1"])
+            self.assertEqual(provenance["models_local"], ["m2"])
+            self.assertEqual(provenance["task3_audit_mode"], "blind")
+            cell = provenance["cells"][0]
+            self.assertEqual(
+                cell["task3_run_ids"], {"m1": "task3-m1", "m2": "task3-m2"}
+            )
+            self.assertEqual(cell["n_task3_raw_rows"], 2 * cell["n_benchmark_items"])
+            self.assertIn("per_model_rq_table", provenance["outputs"])
+
+    def test_rq_table_is_written_with_its_markdown_mirror(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_cell(root, "mlm_tapt", "must")
+            result = self._export(root)
+            path = result["paths"]["per_model_rq_table"]
+
+            self.assertTrue(path.exists())
+            self.assertTrue(path.with_suffix(".md").exists())
+            written = eu.read_csv_rows(path)
+            self.assertEqual(len(written), len(result["rq_rows"]))
+            self.assertEqual(list(written[0]), export.PER_MODEL_RQ_FIELDS)
+
+
+def _rq_score_row(
+    item_id,
+    *,
+    model="m1",
+    seed_id="S0001",
+    batch_id=None,
+    source_modality="nice_to_have",
+    strict=False,
+    confidence=0.95,
+    parse_status="ok",
+):
+    """A deterministic Task 2 score row, as `build_uq_scores` emits one."""
+    row = {
+        "model": model,
+        "task": "task2",
+        "uq_method": "verbalized_confidence",
+        "item_id": item_id,
+        "seed_id": seed_id,
+        "dataset_id": "mlm_tapt",
+        "benchmark_variant": "must",
+        "source_modality": source_modality,
+        "gold_modality": source_modality,
+        "text_modality_parse_status": parse_status,
+        "strict_text_overcommit": strict,
+        "text_overcommit": strict,
+        "strict_text_high_conf_overcommit_90": bool(strict and confidence >= 0.90),
+        "confidence": confidence,
+        "uncertainty_score": 1.0 - confidence,
+    }
+    if batch_id is not None:
+        row["batch_id"] = batch_id
+    return row
+
+
+class RqSliceMetricsTest(unittest.TestCase):
+    """The slice joins and detector metrics behind the per-model RQ table."""
+
+    def _slices(self, rows, *, meaning_variation=None, task3=None, consistency=None):
+        return export.rq_metric_slices(
+            [],
+            rows,
+            consistency or {},
+            meaning_variation or {},
+            task3 or [],
+        )
+
+    def test_meaning_variation_auroc_ranks_strengthened_answers_by_uncertainty(self):
+        rows = [
+            _rq_score_row(f"i{index}", strict=index < 4, seed_id=f"S{index:04d}")
+            for index in range(8)
+        ]
+        # Strengthened answers vary more in meaning than faithful ones.
+        meaning_variation = {
+            export.paper_join_key(row): {
+                "uncertainty_score": 0.9
+                if eu.is_truthy_strict(row["strict_text_overcommit"])
+                else 0.1
+            }
+            for row in rows
+        }
+        slices = self._slices(rows, meaning_variation=meaning_variation)
+        row = export.per_model_rq_row(
+            "m1",
+            "all",
+            "all",
+            slices,
+            n_models_pooled=1,
+            n_cells_pooled=1,
+            bootstrap_samples=0,
+        )
+
+        self.assertEqual(row["task2_meaning_variation_auroc"], 1.0)
+        self.assertEqual(row["task2_meaning_variation_auroc_n"], 8)
+        self.assertEqual(row["task2_meaning_variation_auroc_n_positive"], 4)
+        self.assertEqual(
+            row["task2_meaning_variation_auroc"],
+            eu.auroc_score([1, 1, 1, 1, 0, 0, 0, 0], [0.9] * 4 + [0.1] * 4),
+        )
+
+    def test_verbalized_confidence_auroc_scores_one_minus_confidence(self):
+        rows = [
+            _rq_score_row(
+                f"i{index}",
+                strict=index < 4,
+                # Strengthened answers are asserted slightly less confidently.
+                confidence=0.80 if index < 4 else 0.99,
+                seed_id=f"S{index:04d}",
+            )
+            for index in range(8)
+        ]
+        meaning_variation = {
+            export.paper_join_key(row): {"uncertainty_score": 0.5} for row in rows
+        }
+        row = export.per_model_rq_row(
+            "m1",
+            "all",
+            "all",
+            self._slices(rows, meaning_variation=meaning_variation),
+            n_models_pooled=1,
+            n_cells_pooled=1,
+            bootstrap_samples=0,
+        )
+
+        # Higher uncertainty must mean more strengthening, so a less confident
+        # strengthened answer is a correct ranking, not an inverted one.
+        self.assertEqual(row["task2_verbalized_confidence_auroc"], 1.0)
+        self.assertEqual(row["task2_meaning_variation_auroc"], 0.5)
+
+    def test_auroc_is_blank_when_every_answer_has_the_same_label(self):
+        rows = [
+            _rq_score_row(f"i{index}", strict=True, seed_id=f"S{index:04d}")
+            for index in range(4)
+        ]
+        meaning_variation = {
+            export.paper_join_key(row): {"uncertainty_score": 0.5} for row in rows
+        }
+        row = export.per_model_rq_row(
+            "m1",
+            "all",
+            "all",
+            self._slices(rows, meaning_variation=meaning_variation),
+            n_models_pooled=1,
+            n_cells_pooled=1,
+            bootstrap_samples=0,
+        )
+
+        self.assertEqual(row["task2_meaning_variation_auroc"], "")
+        self.assertEqual(row["task2_meaning_variation_auroc_n"], 4)
+        self.assertEqual(row["task2_meaning_variation_auroc_n_positive"], 4)
+
+    def test_task3_verdicts_cluster_on_the_audited_task2_request(self):
+        rows = [
+            _rq_score_row("i0", strict=True, batch_id="r1"),
+            _rq_score_row("i1", strict=True, batch_id="r1"),
+        ]
+        task3 = [
+            {
+                "model": "m1",
+                "task": "task3",
+                "uq_method": "verbalized_confidence",
+                "dataset_id": "mlm_tapt",
+                "benchmark_variant": "must",
+                "source_item_id": "i0",
+                "gold_relation": "strengthens",
+                "pred_relation": "strengthens",
+                # The audit's own request must NOT become the cluster.
+                "batch_id": "audit-request",
+            },
+            {
+                "model": "m1",
+                "task": "task3",
+                "uq_method": "verbalized_confidence",
+                "dataset_id": "mlm_tapt",
+                "benchmark_variant": "must",
+                "source_item_id": "i1",
+                "gold_relation": "strengthens",
+                "pred_relation": "preserves",
+                "batch_id": "audit-request",
+            },
+        ]
+        slices = self._slices(rows, task3=task3)
+
+        self.assertEqual(
+            [row["batch_id"] for row in slices["task3_strict"]], ["r1", "r1"]
+        )
+        row = export.per_model_rq_row(
+            "m1",
+            "all",
+            "all",
+            slices,
+            n_models_pooled=1,
+            n_cells_pooled=1,
+            bootstrap_samples=10,
+        )
+        self.assertEqual(row["task3_ci_cluster_field"], "batch_id")
+        self.assertEqual(row["task3_strict_flagged_n"], 1)
+        self.assertEqual(row["task3_strict_called_preserved_n"], 1)
+        self.assertEqual(row["task3_strict_flagged_denominator"], 2)
+
+    def test_unaudited_strengthened_answers_are_counted_not_hidden(self):
+        rows = [
+            _rq_score_row("i0", strict=True, seed_id="S0001"),
+            _rq_score_row("i1", strict=True, seed_id="S0002"),
+        ]
+        task3 = [
+            {
+                "model": "m1",
+                "task": "task3",
+                "uq_method": "verbalized_confidence",
+                "dataset_id": "mlm_tapt",
+                "benchmark_variant": "must",
+                "source_item_id": "i0",
+                "gold_relation": "strengthens",
+                "pred_relation": "strengthens",
+            }
+        ]
+        row = export.per_model_rq_row(
+            "m1",
+            "all",
+            "all",
+            self._slices(rows, task3=task3),
+            n_models_pooled=1,
+            n_cells_pooled=1,
+            bootstrap_samples=0,
+        )
+
+        self.assertEqual(row["task3_strict_joined_n"], 1)
+        self.assertEqual(row["task3_strict_unaudited_n"], 1)
+
+    def test_request_clustered_interval_is_primary_and_seed_clustered_is_kept(self):
+        # Two requests, each holding two whole seeds; strengthening is
+        # all-or-none per request, which the seed clustering cannot see.
+        rows = [
+            _rq_score_row(
+                f"i{index}",
+                seed_id=f"S{index:04d}",
+                batch_id="r1" if index < 4 else "r2",
+                strict=index < 4,
+            )
+            for index in range(8)
+        ]
+        row = export.per_model_rq_row(
+            "m1",
+            "all",
+            "all",
+            self._slices(rows),
+            n_models_pooled=1,
+            n_cells_pooled=1,
+            bootstrap_samples=200,
+        )
+
+        self.assertEqual(row["task2_ci_cluster_field"], "batch_id")
+        request_width = (
+            row["task2_strict_strengthening_ci_high"]
+            - row["task2_strict_strengthening_ci_low"]
+        )
+        seed_width = (
+            row["task2_strict_strengthening_seed_ci_high"]
+            - row["task2_strict_strengthening_seed_ci_low"]
+        )
+        self.assertGreater(request_width, seed_width)
+
+    def test_rows_without_a_batch_id_fall_back_to_seed_clustering(self):
+        rows = [
+            _rq_score_row(f"i{index}", seed_id=f"S{index:04d}", strict=index < 4)
+            for index in range(8)
+        ]
+        row = export.per_model_rq_row(
+            "m1",
+            "all",
+            "all",
+            self._slices(rows),
+            n_models_pooled=1,
+            n_cells_pooled=1,
+            bootstrap_samples=50,
+        )
+
+        self.assertEqual(row["task2_ci_cluster_field"], "seed_id")
+        self.assertEqual(
+            row["task2_strict_strengthening_ci_low"],
+            row["task2_strict_strengthening_seed_ci_low"],
+        )
+
+    def test_weak_intent_rate_gates_the_numerator_not_the_denominator(self):
+        rows = [
+            _rq_score_row("i0", strict=True, confidence=0.95),
+            _rq_score_row("i1", strict=True, confidence=0.50),
+            _rq_score_row("i2", strict=False, confidence=0.95),
+            _rq_score_row("i3", strict=True, source_modality="optional"),
+        ]
+
+        self.assertEqual(eu.weak_intent_strict_strengthening_rate(rows), 2 / 3)
+        self.assertEqual(eu.weak_intent_strict_strengthening_rate(rows, 0.90), 1 / 3)
+
+    def test_unreadable_answers_are_excluded_from_the_strengthening_denominator(self):
+        rows = [
+            _rq_score_row("i0", strict=True),
+            _rq_score_row("i1", parse_status="unknown"),
+        ]
+        row = export.per_model_rq_row(
+            "m1",
+            "all",
+            "all",
+            self._slices(rows),
+            n_models_pooled=1,
+            n_cells_pooled=1,
+            bootstrap_samples=0,
+        )
+
+        self.assertEqual(row["task2_n"], 2)
+        self.assertEqual(row["task2_n_readable"], 1)
+        self.assertEqual(row["task2_strict_strengthening_denominator"], 1)
+        self.assertEqual(row["task2_no_cue_n"], 1)
+        self.assertEqual(row["task2_no_cue_rate"], 0.5)

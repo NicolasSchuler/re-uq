@@ -34,14 +34,15 @@ import argparse
 import json
 import math
 from collections import defaultdict
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
 try:
     import eval_utils as eu
+    import run_provenance as rp
 except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
-    from scripts import eval_utils as eu
+    from scripts import eval_utils as eu, run_provenance as rp
 
 
 DEFAULT_CELLS = [
@@ -68,6 +69,7 @@ DEFAULT_PAPER_BATCH_SIZE = 16
 DEFAULT_EXPECTED_STOCHASTIC_SAMPLES = 5
 BOOTSTRAP_SEED = 20260518
 HIGH_CONFIDENCE_THRESHOLD = 0.90
+DEFAULT_TASK3_AUDIT_MODE = eu.OFFICIAL_TASK3_AUDIT_MODE
 
 TASK2_SNAPSHOT_NAME = "paper_task2_text_drift_metrics.csv"
 CONFIDENCE_SNAPSHOT_NAME = "paper_text_drift_confidence_and_stability.csv"
@@ -183,6 +185,85 @@ PER_MODEL_FIELDS = [
 ]
 
 
+#: Rates the per-model RQ table reports, each with counts and both cluster
+#: bootstrap intervals. Order is the reading order of the manuscript tables.
+RQ_RATE_METRICS = (
+    # RQ1
+    "task1_unsupported_acceptance_90",
+    "task2_no_cue",
+    "task2_strict_strengthening",
+    "task2_broad_strengthening",
+    "task2_weak_strict_strengthening",
+    "task2_weak_strict_high_conf_90",
+    # RQ2
+    "task2_strict_high_conf_90",
+    "task2_strict_agreement",
+    # RQ3
+    "task3_strict_flagged",
+    "task3_strict_called_preserved",
+)
+#: Detector AUROCs, reported with the same clustered intervals as the rates.
+RQ_AUROC_METRICS = (
+    "task2_meaning_variation_auroc",
+    "task2_verbalized_confidence_auroc",
+)
+
+
+def _rate_columns(name: str) -> list[str]:
+    """The seven columns one clustered rate contributes, in reading order."""
+    return [
+        f"{name}_n",
+        f"{name}_denominator",
+        f"{name}_rate",
+        f"{name}_ci_low",
+        f"{name}_ci_high",
+        f"{name}_seed_ci_low",
+        f"{name}_seed_ci_high",
+    ]
+
+
+def _auroc_columns(name: str) -> list[str]:
+    return [
+        name,
+        f"{name}_n",
+        f"{name}_n_positive",
+        f"{name}_ci_low",
+        f"{name}_ci_high",
+        f"{name}_seed_ci_low",
+        f"{name}_seed_ci_high",
+    ]
+
+
+PER_MODEL_RQ_NAME = "paper_per_model_rq_table.csv"
+PER_MODEL_RQ_FIELDS = (
+    [
+        "model",
+        "dataset",
+        "variant",
+        "n_models_pooled",
+        "n_cells_pooled",
+        "bootstrap_samples",
+        "bootstrap_seed",
+        "task1_ci_cluster_field",
+        "task2_ci_cluster_field",
+        "task3_ci_cluster_field",
+        # Denominators the manuscript prints as N columns.
+        "task1_n",
+        "task1_accuracy",
+        "task2_n",
+        "task2_n_readable",
+        "task2_weak_n",
+        "task2_weak_n_readable",
+        "task3_n",
+        "task3_strict_joined_n",
+        "task3_strict_unaudited_n",
+        "task2_strict_agreement_incomplete_excluded",
+    ]
+    + [column for name in RQ_RATE_METRICS for column in _rate_columns(name)]
+    + [column for name in RQ_AUROC_METRICS for column in _auroc_columns(name)]
+)
+
+
 # ---------------------------------------------------------------------------
 # Run selection
 # ---------------------------------------------------------------------------
@@ -200,8 +281,19 @@ def select_cell_runs(
     expected_batch_order: str | None = None,
     expected_batch_size: int | None = None,
     run_prefixes: Iterable[str] | None = None,
+    required_tasks: Iterable[str] = ("task1", "task2"),
+    exact_tasks: Iterable[str] | None = ("task1", "task2"),
+    allow_partial_benchmark: bool = False,
+    accept_row: Callable[[Mapping[str, Any]], bool] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Pick the latest compatible registry run for each cohort model."""
+    """Pick the latest compatible registry run for each cohort model.
+
+    The task and coverage defaults describe a Task 1 + Task 2 paper run.
+    :func:`select_task3_cell_runs` overrides them for the audit registry, whose
+    rows carry ``tasks=task3`` and one item per parsed Task 2 answer rather
+    than the whole benchmark. ``accept_row`` is a final per-row predicate, used
+    there to pin an audit to the Task 2 run it actually audited.
+    """
     cohort = list(models)
     excluded = list(exclude_model_prefixes)
     chosen: dict[str, dict[str, Any]] = {}
@@ -220,17 +312,20 @@ def select_cell_runs(
             run_id, run_prefixes
         ):
             continue
+        if accept_row is not None and not accept_row(row):
+            continue
         if run_group_id is not None:
             issues = eu.registry_row_compatibility_issues(
                 row,
                 run_group_id=run_group_id,
                 benchmark_item_count=benchmark_item_count,
                 expected_stochastic_samples=expected_stochastic_samples,
-                required_tasks=("task1", "task2"),
-                exact_tasks=("task1", "task2"),
+                required_tasks=required_tasks,
+                exact_tasks=exact_tasks,
                 expected_batch_order=expected_batch_order,
                 expected_batch_size=expected_batch_size,
-                allow_partial_benchmark=include_smoke and eu.is_smoke_run_id(run_id),
+                allow_partial_benchmark=allow_partial_benchmark
+                or (include_smoke and eu.is_smoke_run_id(run_id)),
                 # Historical paper rows predate this registry column. The pinned
                 # run group, exact task/coverage plan, and batch size still keep
                 # them distinct from newer batching ablations.
@@ -246,6 +341,52 @@ def select_cell_runs(
         ):
             chosen[model] = dict(row)
     return chosen
+
+
+def select_task3_cell_runs(
+    registry_rows: list[dict[str, Any]],
+    models: Iterable[str],
+    exclude_model_prefixes: Iterable[str] = DEFAULT_EXCLUDE_MODEL_PREFIXES,
+    include_smoke: bool = False,
+    *,
+    source_run_ids: Mapping[str, str],
+    run_group_id: str | None = None,
+    benchmark_item_count: int = 0,
+    expected_stochastic_samples: int = DEFAULT_EXPECTED_STOCHASTIC_SAMPLES,
+    expected_batch_order: str | None = None,
+    expected_batch_size: int | None = None,
+    run_prefixes: Iterable[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Pick each model's blind audit of the Task 2 run already chosen for it.
+
+    Two differences from the Task 1/2 selection. The audit registry plans one
+    item per *parsed* Task 2 answer, so its planned size is at most the
+    benchmark and ``allow_partial_benchmark`` is the right gate. And an audit
+    only describes the run it read: a Task 3 row naming a different
+    ``source_run_id`` measures another Task 2 generation and must not be pooled
+    with this one, so `source_run_ids` pins it per model.
+    """
+
+    def audits_the_chosen_run(row: Mapping[str, Any]) -> bool:
+        expected = str(source_run_ids.get(str(row.get("model", "")), ""))
+        return bool(expected) and rp.registry_source_run_id(row) == expected
+
+    return select_cell_runs(
+        registry_rows,
+        models,
+        exclude_model_prefixes=exclude_model_prefixes,
+        include_smoke=include_smoke,
+        run_group_id=run_group_id,
+        benchmark_item_count=benchmark_item_count,
+        expected_stochastic_samples=expected_stochastic_samples,
+        expected_batch_order=expected_batch_order,
+        expected_batch_size=expected_batch_size,
+        run_prefixes=run_prefixes,
+        required_tasks=("task3",),
+        exact_tasks=("task3",),
+        allow_partial_benchmark=True,
+        accept_row=audits_the_chosen_run,
+    )
 
 
 def stream_raw_rows(path: Path, run_ids: set[str]) -> Iterator[dict[str, Any]]:
@@ -657,6 +798,485 @@ def per_model_row(
     }
 
 
+#: Annotations `rq_metric_slices` adds so a slice can be bootstrapped on its
+#: own: the strict label the detectors are scored against, the detector scores,
+#: and the agreement outcome joined from the repeated-sample rows.
+RQ_LABEL_FIELD = "rq_strict_label"
+RQ_MEANING_VARIATION_FIELD = "rq_meaning_variation_score"
+RQ_CONFIDENCE_UNCERTAINTY_FIELD = "rq_confidence_uncertainty"
+RQ_AGREEMENT_FIELD = "rq_agreement_unanimous"
+
+
+def task1_deterministic_rows(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in scores
+        if str(row.get("task", "")) == "task1"
+        and str(row.get("uq_method", "")) == "verbalized_confidence"
+    ]
+
+
+def task3_deterministic_rows(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in scores
+        if str(row.get("task", "")) == "task3"
+        and str(row.get("uq_method", "")) == "verbalized_confidence"
+    ]
+
+
+def rq_metric_slices(
+    task1_rows: list[dict[str, Any]],
+    task2_det_rows: list[dict[str, Any]],
+    consistency: dict[PaperJoinKey, dict[str, Any]],
+    meaning_variation: dict[PaperJoinKey, dict[str, Any]],
+    task3_rows: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Row slices the RQ metrics are computed and bootstrapped over.
+
+    Every returned row is a copy of a *deterministic* score row, so it already
+    carries the ``batch_id`` of the request that decided it and the ``seed_id``
+    of its capability; the repeated-sample and Task 3 quantities are joined
+    onto it rather than clustered on their own requests. That keeps one
+    resampling unit per slice and matches how the archived runs behave: a
+    request decides its whole answer set at once (``docs/aggregation.md`` §6).
+    """
+    readable = [
+        row
+        for row in task2_det_rows
+        if str(row.get("text_modality_parse_status", "")) == "ok"
+    ]
+    strict_rows = [
+        row
+        for row in readable
+        if eu.is_truthy_strict(row.get("strict_text_overcommit"))
+    ]
+
+    def labelled(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            RQ_LABEL_FIELD: 1
+            if eu.is_truthy_strict(row.get("strict_text_overcommit"))
+            else 0,
+        }
+
+    acse_slice: list[dict[str, Any]] = []
+    for row in readable:
+        acse_row = meaning_variation.get(paper_join_key(row))
+        score = _numeric(acse_row.get("uncertainty_score")) if acse_row else None
+        if score is None:
+            continue
+        acse_slice.append(
+            {
+                **labelled(row),
+                RQ_MEANING_VARIATION_FIELD: score,
+                RQ_CONFIDENCE_UNCERTAINTY_FIELD: _numeric(row.get("uncertainty_score")),
+            }
+        )
+
+    agreement_slice: list[dict[str, Any]] = []
+    for row in strict_rows:
+        consistency_row = consistency.get(paper_join_key(row))
+        if consistency_row is None or not eu.is_truthy_strict(
+            consistency_row.get("stochastic_complete")
+        ):
+            continue
+        agreement_slice.append(
+            {
+                **row,
+                RQ_AGREEMENT_FIELD: 1
+                if _numeric(consistency_row.get("uncertainty_score")) == 0.0
+                else 0,
+            }
+        )
+
+    # Task 3 verdicts, carried on the deterministic Task 2 row they audit, so a
+    # request that decided several strengthened answers stays one cluster.
+    strict_by_source: dict[PaperJoinKey, dict[str, Any]] = {
+        paper_join_key(row): row for row in strict_rows
+    }
+    task3_slice: list[dict[str, Any]] = []
+    for row in task3_rows:
+        key = (
+            str(row.get("model", "")),
+            str(row.get("dataset_id", "")),
+            str(row.get("benchmark_variant", "")),
+            str(row.get("source_item_id", "")),
+        )
+        source_row = strict_by_source.get(key)
+        if source_row is None:
+            continue
+        task3_slice.append(
+            {
+                **source_row,
+                "gold_relation": row.get("gold_relation", ""),
+                "pred_relation": row.get("pred_relation", ""),
+            }
+        )
+
+    return {
+        "task1": list(task1_rows),
+        "task2": list(task2_det_rows),
+        "task2_readable": readable,
+        "task2_weak": [
+            row
+            for row in task2_det_rows
+            if str(row.get("source_modality", "")) == "nice_to_have"
+        ],
+        "task2_strict": strict_rows,
+        "task2_agreement": agreement_slice,
+        "task2_acse": acse_slice,
+        "task3_strict": task3_slice,
+    }
+
+
+RQ_SLICE_NAMES = (
+    "task1",
+    "task2",
+    "task2_readable",
+    "task2_weak",
+    "task2_strict",
+    "task2_agreement",
+    "task2_acse",
+    "task3_strict",
+)
+
+
+def slices_for_model(
+    slices: Mapping[str, list[dict[str, Any]]], model: str
+) -> dict[str, list[dict[str, Any]]]:
+    """The one model's rows of every slice (each row carries its `model`)."""
+    return {
+        name: [row for row in slices[name] if str(row.get("model", "")) == model]
+        for name in RQ_SLICE_NAMES
+    }
+
+
+def merge_slices(
+    parts: Iterable[Mapping[str, list[dict[str, Any]]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Pool slices over cells (or models); rows keep their own cell identity."""
+    merged: dict[str, list[dict[str, Any]]] = {name: [] for name in RQ_SLICE_NAMES}
+    for part in parts:
+        for name in RQ_SLICE_NAMES:
+            merged[name].extend(part[name])
+    return merged
+
+
+def _count(rows: Iterable[Mapping[str, Any]], field: str) -> int:
+    return sum(1 for row in rows if eu.is_truthy_strict(row.get(field)))
+
+
+def _rate_fields(
+    name: str, numerator: int, denominator: int, ci: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Counts, point estimate, and both cluster intervals for one rate."""
+    return {
+        f"{name}_n": numerator,
+        f"{name}_denominator": denominator,
+        f"{name}_rate": numerator / denominator if denominator else "",
+        f"{name}_ci_low": ci.get(f"{name}_ci_low", ""),
+        f"{name}_ci_high": ci.get(f"{name}_ci_high", ""),
+        f"{name}_seed_ci_low": ci.get(f"{name}_seed_ci_low", ""),
+        f"{name}_seed_ci_high": ci.get(f"{name}_seed_ci_high", ""),
+    }
+
+
+def _auroc_fields(
+    name: str,
+    rows: list[dict[str, Any]],
+    score_field: str,
+    ci: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = _rq_auroc(rows, score_field)
+    return {
+        name: "" if isinstance(value, float) and math.isnan(value) else value,
+        f"{name}_n": len(rows),
+        f"{name}_n_positive": sum(int(row[RQ_LABEL_FIELD]) for row in rows),
+        f"{name}_ci_low": ci.get(f"{name}_ci_low", ""),
+        f"{name}_ci_high": ci.get(f"{name}_ci_high", ""),
+        f"{name}_seed_ci_low": ci.get(f"{name}_seed_ci_low", ""),
+        f"{name}_seed_ci_high": ci.get(f"{name}_seed_ci_high", ""),
+    }
+
+
+def _rq_auroc(rows: list[dict[str, Any]], score_field: str) -> float:
+    """AUROC of a detector score against the strict-strengthening label.
+
+    Higher uncertainty must mean more strengthening, so the score is the row's
+    *uncertainty* (meaning variation, or 1 - verbalized confidence). Degenerate
+    label sets return NaN, which the bootstrap drops and the writer blanks.
+    """
+    labels = [int(row[RQ_LABEL_FIELD]) for row in rows]
+    scores = [row.get(score_field) for row in rows]
+    usable = [
+        (label, float(score))
+        for label, score in zip(labels, scores, strict=True)
+        if score is not None and score != ""
+    ]
+    if not usable or len({label for label, _ in usable}) < 2:
+        return math.nan
+    return eu.auroc_score(
+        [label for label, _ in usable], [score for _, score in usable]
+    )
+
+
+def per_model_rq_row(
+    model: str,
+    dataset: str,
+    variant: str,
+    slices: dict[str, list[dict[str, Any]]],
+    *,
+    n_models_pooled: int,
+    n_cells_pooled: int,
+    bootstrap_samples: int,
+) -> dict[str, Any]:
+    """One row of the per-model RQ table: every RQ1/RQ2/RQ3 quantity at once.
+
+    Rates are computed on the same row slices that are resampled, so a printed
+    rate and its interval can never come from different denominators. Each task
+    family records the cluster its interval actually used
+    (``task*_ci_cluster_field``); it is ``batch_id`` for runs that carry one and
+    ``seed_id`` for legacy or single-item rows.
+    """
+    task1_rows = slices["task1"]
+    task2_rows = slices["task2"]
+    readable = slices["task2_readable"]
+    weak_rows = slices["task2_weak"]
+    weak_readable = [
+        row
+        for row in weak_rows
+        if str(row.get("text_modality_parse_status", "")) == "ok"
+    ]
+    strict_rows = slices["task2_strict"]
+    agreement_rows = slices["task2_agreement"]
+    acse_rows = slices["task2_acse"]
+    task3_rows = slices["task3_strict"]
+    accepted_n, weak_source_n = _unsupported_acceptance_counts(task1_rows)
+
+    task1_ci = eu.cluster_ci_fields(
+        task1_rows,
+        {
+            "task1_unsupported_acceptance_90": lambda rows: (
+                eu.unsupported_mandatory_acceptance_rate(
+                    rows, HIGH_CONFIDENCE_THRESHOLD
+                )
+            )
+        }
+        if task1_rows and bootstrap_samples > 0
+        else {},
+        iterations=bootstrap_samples,
+        seed=BOOTSTRAP_SEED,
+    )
+    task2_ci = eu.cluster_ci_fields(
+        task2_rows,
+        {
+            "task2_no_cue": _no_cue_rate,
+            "task2_strict_strengthening": lambda rows: eu.text_strengthening_rate(
+                rows, strict=True
+            ),
+            "task2_broad_strengthening": lambda rows: eu.text_strengthening_rate(
+                rows, strict=False
+            ),
+            "task2_weak_strict_strengthening": (
+                eu.weak_intent_strict_strengthening_rate
+            ),
+            "task2_weak_strict_high_conf_90": lambda rows: (
+                eu.weak_intent_strict_strengthening_rate(
+                    rows, HIGH_CONFIDENCE_THRESHOLD
+                )
+            ),
+        }
+        if task2_rows and bootstrap_samples > 0
+        else {},
+        iterations=bootstrap_samples,
+        seed=BOOTSTRAP_SEED,
+    )
+    strict_ci = eu.cluster_ci_fields(
+        strict_rows,
+        {"task2_strict_high_conf_90": _high_confidence_share}
+        if strict_rows and bootstrap_samples > 0
+        else {},
+        iterations=bootstrap_samples,
+        seed=BOOTSTRAP_SEED,
+    )
+    agreement_ci = eu.cluster_ci_fields(
+        agreement_rows,
+        {"task2_strict_agreement": _agreement_rate}
+        if agreement_rows and bootstrap_samples > 0
+        else {},
+        iterations=bootstrap_samples,
+        seed=BOOTSTRAP_SEED,
+    )
+    acse_ci = eu.cluster_ci_fields(
+        acse_rows,
+        {
+            "task2_meaning_variation_auroc": lambda rows: _rq_auroc(
+                rows, RQ_MEANING_VARIATION_FIELD
+            ),
+            "task2_verbalized_confidence_auroc": lambda rows: _rq_auroc(
+                rows, RQ_CONFIDENCE_UNCERTAINTY_FIELD
+            ),
+        }
+        if acse_rows and bootstrap_samples > 0
+        else {},
+        iterations=bootstrap_samples,
+        seed=BOOTSTRAP_SEED,
+    )
+    task3_ci = eu.cluster_ci_fields(
+        task3_rows,
+        {
+            "task3_strict_flagged": eu.task3_strengthening_recall,
+            "task3_strict_called_preserved": eu.task3_false_preserve_rate,
+        }
+        if task3_rows and bootstrap_samples > 0
+        else {},
+        iterations=bootstrap_samples,
+        seed=BOOTSTRAP_SEED,
+    )
+
+    return {
+        "model": model,
+        "dataset": dataset,
+        "variant": variant,
+        "n_models_pooled": n_models_pooled,
+        "n_cells_pooled": n_cells_pooled,
+        "bootstrap_samples": bootstrap_samples,
+        "bootstrap_seed": BOOTSTRAP_SEED,
+        "task1_ci_cluster_field": task1_ci.get("bootstrap_ci_cluster_field", ""),
+        "task2_ci_cluster_field": task2_ci.get("bootstrap_ci_cluster_field", ""),
+        "task3_ci_cluster_field": task3_ci.get("bootstrap_ci_cluster_field", ""),
+        "task1_n": len(task1_rows),
+        "task1_accuracy": _task1_accuracy(task1_rows),
+        "task2_n": len(task2_rows),
+        "task2_n_readable": len(readable),
+        "task2_weak_n": len(weak_rows),
+        "task2_weak_n_readable": len(weak_readable),
+        "task3_n": len(task3_rows),
+        "task3_strict_joined_n": len(task3_rows),
+        "task3_strict_unaudited_n": max(0, len(strict_rows) - len(task3_rows)),
+        # Strict-strengthened answers whose repeated samples did not all parse:
+        # an incomplete measurement, not a smaller one.
+        "task2_strict_agreement_incomplete_excluded": len(strict_rows)
+        - len(agreement_rows),
+        **_rate_fields(
+            "task1_unsupported_acceptance_90", accepted_n, weak_source_n, task1_ci
+        ),
+        **_rate_fields(
+            "task2_no_cue", len(task2_rows) - len(readable), len(task2_rows), task2_ci
+        ),
+        **_rate_fields(
+            "task2_strict_strengthening",
+            _count(readable, "strict_text_overcommit"),
+            len(readable),
+            task2_ci,
+        ),
+        **_rate_fields(
+            "task2_broad_strengthening",
+            _count(readable, "text_overcommit"),
+            len(readable),
+            task2_ci,
+        ),
+        **_rate_fields(
+            "task2_weak_strict_strengthening",
+            _count(weak_readable, "strict_text_overcommit"),
+            len(weak_readable),
+            task2_ci,
+        ),
+        **_rate_fields(
+            "task2_weak_strict_high_conf_90",
+            _count(weak_readable, "strict_text_high_conf_overcommit_90"),
+            len(weak_readable),
+            task2_ci,
+        ),
+        **_rate_fields(
+            "task2_strict_high_conf_90",
+            sum(
+                1
+                for row in strict_rows
+                if (_numeric(row.get("confidence")) or 0.0) >= HIGH_CONFIDENCE_THRESHOLD
+            ),
+            len(strict_rows),
+            strict_ci,
+        ),
+        **_rate_fields(
+            "task2_strict_agreement",
+            sum(int(row[RQ_AGREEMENT_FIELD]) for row in agreement_rows),
+            len(agreement_rows),
+            agreement_ci,
+        ),
+        **_rate_fields(
+            "task3_strict_flagged",
+            sum(1 for row in task3_rows if row.get("pred_relation") == "strengthens"),
+            len(task3_rows),
+            task3_ci,
+        ),
+        **_rate_fields(
+            "task3_strict_called_preserved",
+            sum(1 for row in task3_rows if row.get("pred_relation") == "preserves"),
+            len(task3_rows),
+            task3_ci,
+        ),
+        **_auroc_fields(
+            "task2_meaning_variation_auroc",
+            acse_rows,
+            RQ_MEANING_VARIATION_FIELD,
+            acse_ci,
+        ),
+        **_auroc_fields(
+            "task2_verbalized_confidence_auroc",
+            acse_rows,
+            RQ_CONFIDENCE_UNCERTAINTY_FIELD,
+            acse_ci,
+        ),
+    }
+
+
+def _no_cue_rate(rows: list[dict[str, Any]]) -> float:
+    """Share of Task 2 answers whose text carried no readable modal cue."""
+    if not rows:
+        return math.nan
+    readable = sum(
+        1 for row in rows if str(row.get("text_modality_parse_status", "")) == "ok"
+    )
+    return (len(rows) - readable) / len(rows)
+
+
+def _high_confidence_share(rows: list[dict[str, Any]]) -> float:
+    if not rows:
+        return math.nan
+    return sum(
+        1
+        for row in rows
+        if (_numeric(row.get("confidence")) or 0.0) >= HIGH_CONFIDENCE_THRESHOLD
+    ) / len(rows)
+
+
+def _agreement_rate(rows: list[dict[str, Any]]) -> float:
+    if not rows:
+        return math.nan
+    return sum(int(row[RQ_AGREEMENT_FIELD]) for row in rows) / len(rows)
+
+
+def _task1_accuracy(rows: list[dict[str, Any]]) -> float | str:
+    if not rows:
+        return ""
+    correct = sum(1 for row in rows if str(row.get("y_true")) == str(row.get("y_pred")))
+    return correct / len(rows)
+
+
+def _unsupported_acceptance_counts(rows: list[dict[str, Any]]) -> tuple[int, int]:
+    """(accepted at >=0.90, weak-source Task 1 items) -- the RQ1 N column."""
+    weak = [row for row in rows if str(row.get("y_true", "")) == "0"]
+    accepted = sum(
+        1
+        for row in weak
+        if row.get("p_yes") not in {"", None}
+        and float(row["p_yes"]) >= HIGH_CONFIDENCE_THRESHOLD
+    )
+    return accepted, len(weak)
+
+
 # ---------------------------------------------------------------------------
 # Cell scoring
 # ---------------------------------------------------------------------------
@@ -811,6 +1431,148 @@ def score_cell(
     }
 
 
+def score_task3_cell(
+    root: Path,
+    dataset: str,
+    variant: str,
+    *,
+    models: list[str],
+    exclude_model_prefixes: list[str],
+    source_run_ids: Mapping[str, str],
+    task2_raw_rows: list[dict[str, Any]],
+    include_smoke: bool = False,
+    expected_stochastic_samples: int = DEFAULT_EXPECTED_STOCHASTIC_SAMPLES,
+    run_group_id: str | None = DEFAULT_PAPER_RUN_GROUP_ID,
+    expected_batch_order: str | None = DEFAULT_PAPER_BATCH_ORDER,
+    expected_batch_size: int | None = DEFAULT_PAPER_BATCH_SIZE,
+    audit_mode: str = DEFAULT_TASK3_AUDIT_MODE,
+    allow_missing_task3: bool = False,
+) -> dict[str, Any]:
+    """Score the blind audits of the Task 2 runs `score_cell` already chose.
+
+    The audit items are **recomputed** from the Task 2 raw rows with
+    :func:`eval_utils.build_task3_verification_items` rather than read from a
+    file: the archived Task 3 raw rows do not carry the item fields, and the
+    items CSVs of the paper runs are not in the repository. The generated
+    ``item_id`` is deterministic (source item, model, audit mode), so a
+    recomputed item set either matches the audit rows exactly or the audit read
+    a different Task 2 generation -- which is what the coverage guard below
+    turns into an error instead of a silently short denominator.
+    """
+    benchmark_path = eu.artifact_path(
+        root / "data/processed/benchmark_items.csv", dataset, variant
+    )
+    benchmark = eu.read_csv_rows(benchmark_path)
+    smoke_flags = [False, True] if include_smoke else [False]
+    registry_paths = [
+        eu.task3_registry_path(root, dataset, variant, smoke=smoke)
+        for smoke in smoke_flags
+    ]
+    raw_paths = [
+        eu.task3_raw_path(root, dataset, variant, smoke=smoke) for smoke in smoke_flags
+    ]
+    registry_rows = [
+        row
+        for path in registry_paths
+        if path.exists()
+        for row in eu.read_csv_rows(path)
+    ]
+    audit_mode = eu.normalize_task3_audit_mode(audit_mode)
+    audit_suffix = (
+        "" if audit_mode == eu.OFFICIAL_TASK3_AUDIT_MODE else f"-{audit_mode}"
+    )
+    full_prefix = f"task3{audit_suffix}" + ("" if variant == "must" else f"-{variant}")
+    chosen = select_task3_cell_runs(
+        registry_rows,
+        models,
+        exclude_model_prefixes=exclude_model_prefixes,
+        include_smoke=include_smoke,
+        source_run_ids=source_run_ids,
+        run_group_id=run_group_id,
+        benchmark_item_count=len(benchmark),
+        expected_stochastic_samples=expected_stochastic_samples,
+        expected_batch_order=expected_batch_order,
+        expected_batch_size=expected_batch_size,
+        run_prefixes=[full_prefix, f"{full_prefix}-smoke"]
+        if include_smoke
+        else [full_prefix],
+    )
+    missing_models = sorted(set(source_run_ids) - set(chosen))
+    if missing_models and not allow_missing_task3:
+        raise ValueError(
+            "No compatible complete Task 3 audit found for model(s): "
+            f"{', '.join(missing_models)} in cell {dataset}/{variant}. Expected "
+            f"run_group_id={run_group_id!r}, tasks=task3, audit_mode={audit_mode!r}, "
+            "and a source_run_id naming the selected Task 2 run. Pass "
+            "--allow-missing-task3 to leave their Task 3 columns blank instead."
+        )
+    if missing_models:
+        eu.logger.warning(
+            "%s",
+            {
+                "warning": "models_without_task3_audits_dropped",
+                "models": missing_models,
+                "cell": f"{dataset}/{variant}",
+            },
+        )
+    run_ids = {str(row["run_id"]) for row in chosen.values()}
+    raw_rows = (
+        [
+            row
+            for path in raw_paths
+            if path.exists()
+            for row in stream_raw_rows(path, run_ids)
+        ]
+        if run_ids
+        else []
+    )
+    items = eu.build_task3_verification_items(
+        benchmark, task2_deterministic_raw_rows(task2_raw_rows), audit_mode
+    )
+    items_by_id = {str(item["item_id"]): item for item in items}
+    unknown = {
+        str(row.get("item_id", ""))
+        for row in raw_rows
+        if str(row.get("item_id", "")) not in items_by_id
+    }
+    if unknown:
+        raise ValueError(
+            f"Task 3 rows in {raw_paths[0]} audit {len(unknown)} item(s) that the "
+            f"selected Task 2 runs of cell {dataset}/{variant} do not produce, e.g. "
+            f"{sorted(unknown)[0]}. The audit read a different Task 2 generation."
+        )
+    cross_audited = sorted(
+        {
+            f"{row.get('model', '')}->{items_by_id[str(row['item_id'])]['task2_model']}"
+            for row in raw_rows
+            if str(items_by_id[str(row["item_id"])]["task2_model"])
+            != str(row.get("model", ""))
+        }
+    )
+    if cross_audited:
+        # Task 3 score rows carry the auditor's `model` only, so the per-model
+        # join below would attribute another model's answers to the auditor.
+        raise ValueError(
+            f"Task 3 rows in cell {dataset}/{variant} audit another model's answers "
+            f"({', '.join(cross_audited)}). The paper tables assume a self-audit."
+        )
+    scores = eu.build_task3_scores(items, raw_rows) if raw_rows else []
+    stamp_cell_identity(scores, dataset, variant)
+    return {
+        "dataset": dataset,
+        "variant": variant,
+        "audit_mode": audit_mode,
+        "task3_registry_path": str(registry_paths[0]),
+        "task3_raw_path": str(raw_paths[0]),
+        "task3_run_ids": {
+            model: str(row["run_id"]) for model, row in sorted(chosen.items())
+        },
+        "n_task3_items": len(items),
+        "n_task3_raw_rows": len(raw_rows),
+        "scores": scores,
+    }
+
+
 def markdown_for_rows(title: str, rows: list[dict[str, Any]], fields: list[str]) -> str:
     return "\n".join([f"# {title}", "", eu.markdown_table(rows, fields), ""])
 
@@ -829,9 +1591,14 @@ def export_tables(
     run_group_id: str | None = DEFAULT_PAPER_RUN_GROUP_ID,
     expected_batch_order: str | None = DEFAULT_PAPER_BATCH_ORDER,
     expected_batch_size: int | None = DEFAULT_PAPER_BATCH_SIZE,
+    local_models: list[str] | None = None,
+    include_task3: bool = True,
+    allow_missing_task3: bool = False,
+    task3_audit_mode: str = DEFAULT_TASK3_AUDIT_MODE,
 ) -> dict[str, Any]:
     """Regenerate every paper-facing table for ``cells`` and write them out."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    local_cohort = set(local_models or [])
     task2_rows: list[dict[str, Any]] = []
     confidence_rows: list[dict[str, Any]] = []
     per_model_rows: list[dict[str, Any]] = []
@@ -840,6 +1607,10 @@ def export_tables(
     pooled_by_model: dict[str, list[dict[str, Any]]] = {}
     pooled_consistency: dict[PaperJoinKey, dict[str, Any]] = {}
     pooled_items_by_model: dict[str, int] = {}
+    # RQ-table inputs, kept per model and per cell so the sparse row set of
+    # `paper_per_model_rq_table.csv` can be built without rescoring anything.
+    rq_cell_slices: list[tuple[str, str, dict[str, list[dict[str, Any]]]]] = []
+    rq_rows_by_model: dict[str, list[dict[str, list[dict[str, Any]]]]] = {}
 
     for dataset, variant in cells:
         cell = score_cell(
@@ -862,6 +1633,29 @@ def export_tables(
         cell["sampling_plan_source"] = cell.pop("sampling_plan").source
         det_rows = task2_deterministic_rows(scores)
         consistency = stochastic_rows_by_method(scores, "modality_consistency")
+        meaning_variation = stochastic_rows_by_method(scores, eu.ACSE_PROXY_METHOD)
+        task3_cell = (
+            score_task3_cell(
+                root,
+                dataset,
+                variant,
+                models=models,
+                exclude_model_prefixes=exclude_model_prefixes,
+                source_run_ids=cell["run_ids"],
+                task2_raw_rows=raw_rows,
+                include_smoke=include_smoke,
+                expected_stochastic_samples=int(expected_stochastic_samples or 0),
+                run_group_id=run_group_id,
+                expected_batch_order=expected_batch_order,
+                expected_batch_size=expected_batch_size,
+                audit_mode=task3_audit_mode,
+                allow_missing_task3=allow_missing_task3,
+            )
+            if include_task3
+            else {"scores": []}
+        )
+        task3_scores = task3_cell.pop("scores")
+        cell.update(task3_cell)
         # Index the deterministic rows once; the per-model and per-modality
         # slices below would otherwise rescan them models * (1 + 4) times.
         rows_by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -904,6 +1698,18 @@ def export_tables(
                         bootstrap_samples=bootstrap_samples,
                     )
                 )
+        cell_slices = rq_metric_slices(
+            task1_deterministic_rows(scores),
+            det_rows,
+            consistency,
+            meaning_variation,
+            task3_deterministic_rows(task3_scores),
+        )
+        rq_cell_slices.append((dataset, variant, cell_slices))
+        for model in cell_models:
+            rq_rows_by_model.setdefault(model, []).append(
+                slices_for_model(cell_slices, model)
+            )
         pooled_det_rows.extend(det_rows)
         pooled_consistency.update(consistency)
         provenance_cells.append(cell)
@@ -921,6 +1727,48 @@ def export_tables(
         )
         for model, rows in sorted(pooled_by_model.items())
     ]
+
+    # One row per model (pooled over cells), one per cell (pooled over models),
+    # and one grand row. The model x cell interior is deliberately not emitted:
+    # no table or macro reads it, and every extra slice is a full bootstrap.
+    n_cells = len(rq_cell_slices)
+    rq_rows = [
+        per_model_rq_row(
+            model,
+            "all",
+            "all",
+            merge_slices(parts),
+            n_models_pooled=1,
+            n_cells_pooled=len(parts),
+            bootstrap_samples=bootstrap_samples,
+        )
+        for model, parts in sorted(rq_rows_by_model.items())
+    ]
+    rq_rows.extend(
+        per_model_rq_row(
+            "all",
+            dataset,
+            variant,
+            cell_slices,
+            n_models_pooled=len(
+                {str(row.get("model", "")) for row in cell_slices["task2"]}
+            ),
+            n_cells_pooled=1,
+            bootstrap_samples=bootstrap_samples,
+        )
+        for dataset, variant, cell_slices in rq_cell_slices
+    )
+    rq_rows.append(
+        per_model_rq_row(
+            "all",
+            "all",
+            "all",
+            merge_slices(slices for _, _, slices in rq_cell_slices),
+            n_models_pooled=len(rq_rows_by_model),
+            n_cells_pooled=n_cells,
+            bootstrap_samples=bootstrap_samples,
+        )
+    )
 
     pooled_ci = eu.text_over_commitment_ci_fields(
         pooled_det_rows,
@@ -956,6 +1804,7 @@ def export_tables(
     )
     modality_path = output_dir / PER_MODEL_MODALITY_NAME
     headline_path = output_dir / PER_MODEL_HEADLINE_NAME
+    rq_path = output_dir / PER_MODEL_RQ_NAME
     headline_ci_path = output_dir / HEADLINE_CI_NAME
     provenance_path = output_dir / PROVENANCE_NAME
 
@@ -965,6 +1814,7 @@ def export_tables(
     )
     eu.write_csv_rows(modality_path, per_model_rows, fieldnames=PER_MODEL_FIELDS)
     eu.write_csv_rows(headline_path, headline_rows, fieldnames=PER_MODEL_FIELDS)
+    eu.write_csv_rows(rq_path, rq_rows, fieldnames=PER_MODEL_RQ_FIELDS)
     eu.write_csv_rows(headline_ci_path, headline_ci_rows)
     modality_path.with_suffix(".md").write_text(
         markdown_for_rows("Per-Model Modality Table", per_model_rows, PER_MODEL_FIELDS),
@@ -974,11 +1824,25 @@ def export_tables(
         markdown_for_rows("Per-Model Headline", headline_rows, PER_MODEL_FIELDS),
         encoding="utf-8",
     )
+    rq_path.with_suffix(".md").write_text(
+        markdown_for_rows("Per-Model RQ Table", rq_rows, PER_MODEL_RQ_FIELDS),
+        encoding="utf-8",
+    )
     provenance = {
         "generated_at_utc": eu.utc_now_iso(),
         "script": "scripts/export_paper_tables.py",
         "models_cohort": models,
+        # The cohort split the manuscript prints as separate table groups. The
+        # numbers exporter reads its row order from here, so a rerun with a
+        # different cohort needs no code change.
+        "models_hosted": [
+            model for model in sorted(rq_rows_by_model) if model not in local_cohort
+        ],
+        "models_local": [
+            model for model in sorted(rq_rows_by_model) if model in local_cohort
+        ],
         "exclude_model_prefixes": exclude_model_prefixes,
+        "task3_audit_mode": task3_audit_mode if include_task3 else "",
         "bootstrap_samples": bootstrap_samples,
         "bootstrap_seed": BOOTSTRAP_SEED,
         "expected_stochastic_samples": expected_stochastic_samples,
@@ -993,6 +1857,7 @@ def export_tables(
             "confidence_snapshot": str(confidence_path),
             "per_model_modality_table": str(modality_path),
             "per_model_headline": str(headline_path),
+            "per_model_rq_table": str(rq_path),
             "headline_bootstrap_ci": str(headline_ci_path),
         },
     }
@@ -1002,12 +1867,14 @@ def export_tables(
         "confidence_rows": confidence_rows,
         "per_model_rows": per_model_rows,
         "headline_rows": headline_rows,
+        "rq_rows": rq_rows,
         "headline_ci_rows": headline_ci_rows,
         "paths": {
             "task2": task2_path,
             "confidence": confidence_path,
             "per_model_modality": modality_path,
             "per_model_headline": headline_path,
+            "per_model_rq_table": rq_path,
             "headline_ci": headline_ci_path,
             "provenance": provenance_path,
         },
@@ -1090,6 +1957,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_PAPER_BATCH_SIZE,
         help="Batch size required for selected paper runs.",
     )
+    parser.add_argument(
+        "--local-model",
+        action="append",
+        default=[],
+        help=(
+            "Model id run on a local endpoint. Repeatable. Recorded in the "
+            "provenance cohort split so the tables can group it separately."
+        ),
+    )
+    parser.add_argument(
+        "--no-task3",
+        action="store_true",
+        help="Skip the blind-audit pass; the RQ table's Task 3 columns stay blank.",
+    )
+    parser.add_argument(
+        "--allow-missing-task3",
+        action="store_true",
+        help="Warn instead of failing when a model has no compatible Task 3 audit.",
+    )
+    parser.add_argument(
+        "--task3-audit-mode",
+        default=DEFAULT_TASK3_AUDIT_MODE,
+        help="Audit mode of the Task 3 runs to select (default: blind).",
+    )
     return parser
 
 
@@ -1111,6 +2002,10 @@ def main(argv: list[str] | None = None) -> None:
         run_group_id=args.run_group_id,
         expected_batch_order=args.expected_batch_order,
         expected_batch_size=args.expected_batch_size,
+        local_models=list(args.local_model),
+        include_task3=not args.no_task3,
+        allow_missing_task3=args.allow_missing_task3,
+        task3_audit_mode=args.task3_audit_mode,
     )
     for name, path in result["paths"].items():
         print(f"wrote {name}: {path}")
