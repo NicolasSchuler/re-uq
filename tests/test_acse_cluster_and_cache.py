@@ -972,14 +972,25 @@ class AcseCacheValidityTest(unittest.TestCase):
             semantic_cache.manifest_summary_rows([], computed)
         self.assertIn("empty file", str(caught.exception))
 
-    def test_a_summary_row_points_at_the_model_s_own_artifact_dir(self) -> None:
+    def test_a_summary_row_points_where_the_manifest_actually_is(self) -> None:
+        """Re-deriving the path would strand caches written under an older name."""
         computed = [self._compute()]
         discovered = semantic_cache.existing_backend_manifests(self.output_root)
         rows = semantic_cache.manifest_summary_rows(discovered, computed)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(
-            Path(rows[0]["artifact_dir"]), self._manifest_path(computed[0]).parent
+        artifact_dir = Path(rows[0]["artifact_dir"])
+        self.assertEqual(artifact_dir, self._manifest_path(computed[0]).parent)
+        self.assertTrue((artifact_dir / "manifest.json").is_file())
+
+    def test_a_legacy_cache_directory_is_reported_at_its_own_path(self) -> None:
+        manifest = self._compute()
+        legacy = self.analysis_dir / "acse_semantic_tfidf_char_wb_3_5"
+        self._manifest_path(manifest).parent.rename(legacy)
+
+        rows = semantic_cache.manifest_summary_rows(
+            semantic_cache.existing_backend_manifests(self.output_root), []
         )
+        self.assertEqual([Path(row["artifact_dir"]) for row in rows], [legacy])
 
     # -- single clustering fit per item ----------------------------------
 

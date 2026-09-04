@@ -275,6 +275,10 @@ def existing_backend_manifests(output_root: Path) -> list[dict[str, Any]]:
         if key in seen:
             continue
         seen.add(key)
+        # Where the manifest actually is, rather than a path re-derived from its
+        # fields: the two disagree for any cache written under an older naming
+        # scheme, and downstream readers follow this column.
+        manifest["artifact_dir"] = str(manifest_path.parent)
         manifests.append(manifest)
     return manifests
 
@@ -308,13 +312,7 @@ def manifest_summary_rows(
             "stochastic_sample_rows": row["stochastic_sample_rows"],
             "embedding_shape": json.dumps(row["embedding_shape"]),
             "analysis_dir": row["analysis_dir"],
-            "artifact_dir": str(
-                eu.acse_semantic_cache_dir(
-                    Path(row["analysis_dir"]),
-                    row["embedding_backend"],
-                    row["model"],
-                )
-            ),
+            "artifact_dir": row["artifact_dir"],
         }
         for row in discovered
     ]
