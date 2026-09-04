@@ -248,6 +248,13 @@ NUMERIC_STRENGTH_RECOMMENDED_075 = {
     "nice_to_have": 0.00,
 }
 HIGH_CONFIDENCE_THRESHOLDS = (0.80, 0.90)
+# Bootstrap resampling unit. Every archived run sent 16 benchmark items per
+# provider request (four whole seeds x four source conditions) and model
+# behaviour is decided per request, so the request nests the seed and is the
+# conservative cluster. Score rows that predate batched requests, or that were
+# never sent to a provider, carry no request and fall back to the seed.
+DEFAULT_BOOTSTRAP_CLUSTER_FIELD = "batch_id"
+BOOTSTRAP_CLUSTER_FALLBACK_FIELD = "seed_id"
 RULE_BASELINE_MODEL = "rule_based_baseline"
 RULE_BASELINE_METHOD = "deterministic_rules"
 ENSEMBLE_MODEL_PREFIX = "ensemble"
@@ -6923,32 +6930,82 @@ def empty_answer_length_fields() -> dict[str, Any]:
     }
 
 
+def resolve_bootstrap_cluster_field(
+    rows: list[dict[str, Any]],
+    cluster_field: str = DEFAULT_BOOTSTRAP_CLUSTER_FIELD,
+    fallback_field: str = BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
+) -> str:
+    """Which field these rows can actually be clustered on.
+
+    ``cluster_field`` is used only when *every* row carries a non-blank value
+    for it; otherwise the rows fall back to ``fallback_field``. Requiring the
+    column to be complete matters because a partially populated ``batch_id``
+    (legacy runs, single-item requests, synthesised completions) would collapse
+    every unbatched row into one meaningless cluster keyed on the empty string.
+    The fallback is reported back to the caller — the CI dictionaries expose it
+    as ``bootstrap_ci_cluster_field`` — so a slice that quietly reverted to the
+    seed is visible in the output rather than mislabelled.
+    """
+    if cluster_field == fallback_field:
+        return cluster_field
+    if rows and all(str(row.get(cluster_field, "") or "") for row in rows):
+        return cluster_field
+    logger.debug(
+        "bootstrap cluster field %r is incomplete over %d rows; clustering on %r",
+        cluster_field,
+        len(rows),
+        fallback_field,
+    )
+    return fallback_field
+
+
 def bootstrap_seed_metric(
     rows: list[dict[str, Any]],
     metric: Callable[[list[dict[str, Any]]], float],
-    seed_field: str = "seed_id",
+    cluster_field: str = DEFAULT_BOOTSTRAP_CLUSTER_FIELD,
     iterations: int = 1000,
     seed: int = 20260518,
+    seed_field: str | None = None,
 ) -> tuple[float, float, float]:
+    """Cluster bootstrap of ``metric`` over ``rows``.
+
+    Clusters default to the provider request (``batch_id``): every archived run
+    sent 16 items per request — four whole seeds x four source conditions — and
+    model behaviour is decided per request, so the request nests the seed and
+    is the conservative unit. Rows without a complete request column fall back
+    to ``seed_id``, see :func:`resolve_bootstrap_cluster_field`.
+
+    ``seed_field`` is the deprecated spelling of ``cluster_field``. It names the
+    field outright with no fallback, preserving the pre-request behaviour for
+    callers that still pass it.
+    """
+    if seed_field is not None:
+        resolved_field = seed_field
+    elif rows:
+        resolved_field = resolve_bootstrap_cluster_field(rows, cluster_field)
+    else:
+        resolved_field = cluster_field
     if not rows:
         return math.nan, math.nan, math.nan
     frame = pd.DataFrame.from_records(rows)
-    if seed_field not in frame.columns:
+    if resolved_field not in frame.columns:
         return math.nan, math.nan, math.nan
-    by_seed = {
-        str(seed_value): group.to_dict(orient="records")
-        for seed_value, group in frame.groupby(seed_field, sort=False)
+    by_cluster = {
+        str(cluster_value): group.to_dict(orient="records")
+        for cluster_value, group in frame.groupby(resolved_field, sort=False)
     }
-    seed_keys = np.asarray(list(by_seed.keys()), dtype=object)
-    if seed_keys.size == 0:
+    cluster_keys = np.asarray(list(by_cluster.keys()), dtype=object)
+    if cluster_keys.size == 0:
         return math.nan, math.nan, math.nan
     rng = np.random.default_rng(seed)
     point = metric(rows)
     samples = []
     for _ in range(iterations):
         sample_rows: list[dict[str, Any]] = []
-        for seed_key in rng.choice(seed_keys, size=seed_keys.size, replace=True):
-            sample_rows.extend(by_seed[str(seed_key)])
+        for cluster_key in rng.choice(
+            cluster_keys, size=cluster_keys.size, replace=True
+        ):
+            sample_rows.extend(by_cluster[str(cluster_key)])
         samples.append(metric(sample_rows))
     sample_array = np.asarray([x for x in samples if not math.isnan(x)], dtype=float)
     if sample_array.size == 0:
@@ -6960,10 +7017,12 @@ def bootstrap_seed_metric(
 class PairedDeltaCI(NamedTuple):
     """Complete-pair paired bootstrap result for ``metric(b) - metric(a)``.
 
-    ``n_complete_pairs`` is the number of seed clusters observed in both arms
-    (the population the point estimate and the interval describe) and
-    ``n_excluded_single_arm`` the number of seed clusters dropped because only
-    one arm ever answered them.
+    ``n_complete_pairs`` is the number of pairing keys (seeds) observed in both
+    arms — the population the point estimate and the interval describe — and
+    ``n_excluded_single_arm`` the number dropped because only one arm ever
+    answered them. ``cluster_field`` is the field the replicates were drawn on
+    and ``n_clusters`` how many such clusters the cohort formed; the two differ
+    from the pairing count whenever a cluster holds several seeds.
     """
 
     delta: float
@@ -6971,24 +7030,37 @@ class PairedDeltaCI(NamedTuple):
     ci_high: float
     n_complete_pairs: int
     n_excluded_single_arm: int
+    cluster_field: str = BOOTSTRAP_CLUSTER_FALLBACK_FIELD
+    n_clusters: int = 0
 
 
 def bootstrap_seed_metric_delta(
     rows_a: list[dict[str, Any]],
     rows_b: list[dict[str, Any]],
     metric: Callable[[list[dict[str, Any]]], float],
-    seed_field: str = "seed_id",
+    cluster_field: str = DEFAULT_BOOTSTRAP_CLUSTER_FIELD,
     iterations: int = 1000,
     seed: int = 20260518,
+    pair_field: str = BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
+    seed_field: str | None = None,
 ) -> PairedDeltaCI:
-    """Complete-pair seed-clustered bootstrap for ``metric(rows_b) - metric(rows_a)``.
+    """Complete-pair paired cluster bootstrap for ``metric(rows_b) - metric(rows_a)``.
 
-    The two arms score the same benchmark items under different conditions
-    (for example `item_context` bare vs document), so their rows are paired by
-    seed. Each iteration draws one resample of the seed ids and evaluates the
-    metric on *both* arms restricted to those seeds before differencing;
-    resampling the arms independently would treat paired observations as
-    unrelated and overstate the interval.
+    The two arms score the same benchmark items under different conditions (for
+    example `item_context` bare vs document), so their rows are **paired by
+    seed** (``pair_field``). Each iteration draws one resample and evaluates the
+    metric on *both* arms restricted to it before differencing; resampling the
+    arms independently would treat paired observations as unrelated and
+    overstate the interval.
+
+    Pairing and resampling are separate units. The **resampling** unit defaults
+    to the provider request, which holds four whole seeds, so a drawn request
+    contributes all of its paired seeds. The two arms are different runs and
+    their request ids therefore differ, but the partition of seeds into requests
+    is a property of the batching and is the same in both; each paired seed is
+    assigned to the first request observed for it in ``rows_a``. Rows without a
+    complete request column fall back to clustering on ``pair_field``, which
+    reproduces the earlier seed-clustered interval exactly.
 
     Only a seed observed in both arms can form a pair, so the complete-pair
     cohort is built once, before resampling. Single-arm seeds are counted and
@@ -6997,41 +7069,71 @@ def bootstrap_seed_metric_delta(
     effective number of pairs vary by replicate. Both the point estimate and
     the 2.5/97.5 percentile interval describe that cohort; the delta is NaN
     when no complete pair exists.
-    """
 
-    def by_seed(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    ``seed_field`` is the deprecated spelling that pairs *and* resamples on one
+    field, preserving the pre-request behaviour for callers that still pass it.
+    """
+    if seed_field is not None:
+        cluster_field = pair_field = seed_field
+
+    def by_pair(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         groups: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
-            groups.setdefault(str(row.get(seed_field, "")), []).append(row)
+            groups.setdefault(str(row.get(pair_field, "")), []).append(row)
         return groups
 
-    groups_a, groups_b = by_seed(rows_a), by_seed(rows_b)
+    groups_a, groups_b = by_pair(rows_a), by_pair(rows_b)
     paired = sorted(set(groups_a) & set(groups_b))
     excluded = len(set(groups_a) ^ set(groups_b))
     if not paired:
-        return PairedDeltaCI(math.nan, math.nan, math.nan, 0, excluded)
+        return PairedDeltaCI(math.nan, math.nan, math.nan, 0, excluded, pair_field, 0)
 
     cohort_a = [row for key in paired for row in groups_a[key]]
     cohort_b = [row for key in paired for row in groups_b[key]]
     point = metric(cohort_b) - metric(cohort_a)
-    seed_keys = np.asarray(paired, dtype=object)
+    resolved_field = resolve_bootstrap_cluster_field(
+        cohort_a + cohort_b, cluster_field, pair_field
+    )
+    clusters: dict[str, list[str]] = {}
+    for pair_key in paired:
+        cluster_key = (
+            pair_key
+            if resolved_field == pair_field
+            else next(
+                (
+                    value
+                    for value in (
+                        str(row.get(resolved_field, "") or "")
+                        for row in groups_a[pair_key]
+                    )
+                    if value
+                ),
+                pair_key,
+            )
+        )
+        clusters.setdefault(cluster_key, []).append(pair_key)
+    cluster_keys = np.asarray(list(clusters), dtype=object)
     rng = np.random.default_rng(seed)
     samples = []
     for _ in range(iterations):
         sample_a: list[dict[str, Any]] = []
         sample_b: list[dict[str, Any]] = []
-        for seed_key in rng.choice(seed_keys, size=seed_keys.size, replace=True):
-            sample_a.extend(groups_a[str(seed_key)])
-            sample_b.extend(groups_b[str(seed_key)])
+        for cluster_key in rng.choice(
+            cluster_keys, size=cluster_keys.size, replace=True
+        ):
+            for pair_key in clusters[str(cluster_key)]:
+                sample_a.extend(groups_a[pair_key])
+                sample_b.extend(groups_b[pair_key])
         samples.append(metric(sample_b) - metric(sample_a))
     # Every replicate now draws both arms of a complete pair, so a non-finite
     # replicate can only mean the metric itself is undefined on that resample,
     # never that an arm was missing.
     sample_array = np.asarray([x for x in samples if not math.isnan(x)], dtype=float)
+    counts = (len(paired), excluded, resolved_field, len(clusters))
     if sample_array.size == 0:
-        return PairedDeltaCI(float(point), math.nan, math.nan, len(paired), excluded)
+        return PairedDeltaCI(float(point), math.nan, math.nan, *counts)
     low, high = np.quantile(sample_array, [0.025, 0.975])
-    return PairedDeltaCI(float(point), float(low), float(high), len(paired), excluded)
+    return PairedDeltaCI(float(point), float(low), float(high), *counts)
 
 
 def score_from_distribution(
@@ -10380,57 +10482,89 @@ def selective_deferral_metrics(
     return metrics
 
 
+def cluster_ci_fields(
+    rows: list[dict[str, Any]],
+    metrics: Mapping[str, Callable[[list[dict[str, Any]]], float]],
+    iterations: int = 1000,
+    seed: int = 20260518,
+    cluster_field: str = DEFAULT_BOOTSTRAP_CLUSTER_FIELD,
+) -> dict[str, float | str]:
+    """Both cluster bootstraps for every named metric over one row slice.
+
+    ``{name}_ci_low`` / ``{name}_ci_high`` are the primary interval, clustered
+    on ``cluster_field`` (the provider request by default).
+    ``{name}_seed_ci_low`` / ``{name}_seed_ci_high`` are the seed-clustered
+    pair, reported alongside so a reader can see how much of the width comes
+    from treating the request rather than the seed as independent.
+    ``bootstrap_ci_cluster_field`` records the field the primary interval
+    actually used; when it is already the seed the two intervals coincide and
+    only one bootstrap runs.
+    """
+    if not metrics:
+        return {}
+    resolved_field = resolve_bootstrap_cluster_field(rows, cluster_field)
+    fields: dict[str, float | str] = {"bootstrap_ci_cluster_field": resolved_field}
+    for name, metric in metrics.items():
+        _, low, high = bootstrap_seed_metric(
+            rows,
+            metric,
+            cluster_field=resolved_field,
+            iterations=iterations,
+            seed=seed,
+        )
+        fields[f"{name}_ci_low"] = low
+        fields[f"{name}_ci_high"] = high
+        seed_low, seed_high = low, high
+        if resolved_field != BOOTSTRAP_CLUSTER_FALLBACK_FIELD:
+            _, seed_low, seed_high = bootstrap_seed_metric(
+                rows,
+                metric,
+                cluster_field=BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
+                iterations=iterations,
+                seed=seed,
+            )
+        fields[f"{name}_seed_ci_low"] = seed_low
+        fields[f"{name}_seed_ci_high"] = seed_high
+    return fields
+
+
 def headline_risk_ci_fields(
     rows: list[dict[str, Any]],
     task: str,
     iterations: int = 1000,
+    seed: int = 20260518,
 ) -> dict[str, float | str]:
-    fields: dict[str, float | str] = {}
+    """Request- and seed-clustered CI bounds for the Task 1/2 headline risks."""
+    metrics: dict[str, Callable[[list[dict[str, Any]]], float]] = {}
     for threshold in HIGH_CONFIDENCE_THRESHOLDS:
         suffix = f"{int(threshold * 100):02d}"
         if task == "task1":
-            metric_name = f"unsupported_mandatory_acceptance_{suffix}"
-
-            def metric(
-                sample_rows: list[dict[str, Any]], threshold: float = threshold
-            ) -> float:
-                return unsupported_mandatory_acceptance_rate(sample_rows, threshold)
-
-            _, low, high = bootstrap_seed_metric(rows, metric, iterations=iterations)
-            fields[f"{metric_name}_ci_low"] = low
-            fields[f"{metric_name}_ci_high"] = high
-        elif task == "task2":
-            metric_specs = {
-                f"high_conf_overcommit_overcommittable_{suffix}": (
-                    lambda sample_rows, threshold=threshold: (
-                        task2_high_confidence_overcommitment_rate(
-                            sample_rows,
-                            threshold,
-                            denominator="overcommittable",
-                        )
-                    )
-                ),
-                f"weak_strengthening_{suffix}": (
-                    lambda sample_rows, threshold=threshold: weak_strengthening_rate(
-                        sample_rows, threshold
-                    )
-                ),
-                f"label_correct_text_overcommit_{suffix}": (
-                    lambda sample_rows, threshold=threshold: (
-                        label_correct_text_overcommit_rate(
-                            sample_rows,
-                            threshold,
-                        )
-                    )
-                ),
-            }
-            for metric_name, metric in metric_specs.items():
-                _, low, high = bootstrap_seed_metric(
-                    rows, metric, iterations=iterations
+            metrics[f"unsupported_mandatory_acceptance_{suffix}"] = (
+                lambda sample_rows, threshold=threshold: (
+                    unsupported_mandatory_acceptance_rate(sample_rows, threshold)
                 )
-                fields[f"{metric_name}_ci_low"] = low
-                fields[f"{metric_name}_ci_high"] = high
-    return fields
+            )
+        elif task == "task2":
+            metrics[f"high_conf_overcommit_overcommittable_{suffix}"] = (
+                lambda sample_rows, threshold=threshold: (
+                    task2_high_confidence_overcommitment_rate(
+                        sample_rows,
+                        threshold,
+                        denominator="overcommittable",
+                    )
+                )
+            )
+            metrics[f"weak_strengthening_{suffix}"] = (
+                lambda sample_rows, threshold=threshold: weak_strengthening_rate(
+                    sample_rows, threshold
+                )
+            )
+            metrics[f"label_correct_text_overcommit_{suffix}"] = (
+                lambda sample_rows, threshold=threshold: (
+                    label_correct_text_overcommit_rate(sample_rows, threshold)
+                )
+            )
+    return cluster_ci_fields(rows, metrics, iterations=iterations, seed=seed)
 
 
 def text_strengthening_rate(rows: list[dict[str, Any]], strict: bool = False) -> float:
@@ -10449,11 +10583,14 @@ def text_over_commitment_ci_fields(
     iterations: int = 1000,
     seed: int = 20260518,
 ) -> dict[str, float | str]:
-    """Point estimate, counts, and seed-clustered bootstrap CI for text drift.
+    """Point estimate, counts, and both cluster bootstrap CIs for text drift.
 
-    The bootstrap resamples benchmark *seeds* with replacement (via
-    :func:`bootstrap_seed_metric`) because the four source-modality variants of
-    one seed share a capability and are not independent.
+    The primary interval resamples provider *requests* with replacement (via
+    :func:`cluster_ci_fields`): a request holds four whole seeds, each seed's
+    four source-modality variants share a capability, and strict strengthening
+    is all-or-none within a request, so neither the item nor the seed is the
+    independent unit. The seed-clustered pair is reported alongside as
+    ``*_seed_ci_low`` / ``*_seed_ci_high``.
     """
     fields: dict[str, float | str] = {}
     task2_rows = [row for row in rows if str(row.get("task", "")) == "task2"]
@@ -10462,6 +10599,7 @@ def text_over_commitment_ci_fields(
         for row in task2_rows
         if str(row.get("text_modality_parse_status", "")) == "ok"
     ]
+    metrics: dict[str, Callable[[list[dict[str, Any]]], float]] = {}
     for metric_name, strict in (
         ("text_over_commitment", False),
         ("strict_text_over_commitment", True),
@@ -10470,23 +10608,19 @@ def text_over_commitment_ci_fields(
         numerator = sum(1 for row in text_rows if _truthy(row.get(key)))
         fields[f"{metric_name}_n_numerator"] = numerator
         fields[f"{metric_name}_n_denominator"] = len(text_rows)
-        if not task2_rows or iterations <= 0:
-            fields[metric_name] = (
-                text_strengthening_rate(task2_rows, strict=strict) if task2_rows else ""
-            )
-            fields[f"{metric_name}_ci_low"] = ""
-            fields[f"{metric_name}_ci_high"] = ""
-            continue
-
-        def metric(sample_rows: list[dict[str, Any]], strict: bool = strict) -> float:
-            return text_strengthening_rate(sample_rows, strict=strict)
-
-        point, low, high = bootstrap_seed_metric(
-            task2_rows, metric, iterations=iterations, seed=seed
+        fields[metric_name] = (
+            text_strengthening_rate(task2_rows, strict=strict) if task2_rows else ""
         )
-        fields[metric_name] = point
-        fields[f"{metric_name}_ci_low"] = low
-        fields[f"{metric_name}_ci_high"] = high
+        if not task2_rows or iterations <= 0:
+            for bound in ("ci_low", "ci_high", "seed_ci_low", "seed_ci_high"):
+                fields[f"{metric_name}_{bound}"] = ""
+            continue
+        metrics[metric_name] = lambda sample_rows, strict=strict: (
+            text_strengthening_rate(sample_rows, strict=strict)
+        )
+    fields.update(
+        cluster_ci_fields(task2_rows, metrics, iterations=iterations, seed=seed)
+    )
     return fields
 
 

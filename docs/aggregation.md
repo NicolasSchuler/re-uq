@@ -201,18 +201,36 @@ in every cell.
 
 ## 6. Bootstrap procedure
 
-All confidence intervals are **seed-clustered nonparametric bootstraps**
-(`bootstrap_seed_metric`, `scripts/eval_utils.py:5352`):
+All confidence intervals are **clustered nonparametric bootstraps**
+(`bootstrap_seed_metric`, `scripts/eval_utils.py`, Section 7):
 
-1. Group the score rows by `seed_id`. The four source-modality variants of one
-   seed share a capability and are not independent, so the seed is the
-   resampling unit, not the item.
-2. Draw `n_seeds` seeds with replacement and concatenate their rows.
+1. Group the score rows by the cluster field. The default is the provider
+   **request** (`batch_id`, `DEFAULT_BOOTSTRAP_CLUSTER_FIELD`), not the seed:
+   every archived run sent 16 items per request, so one request carries four
+   whole seeds x four source conditions. The item is not independent of its
+   seed (the four source-modality variants share a capability) and the seed is
+   not independent of its request — strict text strengthening is all-or-none
+   within each `(request, source condition)` group, and unreadable text
+   modality is all-or-none per request. Because a request contains whole
+   seeds, request clustering *nests* seed clustering and is the conservative
+   choice.
+2. Draw `n_clusters` clusters with replacement and concatenate their rows.
 3. Recompute the metric on the resampled rows; repeat `iterations` times
    (default 1000).
 4. Report the 2.5% and 97.5% percentiles of the resampled values as
    `*_ci_low` / `*_ci_high`; the point estimate is the metric on the observed
    rows.
+
+The seed-clustered interval is reported alongside the primary one as
+`*_seed_ci_low` / `*_seed_ci_high`, and `bootstrap_ci_cluster_field` records
+which field the primary interval actually used.
+
+Rows fall back to clustering on `seed_id` unless **every** row carries a
+non-blank `batch_id` (`resolve_bootstrap_cluster_field`). A partially populated
+column — legacy runs, single-item requests, synthesised completions, the rule
+baseline — would otherwise collapse all unbatched rows into one meaningless
+cluster. When the fallback engages the two intervals coincide, only one
+bootstrap runs, and `bootstrap_ci_cluster_field` reads `seed_id`.
 
 The RNG seed is fixed at `20260518` (`BOOTSTRAP_SEED` in
 `scripts/export_paper_tables.py` and `scripts/compare_run_matrix.py`), so the

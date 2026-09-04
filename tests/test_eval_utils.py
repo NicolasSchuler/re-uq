@@ -5999,9 +5999,11 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
             {"seed_id": f"S{i:03d}", "flag": 1 if i >= 30 else i % 2} for i in range(40)
         ]
 
+        # No request column on these rows, so pairing and resampling both fall
+        # back to the seed and every pair is its own cluster.
         self.assertEqual(
             eu.bootstrap_seed_metric_delta(arm_a, arm_a, rate, iterations=100),
-            (0.0, 0.0, 0.0, 40, 0),
+            (0.0, 0.0, 0.0, 40, 0, "seed_id", 40),
         )
         result = eu.bootstrap_seed_metric_delta(arm_a, arm_b, rate, iterations=300)
         point, low, high = result.delta, result.ci_low, result.ci_high
@@ -7077,6 +7079,231 @@ class ProvenanceHashingAndJsonWriterTest(unittest.TestCase):
                 output.read_bytes(),
                 (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
             )
+
+
+class BootstrapClusteringTest(unittest.TestCase):
+    """Bootstraps cluster on the provider request, falling back to the seed.
+
+    Every archived run sent 16 items per request: four whole seeds x four
+    source conditions. A request therefore contains whole seeds, so request
+    clustering nests seed clustering and can only widen an interval.
+    """
+
+    SEEDS_PER_REQUEST = 4
+    N_REQUESTS = 10
+
+    def _rows(self, *, seeds_per_request=SEEDS_PER_REQUEST, flag_of=None):
+        """Score-like rows: `seeds_per_request` whole seeds inside one request.
+
+        ``flag_of(request_index, seed_index)`` decides the outcome, so a test
+        can make the metric vary within a request or be all-or-none per
+        request the way the archive behaves.
+        """
+        flag_of = flag_of or (lambda request_index, _: request_index % 2)
+        rows = []
+        for request_index in range(self.N_REQUESTS):
+            for offset in range(seeds_per_request):
+                seed_index = request_index * seeds_per_request + offset
+                for modality in eu.MODALITIES:
+                    rows.append(
+                        {
+                            "seed_id": f"S{seed_index:04d}",
+                            "source_modality": modality,
+                            "batch_id": f"r1:m1:task2:deterministic:0:{request_index}",
+                            "flag": flag_of(request_index, seed_index),
+                        }
+                    )
+        return rows
+
+    @staticmethod
+    def _rate(rows):
+        return sum(row["flag"] for row in rows) / len(rows)
+
+    def _width(self, rows, cluster_field):
+        _, low, high = eu.bootstrap_seed_metric(
+            rows, self._rate, cluster_field=cluster_field, iterations=500
+        )
+        return high - low
+
+    def test_default_cluster_field_is_the_request(self):
+        self.assertEqual(eu.DEFAULT_BOOTSTRAP_CLUSTER_FIELD, "batch_id")
+        self.assertEqual(eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD, "seed_id")
+        self.assertEqual(
+            eu.resolve_bootstrap_cluster_field(self._rows()),
+            "batch_id",
+        )
+
+    def test_cluster_field_falls_back_to_the_seed_when_the_request_is_unknown(self):
+        without = [
+            {key: value for key, value in row.items() if key != "batch_id"}
+            for row in self._rows()
+        ]
+        blank = [{**row, "batch_id": ""} for row in self._rows()]
+        # A partially populated column would put every unbatched row into one
+        # meaningless cluster, so an incomplete column falls back as well.
+        mixed = self._rows()
+        mixed[0] = {**mixed[0], "batch_id": ""}
+
+        for label, rows in (("absent", without), ("blank", blank), ("mixed", mixed)):
+            with self.subTest(label):
+                self.assertEqual(eu.resolve_bootstrap_cluster_field(rows), "seed_id")
+        self.assertEqual(eu.resolve_bootstrap_cluster_field([]), "seed_id")
+
+    def test_request_clustered_interval_is_at_least_as_wide_as_seed_clustered(self):
+        # All-or-none per request, exactly how strict text strengthening
+        # behaves on the archive: the request carries all the information.
+        rows = self._rows(flag_of=lambda request_index, _: request_index % 2)
+
+        by_request = self._width(rows, "batch_id")
+        by_seed = self._width(rows, "seed_id")
+
+        self.assertGreaterEqual(by_request, by_seed)
+        # 10 request clusters vs 40 seed clusters: the coarser unit is not just
+        # no narrower, it is materially wider.
+        self.assertGreater(by_request, by_seed * 1.5)
+
+    def test_request_clustering_matches_seed_clustering_one_seed_per_request(self):
+        # When a request holds exactly one seed the two partitions coincide,
+        # so the intervals have to agree exactly, not just approximately.
+        rows = self._rows(
+            seeds_per_request=1, flag_of=lambda _, seed_index: seed_index % 2
+        )
+
+        self.assertEqual(
+            eu.bootstrap_seed_metric(
+                rows, self._rate, cluster_field="batch_id", iterations=200
+            ),
+            eu.bootstrap_seed_metric(
+                rows, self._rate, cluster_field="seed_id", iterations=200
+            ),
+        )
+
+    def test_seed_field_keyword_still_selects_the_cluster_exactly(self):
+        rows = self._rows()
+
+        self.assertEqual(
+            eu.bootstrap_seed_metric(
+                rows, self._rate, seed_field="seed_id", iterations=200
+            ),
+            eu.bootstrap_seed_metric(
+                rows, self._rate, cluster_field="seed_id", iterations=200
+            ),
+        )
+        # The deprecated keyword names the field outright; it never falls back.
+        self.assertTrue(
+            all(
+                math.isnan(value)
+                for value in eu.bootstrap_seed_metric(
+                    rows, self._rate, seed_field="missing", iterations=10
+                )
+            )
+        )
+
+    def test_delta_pairs_by_seed_and_resamples_by_request(self):
+        bare = self._rows(flag_of=lambda request_index, _: request_index % 2)
+        document = [{**row, "flag": 1} for row in bare]
+        # The two arms are separate runs, so their request ids differ; the
+        # partition of seeds into requests is the same.
+        document = [
+            {**row, "batch_id": row["batch_id"].replace("r1:", "r2:")}
+            for row in document
+        ]
+
+        by_request = eu.bootstrap_seed_metric_delta(
+            bare, document, self._rate, iterations=500
+        )
+        by_seed = eu.bootstrap_seed_metric_delta(
+            bare, document, self._rate, cluster_field="seed_id", iterations=500
+        )
+
+        self.assertEqual(by_request.cluster_field, "batch_id")
+        self.assertEqual(by_request.n_clusters, self.N_REQUESTS)
+        self.assertEqual(by_seed.cluster_field, "seed_id")
+        # Pairing stays by seed either way, so the cohort is unchanged.
+        self.assertEqual(by_request.n_complete_pairs, by_seed.n_complete_pairs)
+        self.assertEqual(by_seed.n_clusters, by_seed.n_complete_pairs)
+        self.assertAlmostEqual(by_request.delta, by_seed.delta)
+        self.assertGreaterEqual(
+            by_request.ci_high - by_request.ci_low,
+            by_seed.ci_high - by_seed.ci_low,
+        )
+
+    def test_delta_falls_back_to_the_pairing_field_without_requests(self):
+        bare = [{"seed_id": f"S{i:04d}", "flag": i % 2} for i in range(40)]
+        document = [{**row, "flag": 1} for row in bare]
+
+        paired = eu.bootstrap_seed_metric_delta(
+            bare, document, self._rate, iterations=200
+        )
+
+        self.assertEqual(paired.cluster_field, "seed_id")
+        self.assertEqual(paired.n_clusters, 40)
+        self.assertEqual(
+            paired,
+            eu.bootstrap_seed_metric_delta(
+                bare, document, self._rate, seed_field="seed_id", iterations=200
+            ),
+        )
+
+    def test_ci_field_helpers_report_both_intervals_and_the_cluster(self):
+        rows = [
+            {
+                **row,
+                "task": "task2",
+                "gold_modality": "nice_to_have",
+                "pred_modality": "nice_to_have",
+                "confidence": 0.95,
+                "text_modality_parse_status": "ok",
+                "text_overcommit": row["flag"],
+                "strict_text_overcommit": row["flag"],
+                "text_modality_correct": 1 - row["flag"],
+                "strict_text_high_conf_overcommit_90": row["flag"],
+                "y_true": 1,
+                "y_pred": 1,
+            }
+            for row in self._rows()
+        ]
+
+        text = eu.text_over_commitment_ci_fields(rows, iterations=200)
+        risk = eu.headline_risk_ci_fields(rows, "task2", iterations=200)
+
+        self.assertEqual(text["bootstrap_ci_cluster_field"], "batch_id")
+        self.assertEqual(risk["bootstrap_ci_cluster_field"], "batch_id")
+        for metric_name in ("text_over_commitment", "strict_text_over_commitment"):
+            with self.subTest(metric_name):
+                self.assertGreaterEqual(
+                    text[f"{metric_name}_ci_high"] - text[f"{metric_name}_ci_low"],
+                    text[f"{metric_name}_seed_ci_high"]
+                    - text[f"{metric_name}_seed_ci_low"],
+                )
+        self.assertIn("weak_strengthening_90_seed_ci_low", risk)
+        self.assertIn("weak_strengthening_90_seed_ci_high", risk)
+
+    def test_ci_field_helpers_reuse_one_bootstrap_when_the_cluster_is_the_seed(self):
+        rows = [
+            {
+                "seed_id": f"S{i:04d}",
+                "task": "task2",
+                "text_modality_parse_status": "ok",
+                "text_overcommit": i % 2,
+                "strict_text_overcommit": i % 2,
+            }
+            for i in range(40)
+        ]
+
+        fields = eu.text_over_commitment_ci_fields(rows, iterations=200)
+
+        # Nothing to compare against, so the seed columns repeat the primary
+        # ones instead of paying for a second identical bootstrap.
+        self.assertEqual(fields["bootstrap_ci_cluster_field"], "seed_id")
+        self.assertEqual(
+            fields["strict_text_over_commitment_seed_ci_low"],
+            fields["strict_text_over_commitment_ci_low"],
+        )
+        self.assertEqual(
+            fields["strict_text_over_commitment_seed_ci_high"],
+            fields["strict_text_over_commitment_ci_high"],
+        )
 
 
 class SamplingPlanTest(unittest.TestCase):
