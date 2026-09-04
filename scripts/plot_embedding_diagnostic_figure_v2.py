@@ -72,11 +72,15 @@ except ModuleNotFoundError:  # pragma: no cover
 # auditable and nothing is hardcoded. ``decimals`` controls the value label
 # (3 for the Table-1 numbers so they read as exact matches).
 #
-# The ``expect`` values below still date from the grid that fitted PCA and the
-# TF-IDF vocabulary over all rows at once. That leak is fixed in
-# diagnose_embedding_separability.py, so every one of them moves and must be
-# re-pinned from the rerun's probe_grid_summary.csv; resolve_bars() fails loudly
-# until they are.
+# The ``expect`` values below date from the grid that fitted PCA and the TF-IDF
+# vocabulary over all rows at once; that leak is fixed in
+# diagnose_embedding_separability.py, so they must be re-pinned from the rerun's
+# probe_grid_summary.csv and resolve_bars() fails loudly until they are. The
+# shift is small: measured on the archived prefixed embeddings (86,305 rows,
+# 1024 dims, 128 components, 3 folds), the control bar moves 0.822 -> 0.827,
+# because axes chosen from two thirds of that many rows barely differ from axes
+# chosen from all of them. The fix is about the claim the probe makes, not about
+# a number that was badly wrong.
 #
 # Context bars use the de-circularized requirement-text-only, item-grouped
 # substrate (the label is NOT baked into the embedded string). The prefixed
