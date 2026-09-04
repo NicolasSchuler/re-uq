@@ -657,9 +657,7 @@ def main() -> None:
             str(samples_png),
         ],
     }
-    (output_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    eu.write_json(output_dir / "manifest.json", manifest)
     print(f"Wrote ACSE embedding visualization artifacts to {output_dir}")
     print(
         f"Items: {len(item_output_rows)}; stochastic samples: {len(sample_output_rows)}; backend: {backend_label}"

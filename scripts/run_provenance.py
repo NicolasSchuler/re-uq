@@ -14,7 +14,6 @@ stay importable without Hydra/OmegaConf installed.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -26,9 +25,9 @@ except ModuleNotFoundError:  # pragma: no cover
 
 RESOLVED_CONFIG_SUFFIX = ".resolved.yaml"
 
-
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+# Every provenance digest in the pipeline -- job fingerprints, batch wrappers,
+# resolved-config SHAs -- comes from this one implementation.
+sha256_text = eu.sha256_text
 
 
 def resolved_config_path(root: str | Path, run_id: str) -> Path:

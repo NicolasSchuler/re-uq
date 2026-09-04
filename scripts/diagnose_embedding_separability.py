@@ -341,9 +341,7 @@ def main() -> None:
         "within_scopes": WITHIN_SCOPES,
         "random_state": args.random_state,
     }
-    (output_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    eu.write_json(output_dir / "manifest.json", manifest)
     print(
         json.dumps(
             {"output_dir": str(output_dir), "summary_rows": len(summary), **manifest},

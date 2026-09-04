@@ -703,9 +703,7 @@ def main() -> None:
             str(output_dir / "summary.md"),
         ],
     }
-    (output_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    eu.write_json(output_dir / "manifest.json", manifest)
     print(
         json.dumps(
             {

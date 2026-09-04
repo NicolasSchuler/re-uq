@@ -475,6 +475,33 @@ class RunConfigExportTest(unittest.TestCase):
                 self.assertIn("api_key_env:", text)
                 self.assertNotIn("api_key:", text)
 
+    def test_export_fails_closed_on_a_credential_shaped_profile(self):
+        # Normalization already rejects this, so the exporter check is the
+        # last line of defense: it must fire before any YAML is written.
+        config = eu.load_run_config(EXAMPLE_CONFIG)
+        config["profiles"][-1]["extra_body"] = {"authorization": "Bearer hunter2"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "conf"
+            with (
+                mock.patch.object(hb.eu, "load_run_config", return_value=config),
+                self.assertRaises(ValueError) as ctx,
+            ):
+                hb.run_config_to_hydra_yaml(EXAMPLE_CONFIG, out, name="exported")
+            self.assertNotIn("hunter2", str(ctx.exception))
+            self.assertFalse(out.exists())
+
+    def test_export_fails_closed_on_a_secret_pasted_into_api_key_env(self):
+        config = eu.load_run_config(EXAMPLE_CONFIG)
+        config["profiles"][0]["api_key_env"] = "sk-live-abcdef"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "conf"
+            with (
+                mock.patch.object(hb.eu, "load_run_config", return_value=config),
+                self.assertRaises(ValueError),
+            ):
+                hb.run_config_to_hydra_yaml(EXAMPLE_CONFIG, out, name="exported")
+            self.assertFalse(out.exists())
+
 
 class HydraMultirunSmokeTest(unittest.TestCase):
     """`--multirun` over a 2x2 grid must run every cell into the smoke tree."""
