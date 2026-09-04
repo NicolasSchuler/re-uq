@@ -1,0 +1,59 @@
+# The one file to edit before a full rerun.
+#
+#   .venv/bin/python scripts/rerun_all.py
+#
+# Everything else about a run -- endpoint, key variable, request size, sampling,
+# seed -- stays in conf/profile/<id>.yaml, and the model lists stay there too.
+# For a rerun you normally edit three things:
+#
+#   1. the API keys in your shell (ZAI_API_KEY, LLAMA_API_KEY);
+#   2. `base_url` and `models` in conf/profile/local_llama_cpp.yaml;
+#   3. `models` in conf/profile/zai.yaml.
+#
+# Then this file says which of those profiles are the official cohort, which
+# are reported separately, and which models carry the ablations.
+
+# Run group every rerun writes. Distinct from the archived `provider-matrix-2026-05`,
+# and the value scripts/export_paper_tables.py selects by default.
+run_group_id: provider-matrix-v2-2026-05
+
+# Cells of the official cohort: every profile below is run over every dataset
+# and benchmark variant.
+datasets: [nice, mlm_tapt]
+variants: [must, shall]
+
+# Profiles whose models are the official cohort (headline tables).
+cohort_profiles: [zai]
+# Profiles reported separately as the local cohort. Their models are exported
+# into the same tables under their own group, never pooled into the headline.
+local_profiles: [local_llama_cpp]
+
+ablations:
+  # Batching: grouped / shuffled / single-item, on one cell.
+  batching:
+    dataset: mlm_tapt
+    variant: must
+    # (profile, model) pairs. Keep this small: three arms per model.
+    models:
+      - {profile: zai, model: glm-5.1}
+  # Document context: bare / document on the PURE cell, its own run group so
+  # these arms can never be selected into the paper tables.
+  context:
+    run_group_id: context-ablation-2026-09
+    models:
+      - {profile: zai, model: glm-5.1}
+  # Weak phrasing: the four weak templates over the pilot seeds.
+  weak_phrasing:
+    dataset: nice
+    variant: must
+    models:
+      - {profile: zai, model: glm-5.1}
+
+task3:
+  audit_mode: blind
+
+analysis:
+  bootstrap_samples: 1000
+  # Written by the analysis stage; the manuscript is only touched when you
+  # copy this over manuscript/numbers.tex yourself.
+  numbers_output: outputs/paper_numbers.tex

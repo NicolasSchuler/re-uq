@@ -234,7 +234,26 @@ with `--no-request-transcripts` on either runner, or
 `logging.write_request_transcripts: false` in the run config
 (`conf/logging/default.yaml`).
 
-## 7. Migrating `current_run.json`
+## 7. The rerun config
+
+`conf/rerun/default.yaml` is read by `scripts/rerun_all.py` only -- it is not a
+Hydra group and never composes into a run. It names the profiles whose models
+are the official cohort, the profiles reported separately as local, the models
+that carry each ablation, and the run group everything is written under. The
+model lists themselves stay in `conf/profile/<id>.yaml`, so there is one place
+per fact:
+
+| Fact | Where |
+| --- | --- |
+| API key variable, endpoint, request size, sampling, seed | `conf/profile/<id>.yaml` |
+| Which models to run | `models:` in the same file |
+| Which profiles are the cohort / local, which models carry ablations, which run group | `conf/rerun/default.yaml` |
+
+The driver writes the JSON-shaped config the non-Hydra tools need to
+`outputs/rerun/run_config.json`, derived from those files; the hand-maintained
+`run_configs/current_run.json` is left alone.
+
+## 8. Migrating `current_run.json`
 
 `scripts/hydra_bridge.py` exports an existing JSON run config into the `conf/`
 groups:
@@ -267,7 +286,7 @@ single command above. A test asserts the round trip: composing the exported
 groups reproduces the JSON config's normalized profiles, sampling blocks,
 logging thresholds and run-level fields exactly.
 
-## 8. Which path should I use?
+## 9. Which path should I use?
 
 - Reproducing a published number: the JSON path, as documented in
   [`reproduction.md`](reproduction.md).

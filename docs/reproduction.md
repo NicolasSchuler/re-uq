@@ -2,11 +2,45 @@
 
 This is the command-first path for reproducing the publication artifacts. The notebooks are useful for inspection, but these scripts are the canonical interface for provider runs and final analysis.
 
+## The Whole Rerun, One Command
+
+Everything below is still the canonical, fine-grained interface. For a full
+rerun -- cohort Task 1+2, the blind Task 3 audits, the ablations, then every
+table, macro and figure -- there is one driver that walks them in order:
+
+```bash
+export ZAI_API_KEY=...            # 1. credentials
+export LLAMA_API_KEY=...
+$EDITOR conf/profile/local_llama_cpp.yaml   # 2. local base_url + models
+$EDITOR conf/profile/zai.yaml               #    hosted models
+.venv/bin/python scripts/rerun_all.py       # 3. run
+```
+
+`conf/rerun/default.yaml` says which profiles are the official cohort, which
+are reported separately as local, and which models carry the ablations.
+Everything else about a run stays in `conf/profile/<id>.yaml`.
+
+| Flag | Effect |
+| --- | --- |
+| `--dry-run` | Print every command the driver would run, change nothing. |
+| `--fake-completion` | Verify the whole chain with synthesized answers, in the smoke tree, for free. The MLX-backed steps and the macro file are skipped (they need embeddings a fake run does not produce). |
+| `--only <stage>` | `preflight`, `cohort`, `task3`, `ablations`, `analysis`. Repeatable. |
+
+It is resumable: `outputs/rerun_state.json` records each cell's status and run
+id, a failed cell is retried once as `--mode resume` on the same run id, and
+re-invoking the command continues where it stopped. Nothing about a cell is
+re-requested twice.
+
+Run `--fake-completion` once before spending anything: it exercises the same
+code path end to end, and preflight reports missing credentials, missing
+benchmarks and a missing embedding backend before the first request.
+
 ## Task → Command Cheat-sheet
 
 | Goal | Command |
 | --- | --- |
 | One-time env setup | `uv sync --group dev --locked` |
+| Full rerun (everything) | `.venv/bin/python scripts/rerun_all.py` (see above) |
 | Sanity-check pipeline without API access | `bash scripts/reproduce.sh smoke-fake` (uses `--fake-completion`) |
 | Fake-completion Task 3 smoke | `bash scripts/reproduce.sh smoke-fake-task3` |
 | Fake-completion analysis smoke | `bash scripts/reproduce.sh smoke-fake-analysis` |

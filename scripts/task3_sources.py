@@ -67,9 +67,15 @@ class Task3SourceGap(NamedTuple):
         )
 
 
-def source_run_prefix(variant: str) -> str:
-    """Run-id prefix of the Task 2 runs an official audit may read."""
-    return "full" if eu.normalize_benchmark_variant(variant) == "must" else "full-shall"
+def source_run_prefix(variant: str, mode: str = "full") -> str:
+    """Run-id prefix of the Task 2 runs an audit of this mode may read.
+
+    Mirrors `run_task3_verification_from_config.source_run_prefixes`: a
+    paper-facing audit reads only `full-*` runs, and a smoke audit reads the
+    smoke runs of the same variant.
+    """
+    base = "full" if eu.normalize_benchmark_variant(variant) == "must" else "full-shall"
+    return base.replace("full", "smoke", 1) if mode == "smoke" else base
 
 
 def compatible_source_rows(
@@ -82,9 +88,10 @@ def compatible_source_rows(
     benchmark_item_count: int,
     expected_stochastic_samples: int,
     default_batch_order: str = eu.DEFAULT_BATCH_ORDER,
+    mode: str = "full",
 ) -> list[dict[str, Any]]:
     """Registry rows this audit could read, oldest first."""
-    prefix = source_run_prefix(variant)
+    prefix = source_run_prefix(variant, mode)
     return [
         row
         for row in registry_rows
@@ -99,6 +106,9 @@ def compatible_source_rows(
             required_tasks=("task2",),
             expected_batch_order=profile.get("batch_order", default_batch_order),
             expected_batch_size=int(profile["batch_size"]),
+            # A smoke run answers a truncated benchmark on purpose; a
+            # paper-facing one must cover all of it.
+            allow_partial_benchmark=mode == "smoke",
         )
     ]
 
@@ -108,6 +118,7 @@ def resolve_task3_sources(
     root: Path | None = None,
     *,
     skip_profiles: set[str] | None = None,
+    mode: str = "full",
 ) -> tuple[list[Task3Source], list[Task3SourceGap]]:
     """Newest compatible Task 2 run per cell, plus the cells that have none."""
     root = Path(root or eu.project_root())
@@ -121,7 +132,9 @@ def resolve_task3_sources(
                     root / "data/processed/benchmark_items.csv", dataset_id, variant
                 )
             )
-            registry_path = eu.run_registry_path(root, dataset_id, variant)
+            registry_path = eu.run_registry_path(
+                root, dataset_id, variant, smoke=mode == "smoke"
+            )
             registry_rows = (
                 eu.read_csv_rows(registry_path) if registry_path.exists() else []
             )
@@ -142,6 +155,7 @@ def resolve_task3_sources(
                         default_batch_order=str(
                             run_config.get("batch_order", eu.DEFAULT_BATCH_ORDER)
                         ),
+                        mode=mode,
                     )
                     if not candidates:
                         gaps.append(
@@ -150,7 +164,8 @@ def resolve_task3_sources(
                                 variant,
                                 str(profile["profile_id"]),
                                 model,
-                                f"no complete {source_run_prefix(variant)}-* Task 2 "
+                                f"no complete {source_run_prefix(variant, mode)}-* "
+                                "Task 2 "
                                 f"run in {registry_path}",
                             )
                         )
