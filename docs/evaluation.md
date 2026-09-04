@@ -47,7 +47,7 @@ The full template inventory, including the `SHALL` swap and the four weak-intent
 
 All reported runs sent batched prompts: **16 benchmark items per request**, built by `batch_prompt_for_completion_jobs` in `scripts/eval_utils.py`, for Task 1, Task 2, and Task 3 alike. Batches are consecutive request indices with no shuffling, and benchmark rows are ordered seed x variant, so each Task 2 batch contained all four modality variants of the same four seeds side by side. The batch prompt instructs the model to evaluate each item independently, but the minimal-pair contrast was visible inside its context window.
 
-Treat this as a confound on every rate reported here, not as an implementation detail. `max_tokens` is 256 per item scaled by batch size; if a batch response fails to parse, the affected items are re-sent individually. The `batch_order: grouped|shuffled` knob and a `batch_size=1` run exist to bound the effect; see [`docs/experimental_setup.md`](experimental_setup.md) and [`TODO.md`](../TODO.md).
+Treat this as a confound on every rate reported here, not as an implementation detail. `max_tokens` is 256 per item scaled by batch size; if a batch response fails to parse, the affected items are re-sent individually. The `batch_order: grouped|shuffled` knob and a `batch_size=1` run exist to bound the effect; see [`docs/experimental_setup.md`](experimental_setup.md) and [`TODO.md`](../TODO.md). A separate `item_context: bare|document` knob shows a Task 2 item inside its document context; it applies only to the `pure` ablation cell ([`context_ablation.md`](context_ablation.md)) and never to the numbers here.
 
 ## Tasks
 

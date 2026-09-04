@@ -162,6 +162,8 @@ class MatrixRun:
     completion_fn: Callable[..., dict[str, Any]]
     task1_template: str
     task2_template: str
+    task2_context_template: str
+    item_context: str
     semantic_embedding_backend: str
     smoke_tree: bool
 
@@ -267,6 +269,8 @@ def plan_cell(
         prompt_version=matrix.run_config["prompt_version"],
         task1_template=matrix.task1_template,
         task2_template=matrix.task2_template,
+        task2_context_template=matrix.task2_context_template,
+        item_context=matrix.item_context,
         deterministic=matrix.run_config["deterministic"],
         stochastic=matrix.run_config["stochastic"],
         max_tokens=int(profile["max_tokens"]),
@@ -369,6 +373,7 @@ def registry_row(
         request_extra_body=profile.get("extra_body"),
         server_model_probe=cell.preflight,
         batch_order=cell.batch_order,
+        item_context=matrix.item_context,
         notes=rp.run_notes(matrix.args),
     )
 
@@ -387,6 +392,7 @@ def log_planned_cell(matrix: MatrixRun, cell: RunCell) -> None:
             "planned_batches": cell.planned_api_calls,
             "batch_size": cell.profile["batch_size"],
             "batch_order": cell.batch_order,
+            "item_context": matrix.item_context,
             "seed": cell.seed,
             "send_seed": cell.send_seed,
             "max_retries": cell.max_retries,
@@ -496,6 +502,7 @@ def execute_cell(matrix: MatrixRun, cell: RunCell) -> None:
             "pending_jobs": len(cell.pending_jobs),
             "batch_size": cell.profile["batch_size"],
             "batch_order": cell.batch_order,
+            "item_context": matrix.item_context,
             "seed": cell.seed,
             "send_seed": cell.send_seed,
             "max_retries": cell.max_retries,
@@ -576,15 +583,31 @@ def run_from_config(run_config: dict[str, Any], args: RunnerArgs) -> None:
     variants = eu.selected_values(
         list(run_config["benchmark_variants"]), args.variant, "variant"
     )
+    tasks = eu.normalize_task_filter(args.task or run_config["tasks"])
+    item_context = eu.normalize_item_context(run_config.get("item_context"))
+    if item_context != eu.DEFAULT_ITEM_CONTEXT and tasks != ["task2"]:
+        # The context prompt exists for Task 2 only; a mixed run would silently
+        # send bare Task 1 items under a `document` label.
+        raise ValueError(
+            f"item_context={item_context!r} requires task=task2, got {tasks}."
+        )
     matrix = MatrixRun(
         run_config=run_config,
         args=args,
         root=root,
-        tasks=eu.normalize_task_filter(args.task or run_config["tasks"]),
+        tasks=tasks,
         logging_config=eu.logging_config_from_args(run_config, args),
         completion_fn=fake_completion if args.fake_completion else eu.chat_completion,
         task1_template=eu.load_prompt(root / "prompts/mandatory_entailment.txt"),
         task2_template=eu.load_prompt(root / "prompts/modality_extraction.txt"),
+        # The context prompt is loaded only for the `document` arm, so bare
+        # runs keep exactly the two frozen prompt inputs of the paper.
+        task2_context_template=(
+            eu.load_prompt(root / "prompts/modality_extraction_context.txt")
+            if item_context != eu.DEFAULT_ITEM_CONTEXT
+            else ""
+        ),
+        item_context=item_context,
         semantic_embedding_backend=semantic_embedding_backend,
         # Fake completions and smoke run ids never touch the paper-facing
         # artifacts; they are written to the parallel data/processed/smoke/ tree.

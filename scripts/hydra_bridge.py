@@ -120,6 +120,8 @@ def hydra_config_to_run_config(cfg: DictConfig | Mapping[str, Any]) -> dict[str,
         "prompt_version": raw["prompt_version"],
         "seed": raw["seed"],
         "batch_order": raw["batch_order"],
+        # Older exported presets predate the knob; missing means bare.
+        "item_context": raw.get("item_context") or eu.DEFAULT_ITEM_CONTEXT,
         "deterministic": dict(sampling.get("deterministic", {})),
         "stochastic": dict(sampling.get("stochastic", {})),
         "logging": dict(raw.get("logging") or {}),
@@ -274,6 +276,7 @@ def run_config_to_hydra_yaml(
         "prompt_version": config["prompt_version"],
         "seed": config["seed"],
         "batch_order": config["batch_order"],
+        "item_context": config.get("item_context", eu.DEFAULT_ITEM_CONTEXT),
         # Override the global embedding group with the JSON config's exact
         # values, including null for legacy configs that did not select one.
         "acse_embedding_backend": config["acse_embedding_backend"],

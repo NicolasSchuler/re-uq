@@ -380,6 +380,7 @@ RUN_REGISTRY_FIELDS = [
     "request_extra_body",
     "server_model_probe",
     "batch_order",
+    "item_context",
     # Run-quality diagnostics (see run_quality_counters in Section 9).
     "parse_status_histogram",
     "retry_total",
@@ -914,6 +915,26 @@ def normalize_batch_order(value: Any, field: str = "batch_order") -> str:
     return normalized
 
 
+# `item_context` controls whether a Task 2 item is shown bare (the paper
+# condition) or inside its document context (docs/context_ablation.md).
+ITEM_CONTEXT_BARE = "bare"
+ITEM_CONTEXT_DOCUMENT = "document"
+ITEM_CONTEXTS = (ITEM_CONTEXT_BARE, ITEM_CONTEXT_DOCUMENT)
+DEFAULT_ITEM_CONTEXT = ITEM_CONTEXT_BARE
+
+
+def normalize_item_context(value: Any, field: str = "item_context") -> str:
+    """Normalize the document-context ablation knob (blank means bare)."""
+    if value is None or value == "":
+        return DEFAULT_ITEM_CONTEXT
+    normalized = str(value).strip().lower().replace("-", "_")
+    if normalized not in ITEM_CONTEXTS:
+        raise ValueError(
+            f"Unknown {field}: {value!r} (expected one of {list(ITEM_CONTEXTS)})"
+        )
+    return normalized
+
+
 def normalize_provider_profile(
     profile: Mapping[str, Any],
     *,
@@ -1058,6 +1079,7 @@ def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
     run_batch_order = normalize_batch_order(
         config.get("batch_order", llm_config.get("batch_order")), "batch_order"
     )
+    run_item_context = normalize_item_context(config.get("item_context"))
 
     def _acse_setting(value: Any) -> str | None:
         # A missing key must stay None, not become the string "None".
@@ -1074,6 +1096,7 @@ def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
         "run_group_id": run_group_id,
         "seed": run_seed,
         "batch_order": run_batch_order,
+        "item_context": run_item_context,
         "datasets": datasets,
         "benchmark_variants": variants,
         "tasks": tasks,
@@ -2056,6 +2079,12 @@ PURE_XML_NS = "{req_document.xsd}"
 PURE_INLINE_MARKER_RE = re.compile(r"\((M|O|I)\)")
 PURE_LEADING_ID_RE = re.compile(r"^\d+(?:\.\d+)*[a-z]?\s+")
 PURE_MARKER_LEGEND = "(M) mandatory, (O) optional"
+# EIRENE also marks informative paragraphs; the legend is what the document
+# itself states in its introduction, so neighbours' markers stay explained.
+PURE_DOCUMENT_LEGENDS = {
+    "2007-eirene_fun_7-2": "(M) mandatory, (O) optional, (I) informative",
+    "2007-ertms": PURE_MARKER_LEGEND,
+}
 PURE_IMPERSONAL_RE = re.compile(
     r"^it\s+(?:shall|should|may|must|will)\s+(?:not\s+)?be\s+possible\b", re.I
 )
@@ -2113,6 +2142,7 @@ def parse_pure_document(
     document_title = PURE_DOCUMENT_TITLES.get(
         document_id, _pure_element_text(root.find(f"{PURE_XML_NS}title"))
     )
+    legend = PURE_DOCUMENT_LEGENDS.get(document_id, PURE_MARKER_LEGEND)
     rows: list[dict[str, Any]] = []
 
     def walk(element: ET.Element, path: list[str]) -> None:
@@ -2127,6 +2157,7 @@ def parse_pure_document(
                     {
                         "document_id": document_id,
                         "document_title": document_title,
+                        "document_legend": legend,
                         "requirement_id": str(child.get("id", "")),
                         "section_path": " > ".join(path),
                         **fields,
@@ -2243,7 +2274,7 @@ def make_pure_seed_candidates(
                 "context_section": str(row.get("section_path", "")),
                 "context_before": str(row.get("neighbour_before", "")),
                 "context_after": str(row.get("neighbour_after", "")),
-                "context_legend": PURE_MARKER_LEGEND,
+                "context_legend": str(row.get("document_legend", PURE_MARKER_LEGEND)),
             }
         )
 
@@ -2975,11 +3006,43 @@ def render_prompt(template: str, **values: Any) -> str:
     return template.format(**values)
 
 
+def document_context_text(item: Mapping[str, Any]) -> str:
+    """Render the document context of a `pure` item for the `document` arm.
+
+    One renderer serves both the single-item template (`context_block`) and the
+    per-item `context` value of the batched wrapper, so the two never drift.
+    The source statement itself is never repeated here.
+    """
+    marker = str(item.get("context_marker", "")).strip()
+    legend = str(item.get("context_legend", "")).strip()
+    document = str(item.get("context_document", "")).strip()
+    lines = [f"Document: {document}" + (f" (markers: {legend})" if legend else "")]
+    section = str(item.get("context_section", "")).strip()
+    if section:
+        lines.append(f"Section: {section}")
+    before = str(item.get("context_before", "")).strip()
+    if before:
+        lines.append(f"Preceding requirement {before}")
+    requirement_id = str(item.get("context_requirement_id", "")).strip()
+    this_line = f"This requirement: {requirement_id}" if requirement_id else ""
+    if marker:
+        this_line = (this_line or "This requirement:") + f", marker ({marker})"
+    if this_line:
+        lines.append(this_line)
+    after = str(item.get("context_after", "")).strip()
+    if after:
+        lines.append(f"Following requirement {after}")
+    return "\n".join(lines)
+
+
 def prompt_for_benchmark_task(
     task: str,
     item: Mapping[str, Any],
     task1_template: str,
     task2_template: str,
+    *,
+    item_context: str = DEFAULT_ITEM_CONTEXT,
+    task2_context_template: str | None = None,
 ) -> str:
     if task == "task1":
         return render_prompt(
@@ -2988,6 +3051,16 @@ def prompt_for_benchmark_task(
             candidate_requirement=item["candidate_requirement"],
         )
     if task == "task2":
+        if normalize_item_context(item_context) == ITEM_CONTEXT_DOCUMENT:
+            if not task2_context_template:
+                raise ValueError(
+                    "item_context=document needs a task2_context_template."
+                )
+            return render_prompt(
+                task2_context_template,
+                source_statement=item["source_statement"],
+                context_block=document_context_text(item),
+            )
         return render_prompt(task2_template, source_statement=item["source_statement"])
     raise ValueError(f"Unsupported benchmark task: {task}")
 
@@ -3109,6 +3182,7 @@ def compute_job_config_sha(
     batch_size: int = 1,
     batch_order: str = DEFAULT_BATCH_ORDER,
     fallback_batch_size: int = 1,
+    item_context: str = DEFAULT_ITEM_CONTEXT,
 ) -> str:
     """Config fingerprint for a single completion job.
 
@@ -3136,8 +3210,14 @@ def compute_job_config_sha(
     matches the current plan. To keep an old run resumable without re-requesting,
     replay it with the v1 fingerprint or accept the re-request cost. The same
     applies to v2 rows under the v3 definition.
+
+    `item_context` (the document-context ablation) enters the canonical form
+    only when it is not `bare`, so every fingerprint written before the knob
+    existed stays valid and no version bump is needed; the `document` arm
+    also hashes its own batch wrapper.
     """
     resolved_batch_size = positive_int(batch_size, "batch_size")
+    resolved_item_context = normalize_item_context(item_context)
     canonical = compact_json(
         {
             "sha_version": JOB_CONFIG_SHA_VERSION,
@@ -3165,8 +3245,17 @@ def compute_job_config_sha(
             # Only batched plans depend on the wrapper text, so single-item runs
             # keep a fingerprint that is stable across wrapper edits.
             **(
-                {"batch_wrapper_sha": batch_prompt_wrapper_sha(task)}
+                {
+                    "batch_wrapper_sha": batch_prompt_wrapper_sha(
+                        task, resolved_item_context
+                    )
+                }
                 if resolved_batch_size > 1
+                else {}
+            ),
+            **(
+                {"item_context": resolved_item_context}
+                if resolved_item_context != DEFAULT_ITEM_CONTEXT
                 else {}
             ),
         }
@@ -3207,6 +3296,7 @@ def completion_request_job(
     batch_order: str = DEFAULT_BATCH_ORDER,
     batch_size: int = 1,
     server_model_probe: Mapping[str, Any] | str | None = None,
+    item_context: str = DEFAULT_ITEM_CONTEXT,
 ) -> dict[str, Any]:
     resolved_response_format, resolved_extra_body = resolve_response_format_args(
         task,
@@ -3237,6 +3327,7 @@ def completion_request_job(
             batch_size=batch_size,
             batch_order=batch_order,
             fallback_batch_size=fallback_batch_size,
+            item_context=item_context,
         ),
         "job_config_sha_version": JOB_CONFIG_SHA_VERSION,
         "model": model,
@@ -3273,6 +3364,7 @@ def completion_request_job(
         "batch_order": normalize_batch_order(batch_order),
         "batch_size": positive_int(batch_size, "batch_size"),
         "server_model_probe": server_model_probe,
+        "item_context": normalize_item_context(item_context),
     }
 
 
@@ -3307,6 +3399,7 @@ def _append_completion_jobs(
     batch_order: str,
     batch_size: int,
     server_model_probe: Mapping[str, Any] | str | None,
+    item_context: str = DEFAULT_ITEM_CONTEXT,
 ) -> None:
     """Append the deterministic job and any stochastic samples for one rendered prompt."""
     shared = {
@@ -3336,6 +3429,7 @@ def _append_completion_jobs(
         "batch_order": batch_order,
         "batch_size": batch_size,
         "server_model_probe": server_model_probe,
+        "item_context": item_context,
     }
     jobs.append(
         completion_request_job(
@@ -3391,9 +3485,12 @@ def planned_completion_jobs(
     batch_order: str = DEFAULT_BATCH_ORDER,
     batch_size: int = 1,
     server_model_probe: Mapping[str, Any] | str | None = None,
+    item_context: str = DEFAULT_ITEM_CONTEXT,
+    task2_context_template: str | None = None,
 ) -> list[dict[str, Any]]:
     jobs: list[dict[str, Any]] = []
     task_list = normalize_task_filter(tasks)
+    resolved_item_context = normalize_item_context(item_context)
     for item in benchmark_rows:
         for task in task_list:
             _append_completion_jobs(
@@ -3401,7 +3498,12 @@ def planned_completion_jobs(
                 item=item,
                 task=task,
                 prompt=prompt_for_benchmark_task(
-                    task, item, task1_template, task2_template
+                    task,
+                    item,
+                    task1_template,
+                    task2_template,
+                    item_context=resolved_item_context,
+                    task2_context_template=task2_context_template,
                 ),
                 prompt_version=prompt_version,
                 model=model,
@@ -3428,6 +3530,7 @@ def planned_completion_jobs(
                 batch_order=batch_order,
                 batch_size=batch_size,
                 server_model_probe=server_model_probe,
+                item_context=resolved_item_context,
             )
     return jobs
 
@@ -4122,6 +4225,13 @@ def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
     task = str(jobs[0]["task"])
     if any(str(job["task"]) != task for job in jobs):
         raise ValueError("Batch prompts must contain jobs for exactly one task.")
+    item_context = normalize_item_context(jobs[0].get("item_context"))
+    if any(
+        normalize_item_context(job.get("item_context")) != item_context for job in jobs
+    ):
+        raise ValueError(
+            "Batch prompts must contain jobs for exactly one item_context."
+        )
 
     if task == "task1":
         items = [
@@ -4145,16 +4255,34 @@ def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
         )
 
     if task == "task2":
+        # The `document` arm (docs/context_ablation.md) adds one `context`
+        # value per item and one instruction sentence; the bare rendering is
+        # the paper condition and must stay byte-identical (its wrapper sha is
+        # pinned in the tests).
+        with_context = item_context == ITEM_CONTEXT_DOCUMENT
         items = [
             {
                 "request_index": int(job["request_index"]),
                 "source_statement": str(job["item"]["source_statement"]),
+                **(
+                    {"context": document_context_text(job["item"])}
+                    if with_context
+                    else {}
+                ),
             }
             for job in jobs
         ]
+        context_instruction = (
+            "Each item's context shows where its source statement appears: the "
+            "document, section, the author's requirement marker, and the "
+            "neighbouring requirements. Extract from the source statement only.\n"
+            if with_context
+            else ""
+        )
         return (
             "Extract exactly one requirement from each source statement.\n"
-            "Preserve the modality of each source. Evaluate each item independently.\n\n"
+            "Preserve the modality of each source. Evaluate each item independently.\n"
+            f"{context_instruction}\n"
             'Use one of: "mandatory", "recommended", "optional", "nice_to_have".\n'
             "Use confidence as a decimal from 0.0 to 1.0 for confidence in the selected modality.\n"
             'Do not return percentages such as 95 or strings such as "95%".\n'
@@ -4214,12 +4342,23 @@ BATCH_WRAPPER_PROBE_ITEM = {
     "source_statement": "The system MUST export reports.",
     "candidate_requirement": "The system MUST export reports.",
     "task2_requirement": "The system must export reports.",
+    # Fixed placeholders for the `document` item_context; the bare wrapper
+    # ignores them, so the bare digest is unchanged.
+    "context_document": "Probe document",
+    "context_legend": PURE_MARKER_LEGEND,
+    "context_section": "1 Probe section",
+    "context_requirement_id": "1.1",
+    "context_marker": "M",
+    "context_before": "",
+    "context_after": "1.2 (O): The system should archive reports.",
 }
 
 
 @cache
-def batch_prompt_wrapper_sha(task: str) -> str:
-    """SHA-256 of the batch prompt wrapper for ``task``.
+def batch_prompt_wrapper_sha(
+    task: str, item_context: str = DEFAULT_ITEM_CONTEXT
+) -> str:
+    """SHA-256 of the batch prompt wrapper for ``task`` and ``item_context``.
 
     Renders :func:`batch_prompt_for_completion_jobs` for two fixed dummy jobs
     (request_index 0 and 1, fixed placeholder statements) so the digest depends
@@ -4232,6 +4371,7 @@ def batch_prompt_wrapper_sha(task: str) -> str:
             "task": str(task),
             "request_index": index,
             "item": dict(BATCH_WRAPPER_PROBE_ITEM),
+            "item_context": normalize_item_context(item_context),
         }
         for index in range(2)
     ]
@@ -4864,6 +5004,7 @@ def build_raw_record(
     batch_order: str = DEFAULT_BATCH_ORDER,
     batch_seed_ids: Iterable[str] | None = None,
     batch_variant_mix: int | str = "",
+    item_context: str = DEFAULT_ITEM_CONTEXT,
 ) -> dict[str, Any]:
     record_contract_version = output_contract_version
     record_confidence_scale = confidence_scale
@@ -4938,6 +5079,7 @@ def build_raw_record(
         "request_seed": completion.get("request_seed", request_seed),
         "job_config_sha_version": int(job_config_sha_version),
         "batch_order": normalize_batch_order(batch_order),
+        "item_context": normalize_item_context(item_context),
     }
     if (
         task == "task2"
@@ -5033,6 +5175,8 @@ def build_raw_record(
         "task3_audit_mode",
         "ordinal_strength",
         "numeric_strength",
+        "context_marker",
+        "context_requirement_id",
     ]:
         if key in item:
             record[key] = item[key]
@@ -5113,6 +5257,7 @@ def _job_record(
         batch_order=str(job.get("batch_order", DEFAULT_BATCH_ORDER)),
         batch_seed_ids=composition["batch_seed_ids"],
         batch_variant_mix=composition["batch_variant_mix"],
+        item_context=str(job.get("item_context", DEFAULT_ITEM_CONTEXT)),
     )
 
 
@@ -7242,6 +7387,7 @@ def run_registry_summary(
     request_extra_body: Mapping[str, Any] | None = None,
     server_model_probe: Mapping[str, Any] | str | None = None,
     batch_order: str = DEFAULT_BATCH_ORDER,
+    item_context: str = DEFAULT_ITEM_CONTEXT,
     notes: str = "",
 ) -> dict[str, Any]:
     task_list = normalize_task_filter(tasks)
@@ -7347,6 +7493,7 @@ def run_registry_summary(
         "request_extra_body": compact_json(request_extra_body),
         "server_model_probe": compact_json(server_model_probe),
         "batch_order": normalize_batch_order(batch_order),
+        "item_context": normalize_item_context(item_context),
         "parse_status_histogram": compact_json(
             {
                 key: value

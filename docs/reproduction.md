@@ -317,6 +317,7 @@ Environment variables recognised by the runners and the wrapper:
 | `max_retries` | profile | Request retry budget. |
 | `batch_order` | profile and run | `grouped` (consecutive request indices, the policy of every reported run) or `shuffled` — a constrained shuffle that never places two source variants of one seed in the same batch, derived deterministically from the run seed and stable across resume (the ablation; see [`TODO.md`](../TODO.md) section A). |
 | `batch_size` | profile | Benchmark items per request. 16 in every official-cohort run; `1` gives true single-item delivery. |
+| `item_context` | run | `bare` (every reported run) or `document` — Task 2 items are shown with their document, section, author marker and neighbouring requirements. Only the `pure` dataset carries that context; see [`context_ablation.md`](context_ablation.md). |
 
 ### Example Provider Profiles
 

@@ -55,7 +55,8 @@ conf/
   embedding/               qwen3_06b.yaml (default), qwen3_4b.yaml, bge_m3.yaml,
                            multilingual_e5_large.yaml, embeddinggemma_300m.yaml,
                            tfidf_proxy.yaml
-  experiment/              paper_cohort.yaml  batching_ablation.yaml  diverse_families.yaml
+  experiment/              paper_cohort.yaml  batching_ablation.yaml  context_ablation.yaml
+                           diverse_families.yaml
 ```
 
 The eight `conf/profile/*.yaml` files mirror
@@ -74,6 +75,7 @@ Top-level fields in `conf/config.yaml`:
 | Field | Meaning |
 | --- | --- |
 | `run_group_id`, `prompt_version`, `seed`, `batch_order` | Run-level provenance and defaults, same keys as the JSON config |
+| `item_context` | `bare` (the paper condition) or `document`: show each Task 2 item inside its document context. Run-level only; `document` requires `dataset=pure` and `task=task2` ([`context_ablation.md`](context_ablation.md)). Recorded on every raw row and in the registry. |
 | `acse_embedding_backend`, `acse_embedding_mlx_model` | Resolved `embedding=` selection, persisted on raw run rows for later analysis and cache generation |
 | `model` | Model id to run. `null` runs every model of the selected profile sequentially (the `--all-models` behaviour) |
 | `task` | `task1` \| `task2` \| `both` \| `task3`; `task3` dispatches to the Task 3 runner |
@@ -160,6 +162,7 @@ applied last and opted into with a leading `+`:
 ```bash
 .venv/bin/python scripts/run.py --multirun +experiment=paper_cohort
 .venv/bin/python scripts/run.py --multirun +experiment=batching_ablation
+.venv/bin/python scripts/run.py --multirun +experiment=context_ablation
 .venv/bin/python scripts/run.py --multirun +experiment=diverse_families
 ```
 
@@ -167,6 +170,7 @@ applied last and opted into with a leading `+`:
 | --- | --- |
 | `paper_cohort` | Official cohort: `profile=zai`, all five GLM models (`glm-4.5-air,glm-4.7,glm-5,glm-5-turbo,glm-5.1`), datasets `nice,mlm_tapt`, both variants `must,shall`, Task 1 + Task 2, `mode=full`. The one non-GLM official model lives on `profile=kit_toolbox` and runs as a separate invocation (see the file header). |
 | `batching_ablation` | [`TODO.md`](../TODO.md) section A: `mlm_tapt`/`must`, Task 2, deterministic pass only, sweeping `profile.batch_order=grouped,shuffled` with `profile.batch_size` pinned to 16 so the two arms differ only in batch membership. The `batch_size=1` arm and the `kit.gemma4-31b-it` half of the cohort are one extra override each, spelled out in the file header. |
+| `context_ablation` | [`TODO.md`](../TODO.md) section B, minimal version: `pure`/`must`, Task 2, deterministic pass only, grouped 16-item batches, sweeping the run-level `item_context=bare,document`. Own `run_group_id` (`context-ablation-2026-09`) so the arms can never be selected into paper tables; the `kit.gemma4-31b-it` half is one extra override (file header). Table: `scripts/compare_context_ablation.py`; design and reading guide in [`context_ablation.md`](context_ablation.md). |
 | `diverse_families` | [`TODO.md`](../TODO.md) section C: `openai`, `mistral`, `google_gemini`, `ollama_local`, every model of each profile, both datasets, variant `must`. All OpenAI-compatible endpoints; adding a family without one is out of scope. |
 
 Presets compose with further overrides, e.g.

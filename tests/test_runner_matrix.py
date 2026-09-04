@@ -19,6 +19,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 from scripts import eval_utils as eu, run_experiment_from_config as runner
@@ -113,7 +114,11 @@ def _scaffold(root: Path) -> None:
     """Create the temp project layout with one benchmark CSV per matrix cell."""
     (root / "prompts").mkdir(parents=True)
     (root / "data/processed").mkdir(parents=True)
-    for name in ("mandatory_entailment", "modality_extraction"):
+    for name in (
+        "mandatory_entailment",
+        "modality_extraction",
+        "modality_extraction_context",
+    ):
         (root / f"prompts/{name}.txt").write_text(
             Path(f"prompts/{name}.txt").read_text(encoding="utf-8"), encoding="utf-8"
         )
@@ -263,6 +268,101 @@ class RunnerMatrixTest(unittest.TestCase):
                         with self.subTest(run_id=run_id):
                             self.assertIn("start", kinds)
                             self.assertIn("finish", kinds)
+
+
+class RunnerItemContextTest(unittest.TestCase):
+    """The document arm is provenance-visible end to end and Task 2 only."""
+
+    PURE_SEEDS: ClassVar[list[dict[str, str]]] = [
+        {
+            **seed,
+            "context_document": "Fixture FRS",
+            "context_legend": "(M) mandatory, (O) optional",
+            "context_section": "1 Fixture",
+            "context_requirement_id": f"1.{index}",
+            "context_marker": "M" if index == 1 else "O",
+            "context_before": "",
+            "context_after": "",
+        }
+        for index, seed in enumerate(SEEDS, start=1)
+    ]
+
+    def _scaffold_pure(self, root: Path) -> None:
+        _scaffold(root)
+        eu.write_csv_rows(
+            eu.artifact_path(root / "data/processed/benchmark_items.csv", "pure"),
+            eu.build_benchmark_items(
+                self.PURE_SEEDS, passthrough_fields=eu.PURE_CONTEXT_FIELDS
+            ),
+        )
+
+    def _run(self, root: Path, item_context: str, task: str | None = "task2") -> None:
+        config_path = _run_config(
+            root, datasets=["pure"], variants=["must"], models=["fake-model-a"]
+        )
+        run_config = eu.load_run_config(config_path)
+        run_config["item_context"] = item_context
+        with (
+            mock.patch.object(eu, "project_root", return_value=root),
+            redirect_stdout(io.StringIO()),
+        ):
+            # smoke_items=8 keeps both seeds (4 items each), so both markers run.
+            runner.run_from_config(run_config, _runner_args(task=task, smoke_items=8))
+
+    def test_document_arm_requires_task2_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._scaffold_pure(root)
+            with self.assertRaises(ValueError):
+                self._run(root, "document", task=None)
+
+    def test_both_arms_write_their_context_into_records_and_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._scaffold_pure(root)
+            self._run(root, "bare")
+            self._run(root, "document")
+
+            registry = eu.read_csv_rows(
+                eu.run_registry_path(root, "pure", "must", smoke=True)
+            )
+            self.assertEqual(
+                sorted(row["item_context"] for row in registry), ["bare", "document"]
+            )
+            self.assertTrue(all(row["status"] == "complete" for row in registry))
+
+            raw = eu.read_jsonl(
+                eu.model_outputs_raw_path(root, "pure", "must", smoke=True)
+            )
+            by_context: dict[str, list[dict[str, object]]] = {}
+            for row in raw:
+                by_context.setdefault(str(row["item_context"]), []).append(row)
+            self.assertEqual(set(by_context), {"bare", "document"})
+            self.assertEqual(
+                {row["context_marker"] for row in by_context["document"]}, {"M", "O"}
+            )
+            self.assertTrue(
+                all(
+                    "Document context" in str(row["prompt"])
+                    for row in by_context["document"]
+                )
+            )
+            self.assertTrue(
+                all(
+                    "Document context" not in str(row["prompt"])
+                    for row in by_context["bare"]
+                )
+            )
+            self.assertNotEqual(
+                {row["job_config_sha"] for row in by_context["bare"]},
+                {row["job_config_sha"] for row in by_context["document"]},
+            )
+            # Same items, same answers from the offline fixture: the arms differ
+            # only in what the model was shown.
+            self.assertEqual(
+                sorted(str(row["item_id"]) for row in by_context["bare"]),
+                sorted(str(row["item_id"]) for row in by_context["document"]),
+            )
 
 
 class RunnerWarningEventTest(unittest.TestCase):

@@ -5009,6 +5009,14 @@ class EvalUtilsTest(unittest.TestCase):
             )
 
 
+_MINIMAL_PROFILE = {
+    "profile_id": "p",
+    "provider_id": "p",
+    "base_url": "http://x/v1",
+    "models": ["m"],
+}
+
+
 class ResponseProvenanceAndRetryTest(unittest.TestCase):
     """Provider-response provenance, seeding, retries, and batch composition."""
 
@@ -5478,6 +5486,277 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
             eu.compute_job_config_sha(**base, task="task2", batch_size=16),
             "9ac6e6ad20307371e4774b4ecc36a06f8e1e04c7e1ed2c7b37d637574343db7a",
         )
+
+    def test_item_context_knob_normalizes_and_rejects_unknown_values(self):
+        self.assertEqual(eu.normalize_item_context(None), "bare")
+        self.assertEqual(eu.normalize_item_context(""), "bare")
+        self.assertEqual(eu.normalize_item_context(" Document "), "document")
+        with self.assertRaises(ValueError):
+            eu.normalize_item_context("envelope")
+        run_config = eu.normalize_run_config(
+            {
+                "run_group_id": "g",
+                "profiles": [_MINIMAL_PROFILE],
+                "item_context": "document",
+            }
+        )
+        self.assertEqual(run_config["item_context"], "document")
+        self.assertEqual(
+            eu.normalize_run_config(
+                {"run_group_id": "g", "profiles": [_MINIMAL_PROFILE]}
+            )["item_context"],
+            "bare",
+        )
+
+    def _pure_item(self, **overrides):
+        item = {
+            "item_id": "S0001_optional",
+            "seed_id": "S0001",
+            "source_modality": "optional",
+            "source_statement": "The system MAY export reports.",
+            "candidate_requirement": "The system MUST export reports.",
+            "context_document": "Fixture FRS, version 1",
+            "context_legend": "(M) mandatory, (O) optional",
+            "context_section": "2 Reporting > 2.1 Exports",
+            "context_requirement_id": "2.1.2",
+            "context_marker": "O",
+            "context_before": "2.1.1 (M): The system shall store reports.",
+            "context_after": "2.1.3 (O): The system should archive reports.",
+        }
+        return {**item, **overrides}
+
+    def test_document_context_text_renders_every_field_once(self):
+        text = eu.document_context_text(self._pure_item())
+        self.assertEqual(
+            text.splitlines(),
+            [
+                "Document: Fixture FRS, version 1 (markers: (M) mandatory, (O) optional)",
+                "Section: 2 Reporting > 2.1 Exports",
+                "Preceding requirement 2.1.1 (M): The system shall store reports.",
+                "This requirement: 2.1.2, marker (O)",
+                "Following requirement 2.1.3 (O): The system should archive reports.",
+            ],
+        )
+        # The source statement itself is never repeated in the context.
+        self.assertNotIn("MAY export", text)
+        edge = eu.document_context_text(
+            self._pure_item(context_before="", context_after="")
+        )
+        self.assertNotIn("Preceding", edge)
+        self.assertNotIn("Following", edge)
+
+    def test_prompt_for_benchmark_task_renders_context_only_for_the_document_arm(
+        self,
+    ):
+        item = self._pure_item()
+        task2 = eu.load_prompt("prompts/modality_extraction.txt")
+        task2_context = eu.load_prompt("prompts/modality_extraction_context.txt")
+        bare = eu.prompt_for_benchmark_task(
+            "task2", item, "t1 {source_statement}", task2
+        )
+        document = eu.prompt_for_benchmark_task(
+            "task2",
+            item,
+            "t1 {source_statement}",
+            task2,
+            item_context="document",
+            task2_context_template=task2_context,
+        )
+
+        self.assertNotIn("Document context", bare)
+        self.assertIn(
+            "Document context (where the source statement appears):", document
+        )
+        self.assertIn("This requirement: 2.1.2, marker (O)", document)
+        self.assertIn('Source:\n"The system MAY export reports."', document)
+        self.assertIn("not from its context", document)
+        # The fake smoke completion locates the statement by this exact shape.
+        self.assertEqual(
+            run_config_cli.source_from_prompt(document),
+            "The system MAY export reports.",
+        )
+        with self.assertRaises(ValueError):
+            eu.prompt_for_benchmark_task(
+                "task2", item, "t1", task2, item_context="document"
+            )
+        # Task 1 ignores the knob entirely.
+        self.assertEqual(
+            eu.prompt_for_benchmark_task(
+                "task1", item, "t1 {source_statement}", task2, item_context="document"
+            ),
+            "t1 The system MAY export reports.",
+        )
+
+    def test_batch_prompt_document_arm_adds_context_per_item_and_keeps_bare_intact(
+        self,
+    ):
+        jobs = [
+            {
+                "task": "task2",
+                "request_index": index,
+                "item": self._pure_item(item_id=f"S000{index}_optional"),
+            }
+            for index in range(2)
+        ]
+        bare = eu.batch_prompt_for_completion_jobs(jobs)
+        document = eu.batch_prompt_for_completion_jobs(
+            [{**job, "item_context": "document"} for job in jobs]
+        )
+
+        self.assertEqual(
+            bare,
+            eu.batch_prompt_for_completion_jobs(
+                [{**job, "item_context": "bare"} for job in jobs]
+            ),
+        )
+        self.assertNotIn("context", bare)
+        bare_items = json.loads(bare.split("Items:\n", 1)[1])
+        document_items = json.loads(document.split("Items:\n", 1)[1])
+        self.assertEqual(set(bare_items[0]), {"request_index", "source_statement"})
+        self.assertEqual(
+            set(document_items[0]), {"request_index", "source_statement", "context"}
+        )
+        self.assertIn(
+            "This requirement: 2.1.2, marker (O)", document_items[1]["context"]
+        )
+        self.assertIn("Extract from the source statement only.", document)
+        self.assertNotIn("Extract from the source statement only.", bare)
+        self.assertEqual(
+            [item["source_statement"] for item in bare_items],
+            [item["source_statement"] for item in document_items],
+        )
+        with self.assertRaises(ValueError):
+            eu.batch_prompt_for_completion_jobs(
+                [jobs[0], {**jobs[1], "item_context": "document"}]
+            )
+        # Task 1 and Task 3 wrappers do not change with the knob.
+        for task, extra in (
+            ("task1", {}),
+            ("task3", {"task2_requirement": "The system may export reports."}),
+        ):
+            task_jobs = [
+                {"task": task, "request_index": 0, "item": self._pure_item(**extra)}
+            ]
+            self.assertEqual(
+                eu.batch_prompt_for_completion_jobs(task_jobs),
+                eu.batch_prompt_for_completion_jobs(
+                    [{**task_jobs[0], "item_context": "document"}]
+                ),
+            )
+
+    def test_document_arm_has_its_own_wrapper_and_job_fingerprints(self):
+        self.assertNotEqual(
+            eu.batch_prompt_wrapper_sha("task2", "document"),
+            eu.batch_prompt_wrapper_sha("task2"),
+        )
+        self.assertEqual(
+            eu.batch_prompt_wrapper_sha("task2", "bare"),
+            eu.batch_prompt_wrapper_sha("task2"),
+        )
+        base = {
+            "prompt": "p",
+            "prompt_version": "v2-conf01",
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "max_tokens": 64,
+            "structured_output": "json_object",
+            "json_mode": True,
+        }
+        for batch_size in (1, 16):
+            with self.subTest(batch_size=batch_size):
+                bare = eu.compute_job_config_sha(
+                    **base, task="task2", batch_size=batch_size
+                )
+                self.assertEqual(
+                    bare,
+                    eu.compute_job_config_sha(
+                        **base, task="task2", batch_size=batch_size, item_context="bare"
+                    ),
+                )
+                self.assertNotEqual(
+                    bare,
+                    eu.compute_job_config_sha(
+                        **base,
+                        task="task2",
+                        batch_size=batch_size,
+                        item_context="document",
+                    ),
+                )
+
+    def test_planned_jobs_and_raw_records_carry_item_context(self):
+        rows = [self._pure_item()]
+        common = {
+            "tasks": ["task2"],
+            "model": "m",
+            "host": "http://x/v1",
+            "run_id": "r",
+            "prompt_version": "v2-conf01",
+            "task1_template": "t1 {source_statement} {candidate_requirement}",
+            "task2_template": eu.load_prompt("prompts/modality_extraction.txt"),
+            "deterministic": {"temperature": 0.0, "top_p": 1.0, "samples": 1},
+            "stochastic": {"temperature": 0.7, "top_p": 1.0, "samples": 0},
+            "max_tokens": 64,
+            "timeout_s": 10,
+            "api_key_env": "K",
+            "batch_size": 16,
+        }
+        bare_job = eu.planned_completion_jobs(rows, **common)[0]
+        document_job = eu.planned_completion_jobs(
+            rows,
+            **common,
+            item_context="document",
+            task2_context_template=eu.load_prompt(
+                "prompts/modality_extraction_context.txt"
+            ),
+        )[0]
+
+        self.assertEqual(bare_job["item_context"], "bare")
+        self.assertEqual(document_job["item_context"], "document")
+        self.assertNotEqual(bare_job["job_config_sha"], document_job["job_config_sha"])
+        self.assertIn("Document context", document_job["prompt"])
+        self.assertNotIn("Document context", bare_job["prompt"])
+
+        completion = {
+            "ok": True,
+            "raw_text": '{"requirement": "x", "modality": "optional", "confidence": 0.5}',
+            "response_json": {},
+            "latency_s": 0.0,
+            "error": "",
+        }
+        record = eu._job_record(
+            document_job,
+            completion=completion,
+            request_index=0,
+            response_format=None,
+            request_extra_body=None,
+        )
+        self.assertEqual(record["item_context"], "document")
+        self.assertEqual(record["context_marker"], "O")
+        self.assertEqual(record["context_requirement_id"], "2.1.2")
+        plain = eu._job_record(
+            {**bare_job, "item": export_report_seeds()[0] | bare_job["item"]},
+            completion=completion,
+            request_index=0,
+            response_format=None,
+            request_extra_body=None,
+        )
+        self.assertEqual(plain["item_context"], "bare")
+        legacy = eu.build_raw_record(
+            run_id="r",
+            model="m",
+            host="h",
+            task="task2",
+            item={"item_id": "i", "seed_id": "s", "source_modality": "optional"},
+            sample_index=0,
+            sample_kind="deterministic",
+            temperature=0.0,
+            top_p=1.0,
+            prompt_version="v2-conf01",
+            prompt="p",
+            completion=completion,
+        )
+        self.assertEqual(legacy["item_context"], "bare")
+        self.assertNotIn("context_marker", legacy)
 
     def test_batch_prompt_wrapper_sha_digests_the_rendered_wrapper(self):
         probe_jobs = [

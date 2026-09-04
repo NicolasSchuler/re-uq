@@ -28,6 +28,9 @@ run_group_id: provider-matrix-v2-2026-05
 prompt_version: v2-conf01
 seed: 20260518
 batch_order: grouped
+# Task 2 items are shown bare (the paper condition) or inside their document
+# context; `document` needs dataset=pure and task=task2 (docs/context_ablation.md).
+item_context: bare
 
 # ACSE semantic embedding backend selection (conf/embedding/ group). Task 1/2
 # runs persist the resolved label on every raw row; later analysis and cache

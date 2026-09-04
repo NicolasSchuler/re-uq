@@ -189,6 +189,7 @@ class HydraCompositionTest(unittest.TestCase):
         for preset, expected in (
             ("paper_cohort", {"task": "both", "mode": "full"}),
             ("batching_ablation", {"task": "task2", "mode": "full"}),
+            ("context_ablation", {"task": "task2", "mode": "full"}),
             ("diverse_families", {"task": "both", "mode": "full"}),
         ):
             with self.subTest(experiment=preset):
@@ -207,6 +208,35 @@ class HydraCompositionTest(unittest.TestCase):
         self.assertEqual(run_config["profiles"][0]["models"], ["glm-5.1"])
         # The grouped baseline arm is the paper condition: 16 items per request.
         self.assertEqual(run_config["profiles"][0]["batch_size"], 16)
+
+    def test_context_ablation_preset_targets_the_pure_cell_with_its_own_group(self):
+        cfg = compose_config(overrides=["+experiment=context_ablation"])
+        run_config = eu.normalize_run_config(hb.hydra_config_to_run_config(cfg))
+        self.assertEqual(run_config["datasets"], ["pure"])
+        self.assertEqual(run_config["benchmark_variants"], ["must"])
+        self.assertEqual(run_config["tasks"], ["task2"])
+        self.assertEqual(run_config["stochastic"]["samples"], 0)
+        self.assertEqual(run_config["profiles"][0]["models"], ["glm-5.1"])
+        self.assertEqual(run_config["profiles"][0]["batch_size"], 16)
+        self.assertEqual(run_config["profiles"][0]["batch_order"], "grouped")
+        self.assertEqual(run_config["run_group_id"], "context-ablation-2026-09")
+        # The default arm is the paper condition; the sweep flips it.
+        self.assertEqual(run_config["item_context"], "bare")
+        swept = compose_config(
+            overrides=["+experiment=context_ablation", "item_context=document"]
+        )
+        self.assertEqual(
+            eu.normalize_run_config(hb.hydra_config_to_run_config(swept))[
+                "item_context"
+            ],
+            "document",
+        )
+        self.assertEqual(
+            eu.normalize_run_config(hb.hydra_config_to_run_config(compose_config()))[
+                "item_context"
+            ],
+            "bare",
+        )
 
     def test_paper_cohort_preset_sweeps_the_five_glm_models_and_both_variants(self):
         cfg = compose_config(overrides=["+experiment=paper_cohort"])

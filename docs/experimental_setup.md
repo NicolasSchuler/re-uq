@@ -361,7 +361,7 @@ Raw records are written to `data/processed/model_outputs_raw*.jsonl`
 | Field group | In the reported runs | Added after this change |
 | --- | --- | --- |
 | Identity | `run_id`, `run_group_id`, `model`, `profile_id`, `provider_id`, `host`, `task`, `item_id`, `sample_kind`, `sample_index`, `request_index` | — |
-| Request | `prompt_version`, prompt hash, `temperature`, `top_p`, `max_tokens`, `json_mode`, `structured_output` | `request_seed`, `request_payload_sha`, `system_prompt` (always empty: only a user message is sent), `batch_variant_mix`, `max_retries`, `retry_count` |
+| Request | `prompt_version`, prompt hash, `temperature`, `top_p`, `max_tokens`, `json_mode`, `structured_output` | `request_seed`, `request_payload_sha`, `system_prompt` (always empty: only a user message is sent), `batch_variant_mix`, `max_retries`, `retry_count`, `item_context` (`bare` unless the document-context ablation) |
 | Response | `raw_text`, `parsed_json`, `parse_status`, latency | `finish_reason`, `usage_*` (prompt/completion/total tokens), `served_model`, `system_fingerprint`, `response_chars`, `requirement_word_count` |
 | Parse status values | `ok`, `invalid_json`, `invalid_confidence`, `invalid_label`, `missing_fields` | `truncated` |
 
@@ -495,8 +495,12 @@ strict strengthening — see `scripts/diagnose_embedding_separability.py`.
    approved), stakeholder role, priority fields, rationale, neighbouring
    requirements, and elicitation transcripts are not modelled. A model that
    strengthens a bare sentence might behave differently with a "Wishlist"
-   heading above it. This is the largest external-validity gap; the planned
-   extension is in [`TODO.md`](../TODO.md), section B.
+   heading above it. This is the largest external-validity gap. A minimal
+   two-arm ablation now exists (`item_context: bare|document` on the `pure`
+   cell built from two PURE documents with author-assigned M/O markers; see
+   [`context_ablation.md`](context_ablation.md)); its numbers are reported
+   separately and never pooled into the headline cells. The fuller extension
+   remains [`TODO.md`](../TODO.md), section B.
 3. **Grouped batching.** All reported numbers are under 16-item grouped batches
    that contain the minimal-pair contrast (§4). The ablation that would bound
    this effect has not been run.

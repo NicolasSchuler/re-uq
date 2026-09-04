@@ -199,7 +199,8 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
         self.assertEqual({row["source_dataset"] for row in rows}, {"PURE"})
         self.assertEqual({row["context_marker"] for row in rows}, {"M", "O"})
         self.assertEqual(
-            {row["context_legend"] for row in rows}, {eu.PURE_MARKER_LEGEND}
+            {row["context_legend"] for row in rows},
+            set(eu.PURE_DOCUMENT_LEGENDS.values()),
         )
         for row in rows:
             self.assertTrue(row["context_document"].strip(), row["item_id"])
@@ -1109,8 +1110,11 @@ class RunnerDiagnosticsTest(unittest.TestCase):
             expected_stochastic_samples=0,
             started_at_utc="2026-09-03T00:00:00Z",
             batch_order="shuffled",
+            item_context="document",
         )
         self.assertEqual(row["batch_order"], "shuffled")
+        self.assertEqual(row["item_context"], "document")
+        self.assertIn("item_context", eu.RUN_REGISTRY_FIELDS)
         self.assertEqual(row["retry_total"], 1)
         self.assertEqual(row["truncated_records"], 1)
         self.assertEqual(row["usage_completion_tokens"], 42)

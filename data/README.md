@@ -35,7 +35,7 @@ Fake-completion smoke runs write into a separate `data/processed/smoke/` tree, u
 
 ## Run Registry Columns
 
-Beyond the run identity and request parameters, `run_registry*.csv` records per-run quality counters: `batch_order`, `parse_status_histogram`, `retry_total`, `truncated_records`, `latency_p50_s`, `latency_p95_s`, and `usage_completion_tokens`. A `truncated` response counts as a parse failure, so `parse_success_rate` and `truncated_records` should be read together: a low success rate with nonzero truncations is a token-budget problem.
+Beyond the run identity and request parameters, `run_registry*.csv` records per-run quality counters: `batch_order`, `item_context`, `parse_status_histogram`, `retry_total`, `truncated_records`, `latency_p50_s`, `latency_p95_s`, and `usage_completion_tokens`. A `truncated` response counts as a parse failure, so `parse_success_rate` and `truncated_records` should be read together: a low success rate with nonzero truncations is a token-budget problem.
 
 ## What Raw Records Contain
 
