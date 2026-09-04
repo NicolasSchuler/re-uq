@@ -133,7 +133,8 @@ Run one task at a time when isolating failures:
   --mode full
 ```
 
-Resume a partial run by reusing the same run ID:
+Resume a partial run by reusing the same run ID and the same selection it was
+started with:
 
 ```bash
 .venv/bin/python scripts/run_experiment_from_config.py \
@@ -141,9 +142,25 @@ Resume a partial run by reusing the same run ID:
   --profile zai \
   --model glm-5.1 \
   --dataset mlm_tapt \
+  --task task2 \
   --mode resume \
   --run-id RUN_ID
 ```
+
+`--mode resume` refuses to start unless the run ID already exists in the run
+registry for that dataset/variant with the same provider, profile, model,
+dataset, variant, and task selection, so a mistyped ID fails instead of quietly
+creating a second run that only looks resumed. A resumed run keeps the
+`started_at_utc` and provenance `notes` of its first attempt; each resume is
+appended to `data/processed/logs/RUN_ID.resume.json` instead. If the run is
+aborted (a crash, or Ctrl-C), its registry row is reconciled to `failed` or
+`interrupted` rather than being left at `running`.
+
+While a cell is running, the runner holds an advisory lease at
+`data/processed/logs/RUN_ID.<cell>.lease.json`. A second runner that finds a
+live lease (owning process still alive, recent heartbeat) refuses the cell
+instead of duplicating paid requests; a lease left by a dead process is taken
+over with a warning.
 
 Resume reuses a cached raw row only when the row's `job_config_sha` matches the
 sha the resumed job would produce, so a config change silently re-requests the
