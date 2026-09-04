@@ -138,38 +138,61 @@ class CompletedRun:
     semantic_embedding_backend: str
 
 
+def scored_models(analysis_dir: Path, run_id: str) -> list[str]:
+    """Models this analysis dir actually scored deterministic Task 2 items for."""
+    return sorted(
+        {
+            str(row.get("model", "")).strip()
+            for row in eu.read_csv_rows(analysis_dir / "uq_scores.csv")
+            if str(row.get("run_id", "")) == run_id
+            and str(row.get("task", "")) == "task2"
+            and str(row.get("uq_method", "")) == "verbalized_confidence"
+            and str(row.get("model", "")).strip()
+        }
+    )
+
+
 def completed_runs_from_analysis_dirs(
     root: Path, output_root: Path
 ) -> list[CompletedRun]:
+    """Discover cacheable runs from provenance manifests, not directory names.
+
+    An analysis produced without ``--model`` records an empty ``model_filter``
+    and covers every model in its scores; those runs used to be skipped
+    entirely. The models are read back from ``uq_scores.csv`` so that a
+    multi-model analysis dir caches exactly like the single-model dirs, and any
+    directory carrying a provenance manifest is considered, whatever it is named.
+    """
+    del root  # discovery reads only the analysis dirs themselves
     runs: list[CompletedRun] = []
-    for manifest_path in sorted(
-        output_root.glob("evaluation_*/provenance_manifest.json")
-    ):
+    for manifest_path in sorted(output_root.glob("*/provenance_manifest.json")):
         analysis_dir = manifest_path.parent
         if not (analysis_dir / "uq_scores.csv").exists():
             continue
         provenance = json.loads(manifest_path.read_text(encoding="utf-8"))
         run_id = str(provenance.get("run_id", "")).strip()
-        model = str(provenance.get("model_filter", "")).strip()
+        if not run_id:
+            continue
+        model_filter = str(provenance.get("model_filter", "")).strip()
+        models = [model_filter] if model_filter else scored_models(analysis_dir, run_id)
         dataset_id = eu.normalize_dataset_id(provenance.get("dataset_id", ""))
         variant = eu.normalize_benchmark_variant(
             provenance.get("benchmark_variant", "must")
         )
-        if not run_id or not model:
-            continue
-        runs.append(
-            CompletedRun(
-                analysis_dir=analysis_dir,
-                dataset_id=dataset_id,
-                variant=variant,
-                run_id=run_id,
-                model=model,
-                profile=str(provenance.get("profile_filter", "")).strip(),
-                semantic_embedding_backend=str(
-                    provenance.get("semantic_embedding_backend", "")
-                ).strip(),
+        for model in models:
+            runs.append(
+                CompletedRun(
+                    analysis_dir=analysis_dir,
+                    dataset_id=dataset_id,
+                    variant=variant,
+                    run_id=run_id,
+                    model=model,
+                    profile=str(provenance.get("profile_filter", "")).strip(),
+                    semantic_embedding_backend=str(
+                        provenance.get("semantic_embedding_backend", "")
+                    ).strip(),
+                )
             )
-        )
     return runs
 
 
@@ -250,6 +273,74 @@ def existing_backend_manifests(output_root: Path) -> list[dict[str, Any]]:
         seen.add(key)
         manifests.append(manifest)
     return manifests
+
+
+def input_fingerprint(path: Path, manifest_dir: Path) -> dict[str, Any]:
+    """Identify one consumed input by content, addressed relative to the manifest.
+
+    Manifest-relative paths keep the cache readable after the tree is moved or
+    copied, which absolute paths would not survive.
+    """
+    entry: dict[str, Any] = {
+        "path": str(path.resolve().relative_to(manifest_dir.resolve(), walk_up=True)),
+        "sha256": "",
+        "bytes": 0,
+    }
+    if path.exists():
+        entry["sha256"] = eu.sha256_file(path)
+        entry["bytes"] = path.stat().st_size
+    return entry
+
+
+def cache_input_fingerprints(
+    root: Path, run: CompletedRun, backend_label: str, manifest_dir: Path
+) -> dict[str, Any]:
+    """Everything the cached artifacts were derived from, as a comparable dict.
+
+    A cache is only reusable when the raw outputs, the analysis scores, the
+    benchmark items, and the embedding identity are all unchanged. Comparing
+    these beats trusting the ``status`` field, which only says that some
+    earlier invocation finished.
+    """
+    _, model_name = eu.semantic_embedding_backend_args(backend_label)
+    return {
+        "raw_rows": input_fingerprint(
+            eu.model_outputs_raw_path(root, run.dataset_id, run.variant), manifest_dir
+        ),
+        "uq_scores": input_fingerprint(
+            run.analysis_dir / "uq_scores.csv", manifest_dir
+        ),
+        "benchmark_items": input_fingerprint(
+            eu.artifact_path(
+                root / "data/processed/benchmark_items.csv",
+                run.dataset_id,
+                run.variant,
+            ),
+            manifest_dir,
+        ),
+        "embedding_backend": backend_label,
+        "embedding_model": model_name or "",
+    }
+
+
+def cached_manifest_is_current(
+    manifest: dict[str, Any], expected: dict[str, Any], manifest_path: Path
+) -> bool:
+    """True when the manifest's recorded inputs still match the files on disk."""
+    recorded = manifest.get("inputs")
+    if recorded is None:
+        eu.logger.info(
+            "%s: cache manifest predates input fingerprints; recomputing.",
+            manifest_path,
+        )
+        return False
+    if recorded != expected:
+        eu.logger.info(
+            "%s: input fingerprints changed since the cache was written; recomputing.",
+            manifest_path,
+        )
+        return False
+    return True
 
 
 def sample_sort_key(row: dict[str, Any]) -> tuple[int, str]:
@@ -377,10 +468,12 @@ def compute_run_backend(
     )
     output_dir = eu.acse_semantic_cache_dir(run.analysis_dir, backend_label)
     manifest_path = output_dir / "manifest.json"
+    fingerprints = cache_input_fingerprints(root, run, backend_label, output_dir)
     if manifest_path.exists() and not force:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest["status"] = "reused"
-        return manifest
+        if cached_manifest_is_current(manifest, fingerprints, manifest_path):
+            manifest["status"] = "reused"
+            return manifest
 
     raw_rows, benchmark_by_item = load_run_rows(root, run)
     det_scores = load_deterministic_task2_scores(run)
@@ -467,13 +560,12 @@ def compute_run_backend(
             global_embeddings,
             indices,
         )
-        diagnostics = eu.acse_semantic_diagnostics_from_embeddings(
+        # One clustering pass per item: the cached per-sample labels are the
+        # ones the persisted score was computed from, by construction.
+        diagnostics, cluster_labels = eu.acse_semantic_cluster_analysis(
             scoring_embeddings,
             backend_label,
             distance_threshold=distance_threshold,
-        )
-        cluster_labels = eu.acse_cluster_labels_for_embeddings(
-            scoring_embeddings, distance_threshold
         )
         for index, cluster_label in zip(indices, cluster_labels, strict=True):
             sample_rows[index]["cluster_label"] = cluster_label
@@ -584,6 +676,7 @@ def compute_run_backend(
         "profile_id": run.profile,
         "analysis_dir": str(run.analysis_dir),
         "embedding_backend": backend_label,
+        "inputs": fingerprints,
         "distance_threshold": float(distance_threshold),
         "stochastic_sample_rows": len(sample_rows),
         "item_rows": len(item_rows),

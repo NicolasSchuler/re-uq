@@ -13,7 +13,7 @@ import json
 import math
 import os
 import tempfile
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +29,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
-from sklearn.metrics.pairwise import cosine_similarity
 
 try:
     import eval_utils as eu
@@ -74,28 +72,6 @@ def default_analysis_dir(
         / "outputs"
         / f"evaluation_{dataset_id}_{variant}_{eu.safe_identifier(run_id)}"
     )
-
-
-def cluster_labels_for_embeddings(
-    embeddings: np.ndarray,
-    distance_threshold: float,
-) -> list[str]:
-    if len(embeddings) <= 1:
-        return ["cluster_0"] * len(embeddings)
-    distance_matrix = np.clip(1.0 - cosine_similarity(embeddings), 0.0, 1.0)
-    distance_matrix[np.abs(distance_matrix) < 1e-12] = 0.0
-    np.fill_diagonal(distance_matrix, 0.0)
-    clusterer = AgglomerativeClustering(
-        n_clusters=None,
-        metric="precomputed",
-        linkage="average",
-        distance_threshold=float(distance_threshold),
-    )
-    raw_labels = [int(label) for label in clusterer.fit_predict(distance_matrix)]
-    counts = Counter(raw_labels)
-    ordered = sorted(counts, key=lambda label: (-counts[label], label))
-    remap = {label: f"cluster_{rank}" for rank, label in enumerate(ordered)}
-    return [remap[label] for label in raw_labels]
 
 
 def projection_model(embeddings: np.ndarray, components: int) -> tuple[np.ndarray, PCA]:
@@ -200,7 +176,7 @@ def load_cached_projection_inputs(
             f"Cache row mismatch: {embeddings.shape[0]} embeddings for {len(sample_rows)} sample rows."
         )
 
-    projected, pca = projection_model(embeddings, components)
+    projected, _ = projection_model(embeddings, components)
     item_indices: dict[str, list[int]] = defaultdict(list)
     for fallback_index, row in enumerate(sample_rows):
         try:
@@ -217,15 +193,12 @@ def load_cached_projection_inputs(
         item_id = str(row.get("item_id", ""))
         indices = item_indices.get(item_id, [])
         if indices:
-            centroid_embedding = np.mean(embeddings[indices, :], axis=0, keepdims=True)
-            centroid = pca.transform(centroid_embedding)
-            if centroid.shape[1] < components:
-                centroid = np.hstack(
-                    [centroid, np.zeros((1, components - centroid.shape[1]))]
-                )
-            row["x"] = float(centroid[0, 0])
-            row["y"] = float(centroid[0, 1])
-            row["z"] = float(centroid[0, 2]) if components == 3 else 0.0
+            # The projection is affine, so the mean of the projected samples is
+            # the projection of their mean -- without a second transform.
+            centroid = np.mean(projected[indices], axis=0)
+            row["x"] = float(centroid[0])
+            row["y"] = float(centroid[1])
+            row["z"] = float(centroid[2]) if components == 3 else 0.0
         else:
             row["x"] = 0.0
             row["y"] = 0.0
@@ -554,7 +527,7 @@ def main() -> None:
             embedding_backend=args.backend,
             mlx_model_name=args.mlx_model,
         )
-        projected, pca = projection_model(embeddings, args.components)
+        projected, _ = projection_model(embeddings, args.components)
         item_indices: dict[str, list[int]] = defaultdict(list)
         sample_output_rows = []
         for index, (row, text) in enumerate(zip(ordered_samples, texts, strict=True)):
@@ -581,14 +554,13 @@ def main() -> None:
             for row in sample_output_rows
         }
         for item_id, indices in item_indices.items():
-            item_embeddings = embeddings[indices, :]
             item_texts = [texts[index] for index in indices]
             item_cluster_embeddings, _ = eu.semantic_embedding_matrix(
                 item_texts,
                 embedding_backend=args.backend,
                 mlx_model_name=args.mlx_model,
             )
-            cluster_labels = cluster_labels_for_embeddings(
+            cluster_labels = eu.acse_cluster_labels_for_embeddings(
                 item_cluster_embeddings, args.distance_threshold
             )
             for sample_index, label in zip(indices, cluster_labels, strict=True):
@@ -597,12 +569,9 @@ def main() -> None:
                     (str(source["item_id"]), str(source.get("sample_index", "")))
                 ]["cluster_label"] = label
 
-            centroid_embedding = np.mean(item_embeddings, axis=0, keepdims=True)
-            centroid = pca.transform(centroid_embedding)
-            if centroid.shape[1] < args.components:
-                centroid = np.hstack(
-                    [centroid, np.zeros((1, args.components - centroid.shape[1]))]
-                )
+            # Affine projection: the mean of the projected samples already is
+            # the projected centroid.
+            centroid = np.mean(projected[indices], axis=0)
             det = det_scores[item_id]
             acse = acse_scores.get(item_id, {})
             benchmark = benchmark_by_item.get(item_id, {})
@@ -612,9 +581,9 @@ def main() -> None:
                     "seed_id": det.get("seed_id", ""),
                     "source_modality": det.get("source_modality", ""),
                     "status": drift_status(det),
-                    "x": centroid[0, 0],
-                    "y": centroid[0, 1],
-                    "z": centroid[0, 2] if args.components == 3 else 0.0,
+                    "x": centroid[0],
+                    "y": centroid[1],
+                    "z": centroid[2] if args.components == 3 else 0.0,
                     "acse_score": finite_float(acse.get("uncertainty_score", "")),
                     "semantic_cluster_count": acse.get("semantic_cluster_count", ""),
                     "semantic_cluster_entropy": acse.get(

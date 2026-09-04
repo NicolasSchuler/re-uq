@@ -23,7 +23,7 @@ import csv
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 _MPLCONFIGDIR = Path(tempfile.gettempdir()) / "re_uq_matplotlib"
 _MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
@@ -117,6 +117,67 @@ def balanced_subsample(
             idx = rng.choice(idx, size=per_modality, replace=False)
         chosen.extend(idx.tolist())
     return np.asarray(sorted(set(chosen)))
+
+
+class ProjectionInputs(NamedTuple):
+    """Everything both embedding-diagnostic figures need to draw a projection.
+
+    ``rng`` is handed back mid-stream on purpose: ``balanced_subsample`` has
+    already drawn from it, and the panel (a) jitter continues from there. Two
+    figures sharing this helper therefore also share one RNG consumption order.
+    """
+
+    coords: np.ndarray
+    rows: list[dict[str, Any]]
+    indices: np.ndarray
+    rng: np.random.Generator
+
+
+def prepare_projection_inputs(
+    diagnostic_dir: Path,
+    manifest_path: Path,
+    method: str,
+    per_modality: int,
+    random_state: int,
+) -> ProjectionInputs:
+    """Load the requirement-only cache, subsample it, and project it.
+
+    Each unique generated requirement appears ~17x across seeds, so one point
+    per distinct string is plotted; stacking identical points would otherwise
+    make the maps unreadable.
+    """
+    cache = np.load(
+        diagnostic_dir / "task2_reqonly_mlx_embeddings.npz", allow_pickle=False
+    )
+    reqonly = cache["embeddings"].astype(np.float32, copy=False)
+    rows = manifest_rows(manifest_path, "mlx:")
+    _, sample_rows = load_embeddings_and_rows(rows)
+    if len(sample_rows) != reqonly.shape[0]:
+        raise ValueError(
+            f"row/embedding mismatch: {len(sample_rows)} vs {reqonly.shape[0]}"
+        )
+
+    seen: set[str] = set()
+    unique_global: list[int] = []
+    for i, row in enumerate(sample_rows):
+        text = str(row.get("requirement", ""))
+        if text and text not in seen:
+            seen.add(text)
+            unique_global.append(i)
+    unique_rows = [sample_rows[i] for i in unique_global]
+    unique_global_arr = np.asarray(unique_global)
+    print(f"unique generated requirements: {len(unique_rows)}")
+
+    rng = np.random.default_rng(random_state)
+    keep_local = balanced_subsample(unique_rows, per_modality, rng)
+    global_idx = unique_global_arr[keep_local]
+    sub_rows = [unique_rows[k] for k in keep_local]
+    print(
+        f"projection subsample: {global_idx.size} points "
+        f"(strict positives kept: {sum(drift_status(r) == 'strict_text_oc' for r in sub_rows)})"
+    )
+    coords = compute_projection(reqonly[global_idx], method, random_state)
+    return ProjectionInputs(coords, sub_rows, global_idx, rng)
 
 
 def compute_projection(
@@ -426,40 +487,14 @@ def main() -> None:
     )
     output_path = args.output if args.output.is_absolute() else root / args.output
 
-    cache = np.load(
-        diagnostic_dir / "task2_reqonly_mlx_embeddings.npz", allow_pickle=False
-    )
-    reqonly = cache["embeddings"].astype(np.float32, copy=False)
-    rows = manifest_rows(manifest_path, "mlx:")
-    _, sample_rows = load_embeddings_and_rows(rows)
-    if len(sample_rows) != reqonly.shape[0]:
-        raise ValueError(
-            f"row/embedding mismatch: {len(sample_rows)} vs {reqonly.shape[0]}"
-        )
     summary = read_summary(diagnostic_dir / "probe_grid_summary.csv")
-
-    # Project distinct generated requirements (each unique text appears ~17x across
-    # seeds); plotting one point per unique string avoids stacking identical points.
-    seen: set[str] = set()
-    unique_global: list[int] = []
-    for i, row in enumerate(sample_rows):
-        text = str(row.get("requirement", ""))
-        if text and text not in seen:
-            seen.add(text)
-            unique_global.append(i)
-    unique_rows = [sample_rows[i] for i in unique_global]
-    unique_global_arr = np.asarray(unique_global)
-    print(f"unique generated requirements: {len(unique_rows)}")
-
-    rng = np.random.default_rng(args.random_state)
-    keep_local = balanced_subsample(unique_rows, args.per_modality, rng)
-    global_idx = unique_global_arr[keep_local]
-    sub_rows = [unique_rows[k] for k in keep_local]
-    print(
-        f"projection subsample: {global_idx.size} points "
-        f"(strict positives kept: {sum(drift_status(r) == 'strict_text_oc' for r in sub_rows)})"
+    coords, sub_rows, _, rng = prepare_projection_inputs(
+        diagnostic_dir=diagnostic_dir,
+        manifest_path=manifest_path,
+        method=args.method,
+        per_modality=args.per_modality,
+        random_state=args.random_state,
     )
-    coords = compute_projection(reqonly[global_idx], args.method, args.random_state)
 
     set_style()
     fig = plt.figure(figsize=(8.0, 5.7), layout="constrained")

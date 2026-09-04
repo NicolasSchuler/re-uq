@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cache
 from itertools import batched, pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from xml.etree import ElementTree as ET
 
 try:
@@ -6202,14 +6202,83 @@ def semantic_embedding_matrix(
     raise AssertionError(f"Unhandled embedding backend label: {backend_label}")
 
 
-def acse_cluster_labels_for_embeddings(
+class AcseClusterAnalysis(NamedTuple):
+    """One ACSE clustering pass: the diagnostics row and the labels behind it.
+
+    ``cluster_labels`` are exactly the labels the diagnostics were computed
+    from, so callers that persist per-sample cluster assignments never have to
+    re-run the clustering and risk disagreeing with the score.
+    """
+
+    diagnostics: dict[str, Any]
+    cluster_labels: list[str]
+
+
+def _acse_diagnostics_without_samples(
+    semantic_embedding_backend: str, distance_threshold: float
+) -> dict[str, Any]:
+    """Diagnostics for an item with no parsable samples: every metric is NaN."""
+    return {
+        "semantic_embedding_backend": semantic_embedding_backend,
+        "semantic_distance_threshold": float(distance_threshold),
+        "semantic_cluster_count": 0,
+        "semantic_cluster_distribution": "",
+        "semantic_cluster_entropy": math.nan,
+        "semantic_cluster_variation_ratio": math.nan,
+        "semantic_dominant_cluster_share": math.nan,
+        "semantic_mean_pairwise_distance": math.nan,
+        "semantic_dominant_cluster_mean_distance": math.nan,
+        "semantic_uncertainty_score": math.nan,
+    }
+
+
+def _acse_diagnostics_for_single_sample(
+    semantic_embedding_backend: str, distance_threshold: float
+) -> dict[str, Any]:
+    """Diagnostics for a lone sample: one cluster, zero dispersion, zero score."""
+    return {
+        "semantic_embedding_backend": semantic_embedding_backend,
+        "semantic_distance_threshold": float(distance_threshold),
+        "semantic_cluster_count": 1,
+        "semantic_cluster_distribution": label_distribution_json({"cluster_0": 1.0}),
+        "semantic_cluster_entropy": 0.0,
+        "semantic_cluster_variation_ratio": 0.0,
+        "semantic_dominant_cluster_share": 1.0,
+        "semantic_mean_pairwise_distance": 0.0,
+        "semantic_dominant_cluster_mean_distance": 0.0,
+        "semantic_uncertainty_score": 0.0,
+    }
+
+
+def acse_semantic_cluster_analysis(
     embeddings: np.ndarray,
+    semantic_embedding_backend: str,
     distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
-) -> list[str]:
+) -> AcseClusterAnalysis:
+    """Cluster one item's sample embeddings and report the ACSE diagnostics.
+
+    This is the single place ACSE clustering happens. The rows are normalized
+    once, the cosine distance matrix is built once, and ``fit_predict`` runs
+    once. Labels are renamed by descending cluster size, ties broken by the raw
+    scikit-learn label, so ``cluster_0`` is always the dominant cluster.
+    """
     matrix = normalize_embedding_rows(embeddings)
     sample_count = int(matrix.shape[0])
-    if sample_count <= 1:
-        return ["cluster_0"] * sample_count
+    if sample_count == 0:
+        return AcseClusterAnalysis(
+            _acse_diagnostics_without_samples(
+                semantic_embedding_backend, distance_threshold
+            ),
+            [],
+        )
+    if sample_count == 1:
+        return AcseClusterAnalysis(
+            _acse_diagnostics_for_single_sample(
+                semantic_embedding_backend, distance_threshold
+            ),
+            ["cluster_0"],
+        )
+
     distance_matrix = np.clip(1.0 - cosine_similarity(matrix), 0.0, 1.0)
     distance_matrix[np.abs(distance_matrix) < 1e-12] = 0.0
     np.fill_diagonal(distance_matrix, 0.0)
@@ -6220,53 +6289,15 @@ def acse_cluster_labels_for_embeddings(
         distance_threshold=float(distance_threshold),
     )
     raw_labels = [int(label) for label in clusterer.fit_predict(distance_matrix)]
-    counts = Counter(raw_labels)
-    ordered = sorted(counts, key=lambda label: (-counts[label], label))
-    remap = {label: f"cluster_{rank}" for rank, label in enumerate(ordered)}
-    return [remap[label] for label in raw_labels]
+    raw_counts = Counter(raw_labels)
+    remap = {
+        label: f"cluster_{rank}"
+        for rank, label in enumerate(
+            sorted(raw_counts, key=lambda label: (-raw_counts[label], label))
+        )
+    }
+    cluster_labels = [remap[label] for label in raw_labels]
 
-
-def acse_semantic_diagnostics_from_embeddings(
-    embeddings: np.ndarray,
-    semantic_embedding_backend: str,
-    distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
-) -> dict[str, Any]:
-    matrix = normalize_embedding_rows(embeddings)
-    sample_count = int(matrix.shape[0])
-    if sample_count == 0:
-        return {
-            "semantic_embedding_backend": semantic_embedding_backend,
-            "semantic_distance_threshold": float(distance_threshold),
-            "semantic_cluster_count": 0,
-            "semantic_cluster_distribution": "",
-            "semantic_cluster_entropy": math.nan,
-            "semantic_cluster_variation_ratio": math.nan,
-            "semantic_dominant_cluster_share": math.nan,
-            "semantic_mean_pairwise_distance": math.nan,
-            "semantic_dominant_cluster_mean_distance": math.nan,
-            "semantic_uncertainty_score": math.nan,
-        }
-
-    if sample_count == 1:
-        distribution = {"cluster_0": 1.0}
-        return {
-            "semantic_embedding_backend": semantic_embedding_backend,
-            "semantic_distance_threshold": float(distance_threshold),
-            "semantic_cluster_count": 1,
-            "semantic_cluster_distribution": label_distribution_json(distribution),
-            "semantic_cluster_entropy": 0.0,
-            "semantic_cluster_variation_ratio": 0.0,
-            "semantic_dominant_cluster_share": 1.0,
-            "semantic_mean_pairwise_distance": 0.0,
-            "semantic_dominant_cluster_mean_distance": 0.0,
-            "semantic_uncertainty_score": 0.0,
-        }
-
-    distance_matrix = np.clip(1.0 - cosine_similarity(matrix), 0.0, 1.0)
-    distance_matrix[np.abs(distance_matrix) < 1e-12] = 0.0
-    np.fill_diagonal(distance_matrix, 0.0)
-
-    cluster_labels = acse_cluster_labels_for_embeddings(matrix, distance_threshold)
     counts = Counter(cluster_labels)
     ordered_counts = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
     distribution = {label: count / sample_count for label, count in ordered_counts}
@@ -6303,7 +6334,7 @@ def acse_semantic_diagnostics_from_embeddings(
     )
     if abs(uncertainty_score) < 1e-12:
         uncertainty_score = 0.0
-    return {
+    diagnostics = {
         "semantic_embedding_backend": semantic_embedding_backend,
         "semantic_distance_threshold": float(distance_threshold),
         "semantic_cluster_count": len(counts),
@@ -6315,6 +6346,28 @@ def acse_semantic_diagnostics_from_embeddings(
         "semantic_dominant_cluster_mean_distance": dominant_mean_distance,
         "semantic_uncertainty_score": float(uncertainty_score),
     }
+    return AcseClusterAnalysis(diagnostics, cluster_labels)
+
+
+def acse_cluster_labels_for_embeddings(
+    embeddings: np.ndarray,
+    distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
+) -> list[str]:
+    """Size-ranked cluster labels only; see ``acse_semantic_cluster_analysis``."""
+    return acse_semantic_cluster_analysis(
+        embeddings, "", distance_threshold
+    ).cluster_labels
+
+
+def acse_semantic_diagnostics_from_embeddings(
+    embeddings: np.ndarray,
+    semantic_embedding_backend: str,
+    distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
+) -> dict[str, Any]:
+    """Diagnostics only; see ``acse_semantic_cluster_analysis``."""
+    return acse_semantic_cluster_analysis(
+        embeddings, semantic_embedding_backend, distance_threshold
+    ).diagnostics
 
 
 def acse_semantic_proxy_diagnostics(
@@ -6328,34 +6381,12 @@ def acse_semantic_proxy_diagnostics(
         embedding_backend, mlx_model_name
     )
     sample_count = len(cleaned)
+    # Short-circuit before paying for the embedding backend: neither degenerate
+    # case can produce a different answer once the texts are embedded.
     if sample_count == 0:
-        return {
-            "semantic_embedding_backend": backend_label,
-            "semantic_distance_threshold": float(distance_threshold),
-            "semantic_cluster_count": 0,
-            "semantic_cluster_distribution": "",
-            "semantic_cluster_entropy": math.nan,
-            "semantic_cluster_variation_ratio": math.nan,
-            "semantic_dominant_cluster_share": math.nan,
-            "semantic_mean_pairwise_distance": math.nan,
-            "semantic_dominant_cluster_mean_distance": math.nan,
-            "semantic_uncertainty_score": math.nan,
-        }
-
+        return _acse_diagnostics_without_samples(backend_label, distance_threshold)
     if sample_count == 1:
-        distribution = {"cluster_0": 1.0}
-        return {
-            "semantic_embedding_backend": backend_label,
-            "semantic_distance_threshold": float(distance_threshold),
-            "semantic_cluster_count": 1,
-            "semantic_cluster_distribution": label_distribution_json(distribution),
-            "semantic_cluster_entropy": 0.0,
-            "semantic_cluster_variation_ratio": 0.0,
-            "semantic_dominant_cluster_share": 1.0,
-            "semantic_mean_pairwise_distance": 0.0,
-            "semantic_dominant_cluster_mean_distance": 0.0,
-            "semantic_uncertainty_score": 0.0,
-        }
+        return _acse_diagnostics_for_single_sample(backend_label, distance_threshold)
 
     embeddings, backend_label = semantic_embedding_matrix(
         cleaned,
