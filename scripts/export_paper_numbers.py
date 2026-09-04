@@ -65,6 +65,7 @@ hosted cohort.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
@@ -359,12 +360,31 @@ def fmt_auroc(value: float) -> str:
 
 def fmt_count(value: float) -> str:
     """Counts carry thousands separators from five digits up, as in the draft."""
+    if not math.isfinite(value):
+        # round(nan) raises a bare ValueError; this says which artifact is blank.
+        raise PaperNumbersError(
+            f"a count is not finite ({value!r}); a source cell is blank"
+        )
     count = round(value)
     return f"{count:,}" if abs(count) >= 10_000 else str(count)
 
 
 def fmt_words(value: float) -> str:
     return f"{value:.1f}"
+
+
+NAN_TOKEN = re.compile(r"(?<![A-Za-z0-9])nan(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def nan_macros(macros: Mapping[str, str]) -> list[str]:
+    """Macro names whose rendered value carries a non-finite number.
+
+    ``_number`` returns NaN for a blank cell by design and the scalar formatters
+    render it as the literal string ``nan``, so a missing artifact column would
+    otherwise reach numbers.tex as ``\\numStrictOverallCI{nan--nan}``. Checking
+    the rendered macros catches every such path at once.
+    """
+    return sorted(name for name, value in macros.items() if NAN_TOKEN.search(value))
 
 
 def fmt_range(values: Sequence[float], formatter: Any, label: str) -> str:
@@ -562,7 +582,55 @@ def _group(
 # --- Macro construction ------------------------------------------------------
 
 
-def _benchmark_block(artifacts: Artifacts) -> list[Macro]:
+def benchmark_design(outputs_dir: Path) -> dict[str, dict[str, Any]]:
+    """The frozen benchmark design, keyed by dataset id.
+
+    The seed and item counts the paper reports are otherwise derived from
+    observed rows, so a seed missing from every model in every cell divides
+    evenly and passes the guards below unnoticed. These manifests record what
+    the benchmark was built to, which is the only way to see that.
+    """
+    design: dict[str, dict[str, Any]] = {}
+    for path in sorted(outputs_dir.glob("benchmark_manifest*.json")):
+        metadata = json.loads(path.read_text(encoding="utf-8")).get("metadata", {})
+        dataset_id = str(metadata.get("dataset_id", "")).strip()
+        if dataset_id:
+            design[dataset_id] = metadata
+    return design
+
+
+def _check_against_design(
+    outputs_dir: Path,
+    datasets: Sequence[str],
+    conditions: Sequence[str],
+    seeds_per_dataset: int,
+    warnings: list[str],
+) -> None:
+    design = benchmark_design(outputs_dir)
+    for dataset in datasets:
+        metadata = design.get(dataset)
+        if metadata is None:
+            warnings.append(
+                f"no benchmark manifest for dataset {dataset!r} under {outputs_dir}; "
+                "the seed and item counts are unchecked"
+            )
+            continue
+        planned_seeds = int(metadata.get("seed_count", 0) or 0)
+        if planned_seeds and planned_seeds != seeds_per_dataset:
+            warnings.append(
+                f"{MODALITY_TABLE}: {dataset} contributes {seeds_per_dataset} seeds, "
+                f"but its benchmark manifest declares {planned_seeds}; the reported "
+                "seed and item counts describe the answers on disk, not the design"
+            )
+        planned = [str(value) for value in metadata.get("source_modalities", [])]
+        if planned and sorted(planned) != sorted(conditions):
+            warnings.append(
+                f"{MODALITY_TABLE}: {dataset} source conditions "
+                f"{sorted(conditions)} differ from the manifest's {sorted(planned)}"
+            )
+
+
+def _benchmark_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
     rows = artifacts[MODALITY_TABLE]
     models = _ordered(str(row["model"]) for row in rows)
     cells = _ordered(_cell_id(row) for row in rows)
@@ -591,6 +659,9 @@ def _benchmark_block(artifacts: Artifacts) -> list[Macro]:
         )
     seeds_per_dataset = items_per_cell // len(conditions)
     seeds = seeds_per_dataset * len(datasets)
+    _check_against_design(
+        artifacts.outputs_dir, datasets, conditions, seeds_per_dataset, warnings
+    )
     return [
         Macro("numSeedsPerDataset", str(seeds_per_dataset)),
         Macro("numSeeds", str(seeds), f"{len(datasets)} datasets"),
@@ -1325,7 +1396,7 @@ def build_blocks(
     warnings: list[str] = []
     pooled, conditions, table_body = _per_model_blocks(artifacts)
     blocks = [
-        ("Benchmark", _benchmark_block(artifacts)),
+        ("Benchmark", _benchmark_block(artifacts, warnings)),
         ("RQ1: preservation (all cells)", _rq1_block(artifacts, warnings)),
         ("RQ2: uncertainty signals on strengthened outputs", _rq2_block(artifacts)),
         ("RQ3: detectors", _rq3_block(artifacts)),
@@ -1460,6 +1531,14 @@ def build_parser(root: Path) -> argparse.ArgumentParser:
             "the manuscript is only touched when it is named explicitly."
         ),
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Fail instead of writing when any consistency warning fires or any "
+            "macro carries a non-finite value. Use this for the manuscript."
+        ),
+    )
     return parser
 
 
@@ -1482,8 +1561,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"warning: {SNAPSHOT_PROVENANCE} is older than {len(newer)} input(s): "
             f"{', '.join(newer)}. Rerun scripts/export_paper_tables.py."
         )
+    offenders = nan_macros(macros)
+    if offenders:
+        warnings.append(
+            "non-finite value in "
+            + ", ".join(offenders)
+            + "; the artifact column those macros read is blank"
+        )
     for warning in warnings:
         print(f"warning: {warning}")
+    if warnings and args.strict:
+        # Reported before anything is written, so --strict never leaves a
+        # half-trusted numbers.tex behind.
+        print(
+            f"export_paper_numbers: {len(warnings)} warning(s) under --strict; "
+            f"{args.output} not written."
+        )
+        return 1
 
     output = Path(args.output)
     before = (

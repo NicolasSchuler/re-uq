@@ -15,6 +15,7 @@ uses.
 from __future__ import annotations
 
 import io
+import json
 import os
 import unittest
 from contextlib import redirect_stdout
@@ -174,6 +175,23 @@ def write_fixture(outputs_dir: Path, models: list[str] | None = None) -> None:
     """Write a complete miniature artifact set under ``outputs_dir``."""
     models = models or ["glm-5.1", "kit.gemma4-31b-it"]
     outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    # The frozen design the seed and item counts are cross-checked against:
+    # 16 rows x 2000 items / (2 models x 2 cells) / 4 conditions = 2000 seeds.
+    for dataset in ["mlm_tapt", "nice"]:
+        suffix = "" if dataset == "nice" else f"_{dataset}"
+        (outputs_dir / f"benchmark_manifest{suffix}.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {
+                        "dataset_id": dataset,
+                        "seed_count": 2000,
+                        "source_modalities": CONDITIONS,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
 
     eu.write_csv_rows(outputs_dir / exporter.MODALITY_TABLE, _modality_rows(models))
     eu.write_csv_rows(
@@ -712,6 +730,121 @@ class ValidationTest(ExporterFixtureTest):
         _, printed = self.export()
         self.assertIn("warning", printed.lower())
         self.assertIn(exporter.SNAPSHOT_PROVENANCE, printed)
+
+
+class FormatterGuardTest(unittest.TestCase):
+    """`_number` returns NaN for a blank cell, so the formatters have to say so."""
+
+    def test_a_non_finite_count_names_itself_instead_of_raising_value_error(
+        self,
+    ) -> None:
+        with self.assertRaises(exporter.PaperNumbersError):
+            exporter.fmt_count(float("nan"))
+
+    def test_nan_macros_finds_every_rendered_non_finite_value(self) -> None:
+        found = exporter.nan_macros(
+            {
+                "numA": "11.6",
+                "numB": "nan--nan",
+                "numC": "NaN",
+                "numD": "0.707",
+                "numE": "kit.nanogpt & 12 & 3.4",
+            }
+        )
+        # numE holds a model id, not a value: "nan" inside a word is not a number.
+        self.assertEqual(found, ["numB", "numC"])
+
+
+class StrictModeTest(ExporterFixtureTest):
+    """--strict is what the manuscript path uses: never write a doubtful number."""
+
+    def _blank_headline_cis(self) -> None:
+        path = self.outputs / exporter.HEADLINE_BOOTSTRAP_CI
+        rows = eu.read_csv_rows(path)
+        for row in rows:
+            row["ci_low"] = ""
+            row["ci_high"] = ""
+        eu.write_csv_rows(path, rows)
+
+    def test_a_blank_ci_column_reaches_numbers_tex_as_nan_by_default(self) -> None:
+        """The default path is unchanged, so the warning is the only signal."""
+        self._blank_headline_cis()
+        code, printed = self.run_exporter()
+        self.assertEqual(code, 0, printed)
+        macros = exporter.parse_macros(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(macros["numStrictOverallCI"], "nan--nan")
+        self.assertIn("numStrictOverallCI", printed)
+        self.assertIn("non-finite", printed)
+
+    def test_strict_refuses_to_write_a_nan_macro(self) -> None:
+        self._blank_headline_cis()
+        code, printed = self.run_exporter("--strict")
+        self.assertEqual(code, 1)
+        self.assertIn("numStrictOverallCI", printed)
+        self.assertFalse(self.output.exists(), "nothing may be written under --strict")
+
+    def test_strict_leaves_an_existing_numbers_tex_untouched(self) -> None:
+        self.assertEqual(self.run_exporter()[0], 0)
+        good = self.output.read_text(encoding="utf-8")
+        self._blank_headline_cis()
+        self.assertEqual(self.run_exporter("--strict")[0], 1)
+        self.assertEqual(self.output.read_text(encoding="utf-8"), good)
+
+    def test_a_clean_fixture_is_silent_under_strict(self) -> None:
+        code, printed = self.run_exporter("--strict")
+        self.assertEqual(code, 0, printed)
+        self.assertNotIn("warning:", printed)
+
+
+class BenchmarkDesignCrossCheckTest(ExporterFixtureTest):
+    """Seed and item counts come from observed rows; the design says what was planned."""
+
+    def _set_seed_count(self, dataset: str, seed_count: int) -> None:
+        suffix = "" if dataset == "nice" else f"_{dataset}"
+        path = self.outputs / f"benchmark_manifest{suffix}.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["metadata"]["seed_count"] = seed_count
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_a_seed_missing_from_every_cell_is_reported(self) -> None:
+        # The divisibility guards cannot see this: 15992 answers still divide by
+        # 4 model-cell blocks and by 4 conditions.
+        self._set_seed_count("nice", 2001)
+        macros, printed = self.export()
+        self.assertEqual(macros["numSeedsPerDataset"], "2000")
+        self.assertIn("nice contributes 2000 seeds", printed)
+        self.assertIn("declares 2001", printed)
+
+    def test_a_seed_mismatch_is_fatal_under_strict(self) -> None:
+        self._set_seed_count("mlm_tapt", 1999)
+        code, printed = self.run_exporter("--strict")
+        self.assertEqual(code, 1)
+        self.assertIn("mlm_tapt", printed)
+
+    def test_an_absent_manifest_says_the_counts_are_unchecked(self) -> None:
+        (self.outputs / "benchmark_manifest.json").unlink()
+        _, printed = self.export()
+        self.assertIn("no benchmark manifest for dataset 'nice'", printed)
+        self.assertIn("unchecked", printed)
+
+    def test_conditions_are_checked_against_the_manifest(self) -> None:
+        path = self.outputs / "benchmark_manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["metadata"]["source_modalities"] = ["mandatory", "recommended"]
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        _, printed = self.export()
+        self.assertIn("source conditions", printed)
+
+    def test_a_blank_item_count_is_fatal_and_names_the_artifact(self) -> None:
+        """Counts never degrade to a warning: they size every derived number."""
+        path = self.outputs / exporter.MODALITY_TABLE
+        rows = eu.read_csv_rows(path)
+        rows[0]["n_items"] = ""
+        eu.write_csv_rows(path, rows)
+        with self.assertRaises(SystemExit) as caught:
+            self.run_exporter()
+        self.assertIn(exporter.MODALITY_TABLE, str(caught.exception))
+        self.assertFalse(self.output.exists())
 
 
 if __name__ == "__main__":
