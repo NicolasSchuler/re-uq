@@ -18,6 +18,7 @@ This is the command-first path for reproducing the publication artifacts. The no
 | Compare completed cells | `.venv/bin/python scripts/compare_run_matrix.py --config run_configs/current_run.json --dataset mlm_tapt` |
 | Document-context ablation table | `.venv/bin/python scripts/compare_context_ablation.py` (after `+experiment=context_ablation`; see [`context_ablation.md`](context_ablation.md)) |
 | Export cross-cell paper tables | `.venv/bin/python scripts/export_paper_tables.py` |
+| Recompute request- and seed-clustered CIs without touching `outputs/` | `.venv/bin/python scripts/export_paper_tables.py --output-dir /tmp/reuq-cluster-ci` (see §6) |
 | Print the Task 3 queue without running it | `TASK3_DRY_RUN=1 bash scripts/enqueue_task3_runs.sh` |
 | Regenerate the modality template inventory | see [`docs/experimental_setup.md`](experimental_setup.md) §2.2 |
 
@@ -300,6 +301,36 @@ intentionally computing an additional cache ablation instead of the run's
 persisted selection.
 
 Use diagnostic flags such as `--allow-partial`, `--skip-registry-check`, `--skip-construct-review-check`, `--skip-manifest-check`, `--max-parse-failure-rate`, `--bootstrap-iterations`, or `--expected-stochastic-samples` only for local investigation, not for paper-ready results. (`--skip-manifest-check` bypasses the SHA-256 integrity check against `outputs/benchmark_manifest*.json`.)
+
+### Recomputing Both Bootstrap Intervals
+
+Confidence intervals cluster on the provider **request** by default and report
+the seed-clustered interval alongside ([`aggregation.md`](aggregation.md) §6).
+To recompute both from the local raw rows without touching the committed
+snapshots, point the exporter at a scratch directory:
+
+```bash
+.venv/bin/python scripts/export_paper_tables.py \
+  --output-dir /tmp/reuq-cluster-ci \
+  --bootstrap-samples 1000
+column -s, -t < /tmp/reuq-cluster-ci/paper_headline_bootstrap_ci.csv
+```
+
+`paper_headline_bootstrap_ci.csv` carries `ci_low` / `ci_high`
+(request-clustered), `seed_ci_low` / `seed_ci_high`, and `ci_cluster_field`;
+`paper_per_model_headline.csv` carries the same pair per model. Both take about
+2.5 minutes over the four paper cells at 1000 resamples. On the archived cohort
+(6 models x 4 cells, 16448 readable Task 2 rows, 1080 request clusters,
+RNG seed `20260518`) the pooled strict strengthening reproduces as:
+
+| Metric | Point | Request-clustered 95% CI | Seed-clustered 95% CI |
+| --- | --- | --- | --- |
+| Strict text strengthening | 8.58% (1412/16448) | [7.75%, 9.52%] | [8.17%, 9.00%] |
+| Broad text strengthening | 13.79% (2268/16448) | [12.43%, 15.21%] | [13.17%, 14.41%] |
+
+Nothing is written under `outputs/`, so this is safe to run against a clean
+checkout. Drop `--output-dir` only when you intend to regenerate the shipped
+snapshots.
 
 ## 7. Common CLI Flags
 

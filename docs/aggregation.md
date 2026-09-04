@@ -225,6 +225,13 @@ The seed-clustered interval is reported alongside the primary one as
 `*_seed_ci_low` / `*_seed_ci_high`, and `bootstrap_ci_cluster_field` records
 which field the primary interval actually used.
 
+Read the seed-clustered column with one caveat: `seed_id` is only unique within
+a dataset, not across benchmark variants, so the `must` and `shall` renderings
+of one capability share an id and land in the same cluster. Pooling the four
+paper cells therefore yields 360 seed clusters (2 datasets x 180 seeds) against
+1080 request clusters. `batch_id` embeds the run id and is globally unique, so
+the primary interval is unaffected.
+
 Rows fall back to clustering on `seed_id` unless **every** row carries a
 non-blank `batch_id` (`resolve_bootstrap_cluster_field`). A partially populated
 column — legacy runs, single-item requests, synthesised completions, the rule

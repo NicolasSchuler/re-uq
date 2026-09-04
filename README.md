@@ -263,9 +263,16 @@ ones but are no longer byte-identical to them: they add the weak-intent
 strengthening columns and a `parse_failure_rate` computed from the raw Task 2
 deterministic rows (see [`docs/aggregation.md`](docs/aggregation.md) §3 and §5).
 Per-model strict strengthening ranges from 0.3% (`glm-4.7`) to 16.9%
-(`kit.gemma4-31b-it`), with seed-clustered 95% CIs in
-[`outputs/paper_per_model_headline.csv`](outputs/paper_per_model_headline.csv),
-and the pooled strict CI is [8.2%, 9.0%] against [13.2%, 14.4%] broad.
+(`kit.gemma4-31b-it`), with 95% CIs in
+[`outputs/paper_per_model_headline.csv`](outputs/paper_per_model_headline.csv).
+The pooled **seed-clustered** strict CI is [8.2%, 9.0%] against [13.2%, 14.4%]
+broad — those are the numbers in the shipped snapshots. Every run sent 16 items
+per request (four whole seeds), so the request, not the seed, is the
+conservative resampling unit; clustering on it widens the pooled strict CI to
+[7.8%, 9.5%] and the broad one to [12.4%, 15.2%], and the weak-intent strict
+rate (29.8%) from [28.5%, 31.0%] to [27.2%, 32.7%]. Both intervals are written
+side by side on regeneration; see [`docs/aggregation.md`](docs/aggregation.md)
+§6 and [`docs/reproduction.md`](docs/reproduction.md) §6 for the command.
 
 ## Where To Go
 
