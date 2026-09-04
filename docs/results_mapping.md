@@ -23,6 +23,7 @@ Checked root-level metric snapshots and legacy external-probe reports are diagno
 | **Per-model headline rates** (one row per model, with seed-clustered 95% CIs on strict and broad strengthening) | `outputs/paper_per_model_headline.csv` / `.md` | written by `scripts/export_paper_tables.py` |
 | **Headline bootstrap CIs** (pooled strict/broad intervals behind the README numbers) | `outputs/paper_headline_bootstrap_ci.csv` | written by `scripts/export_paper_tables.py` |
 | **Snapshot provenance** (contributing run ids, input SHA-256 hashes, aggregation mode, exporter version) | `outputs/paper_snapshot_provenance.json` | written by `scripts/export_paper_tables.py` |
+| **Manuscript number macros** (every value the paper prints, as `\newcommand{\num...}` lines, including the per-model Table 3 body) | `outputs/paper_numbers.tex`, or `manuscript/numbers.tex` with `--output` | written by `scripts/export_paper_numbers.py` from the paper CSVs above; header records the generation time, exporter version and input SHA-256 hashes |
 | **Result notes template** (paper observation/hypothesis/recommendation/open-question scaffolding) | `result_notes_template.md` | human-curated after artifact inspection |
 
 ## Robustness And Diagnostics
