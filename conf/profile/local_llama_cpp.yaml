@@ -5,13 +5,17 @@
 profile_id: "local_llama_cpp"
 provider_id: "llama_cpp"
 base_url: "http://127.0.0.1:1234/v1"
-api_key_env: ${oc.env:RE_UQ_LOCAL_LLAMA_CPP_API_KEY_ENV,LOCAL_OPENAI_API_KEY}
+api_key_env: ${oc.env:RE_UQ_LOCAL_LLAMA_CPP_API_KEY_ENV,LLAMA_API_KEY}
 models:
   - "qwen/qwen3.5-9b"
-concurrency: 4
-batch_size: 4
-timeout_s: 120
-max_tokens: 256
+concurrency: 2
+# The paper condition is 16 items per request. A 16-item answer needs more room
+# than a single one, and a local model without JSON mode needs the slack:
+# smoke-test one cell before the real runs and fall back to batch_size 4 with
+# max_tokens 256 if the answers truncate or stop parsing (docs/reproduction.md).
+batch_size: 16
+timeout_s: 300
+max_tokens: 512
 seed: 20260518
 send_seed: true
 max_retries: 3
@@ -19,4 +23,4 @@ batch_order: "grouped"
 json_mode: false
 structured_output: "none"
 requires_manual_server: true
-notes: "Start llama.cpp with exactly this model before running this profile."
+notes: "Start llama.cpp with exactly this model and this base_url before running this profile; both are machine-specific and must be edited here."

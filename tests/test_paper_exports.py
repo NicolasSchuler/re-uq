@@ -2584,3 +2584,46 @@ class RqSliceMetricsTest(unittest.TestCase):
         self.assertEqual(row["task2_strict_strengthening_denominator"], 1)
         self.assertEqual(row["task2_no_cue_n"], 1)
         self.assertEqual(row["task2_no_cue_rate"], 0.5)
+
+
+class RunGroupDefaultTest(unittest.TestCase):
+    """The exporter must select the rerun group, not the archived one."""
+
+    def test_default_run_group_matches_what_the_configs_write(self):
+        config = (eu.project_root() / "conf/config.yaml").read_text(encoding="utf-8")
+
+        self.assertEqual(
+            export.DEFAULT_PAPER_RUN_GROUP_ID, "provider-matrix-v2-2026-05"
+        )
+        self.assertIn(
+            f"run_group_id: {export.DEFAULT_PAPER_RUN_GROUP_ID}",
+            config,
+        )
+        self.assertNotEqual(
+            export.DEFAULT_PAPER_RUN_GROUP_ID, export.ARCHIVED_RUN_GROUP_ID
+        )
+
+    def test_empty_default_cohort_selects_every_compatible_model(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fixture = CellFixture()
+            fixture._write_cell(root, "mlm_tapt", "must")
+            registry_path = eu.run_registry_path(root, "mlm_tapt", "must")
+            rows = eu.read_csv_rows(registry_path)
+            for row in rows:
+                row["run_group_id"] = export.DEFAULT_PAPER_RUN_GROUP_ID
+            eu.write_csv_rows(registry_path, rows)
+
+            chosen = export.select_cell_runs(
+                rows,
+                export.DEFAULT_MODELS,
+                run_group_id=export.DEFAULT_PAPER_RUN_GROUP_ID,
+                benchmark_item_count=24,
+                expected_batch_order=export.DEFAULT_PAPER_BATCH_ORDER,
+                expected_batch_size=export.DEFAULT_PAPER_BATCH_SIZE,
+            )
+
+            # No cohort pinned: m1 and m2 are selected, azure. is still excluded
+            # by prefix and the incomplete run by status.
+            self.assertEqual(sorted(chosen), ["m1", "m2"])
+            self.assertEqual(chosen["m1"]["run_id"], "full-new")

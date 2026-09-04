@@ -29,7 +29,8 @@
     "warn_parse_failure_rate": 0.02,
     "warn_request_error_rate": 0.02,
     "write_progress_csv": true,
-    "write_event_jsonl": true
+    "write_event_jsonl": true,
+    "write_request_transcripts": true
   },
   "profiles": [
     {

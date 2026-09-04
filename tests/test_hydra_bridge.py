@@ -596,7 +596,7 @@ class HydraMultirunSmokeTest(unittest.TestCase):
                 self.assertTrue(resolved.exists(), resolved)
                 text = resolved.read_text(encoding="utf-8")
                 self.assertEqual(rp.sha256_text(text), digest)
-                self.assertIn("api_key_env: LOCAL_OPENAI_API_KEY", text)
+                self.assertIn("api_key_env: LLAMA_API_KEY", text)
                 self.assertNotIn(hb.MASK_VALUE, text)
 
             # The independently invoked analysis consumes the raw run's

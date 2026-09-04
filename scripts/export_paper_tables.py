@@ -51,7 +51,14 @@ DEFAULT_CELLS = [
     ("nice", "must"),
     ("nice", "shall"),
 ]
-DEFAULT_MODELS = [
+# The cohort is whatever the selected run group contains, narrowed by
+# --models. It stopped being a hardcoded list when the rerun cohort changed:
+# the archived six are still selectable by name, and the models the paper
+# reports are recorded per export in paper_snapshot_provenance.json.
+DEFAULT_MODELS: list[str] = []
+#: The cohort of the archived 2026-05 runs, kept as a named default for
+#: re-exporting them (`--models $(python -c ...)` is not a workflow).
+ARCHIVED_COHORT = [
     "glm-4.5-air",
     "glm-4.7",
     "glm-5",
@@ -61,7 +68,11 @@ DEFAULT_MODELS = [
 ]
 DEFAULT_EXCLUDE_MODEL_PREFIXES = ["azure."]
 DEFAULT_BOOTSTRAP_SAMPLES = 1000
-DEFAULT_PAPER_RUN_GROUP_ID = "provider-matrix-2026-05"
+# The rerun group every current config writes (conf/config.yaml,
+# conf/experiment/paper_cohort.yaml, run_configs/*.json). The archived runs are
+# `provider-matrix-2026-05`; select them explicitly with --run-group-id.
+DEFAULT_PAPER_RUN_GROUP_ID = "provider-matrix-v2-2026-05"
+ARCHIVED_RUN_GROUP_ID = "provider-matrix-2026-05"
 DEFAULT_PAPER_BATCH_ORDER = "grouped"
 DEFAULT_PAPER_BATCH_SIZE = 16
 # Every official run drew 5 stochastic samples per item; a group with fewer is

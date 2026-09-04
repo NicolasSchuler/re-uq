@@ -5,7 +5,8 @@
     "mlm_tapt"
   ],
   "benchmark_variants": [
-    "must"
+    "must",
+    "shall"
   ],
   "tasks": [
     "task1",
@@ -31,21 +32,22 @@
     "warn_parse_failure_rate": 0.02,
     "warn_request_error_rate": 0.02,
     "write_progress_csv": true,
-    "write_event_jsonl": true
+    "write_event_jsonl": true,
+    "write_request_transcripts": true
   },
   "profiles": [
     {
       "profile_id": "local_llama_cpp",
       "provider_id": "llama_cpp",
       "base_url": "http://127.0.0.1:1234/v1",
-      "api_key_env": "LOCAL_OPENAI_API_KEY",
+      "api_key_env": "LLAMA_API_KEY",
       "models": [
         "qwen/qwen3.5-9b"
       ],
-      "concurrency": 4,
-      "batch_size": 4,
-      "timeout_s": 120,
-      "max_tokens": 256,
+      "concurrency": 2,
+      "batch_size": 16,
+      "timeout_s": 300,
+      "max_tokens": 512,
       "seed": 20260518,
       "send_seed": true,
       "max_retries": 3,
@@ -53,7 +55,7 @@
       "json_mode": false,
       "structured_output": "none",
       "requires_manual_server": true,
-      "notes": "Start llama.cpp with exactly this model before running this profile."
+      "notes": "Start llama.cpp with exactly this model and this base_url before running this profile; both are machine-specific and must be edited here."
     },
     {
       "profile_id": "institutional_llm",

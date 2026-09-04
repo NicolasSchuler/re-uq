@@ -157,10 +157,17 @@ model weighting. With a complete cohort run each of the 6 models contributes 720
 items, giving `n = 4320` answers and a coverage-adjusted denominator of
 `n_denominator <= 4320`.
 
-The cohort is fixed: `glm-4.5-air`, `glm-4.7`, `glm-5`, `glm-5-turbo`,
-`glm-5.1`, `kit.gemma4-31b-it`. Private `azure.*` rows are excluded
-(`--exclude-model-prefix azure.`), as are smoke runs and incompatible registry
-rows. The default exporter pins `run_group_id=provider-matrix-2026-05` and
+The cohort is whatever the selected run group contains, narrowed by
+`--models`; the models an export actually pooled are recorded in
+`outputs/paper_snapshot_provenance.json` (`models_cohort`, split into
+`models_hosted` / `models_local`). The archived 2026-05 cohort was
+`glm-4.5-air`, `glm-4.7`, `glm-5`, `glm-5-turbo`, `glm-5.1`,
+`kit.gemma4-31b-it` (`export_paper_tables.ARCHIVED_COHORT`). Private `azure.*`
+rows are excluded (`--exclude-model-prefix azure.`), as are smoke runs and
+incompatible registry rows. The default exporter pins
+`run_group_id=provider-matrix-v2-2026-05`, the group every current config
+writes; the archived runs are `provider-matrix-2026-05` and are re-exported
+with `--run-group-id provider-matrix-2026-05 --models <the six above>`. It also
 requires exact Task 1+2 membership, the full benchmark, five stochastic
 samples, complete deterministic/stochastic coverage, batch size 16, and grouped
 batching. Historical paper rows have a blank `batch_order` field; that legacy
