@@ -233,6 +233,9 @@ def main() -> None:
         else list(run_config["benchmark_variants"])
     )
     run_group_id = run_config["run_group_id"]
+    # Completeness is judged against the plan the run config declares, never
+    # against the number of stochastic rows that happen to be on disk.
+    sampling_plan = eu.SamplingPlan.from_run_config(run_config)
 
     for dataset_id in datasets:
         for variant in variants:
@@ -271,7 +274,9 @@ def main() -> None:
                 result_benchmark = eu.benchmark_rows_with_current_raw_outputs(
                     benchmark, raw_rows
                 )
-                scores = eu.build_uq_scores(result_benchmark, raw_rows)
+                scores = eu.build_uq_scores(
+                    result_benchmark, raw_rows, sampling_plan=sampling_plan
+                )
                 run_summary = eu.metric_summary_by_model_task_method(scores)
                 annotate_text_drift_cis(
                     run_summary, scores, bootstrap_samples=args.bootstrap_samples

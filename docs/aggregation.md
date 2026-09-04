@@ -24,8 +24,15 @@ The scoring unit is **one model answer for one benchmark item**.
 - Score rows are produced by `build_uq_scores`
   (`scripts/eval_utils.py:5606`). Every row carries `run_id`, `model`, `task`,
   `uq_method`, `item_id`, `seed_id`, `source_modality`, `valid_n`, `total_n`,
-  `parse_failures`, and `stochastic_complete`, built by `score_base`
-  (`scripts/eval_utils.py:6703`).
+  `parse_failures`, `stochastic_complete`, and `sampling_plan_source`, built by
+  `score_base` (`scripts/eval_utils.py:6703`).
+- `build_uq_scores` requires a `SamplingPlan`: the number of stochastic samples
+  the run *planned* per item, threaded from the run config by every caller.
+  `total_n` is `max(observed, planned)`, so three written samples of a planned
+  five read as an incomplete `3/5` rather than a complete `3/3`. Reconstructing
+  the denominator from the rows that happen to exist is exploratory only, needs
+  `infer_plan_from_observations=True`, and stamps every row it produces with
+  `sampling_plan_source = "inferred"`.
 - Raw rows are **deduplicated before scoring**. If one
   `(run_id, model, task, item_id, sample_kind, sample_index)` key carries
   several raw rows — possible after a resume that changed the job config — the

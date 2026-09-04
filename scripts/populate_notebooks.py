@@ -555,7 +555,7 @@ def notebook_02() -> list[nbf.NotebookNode]:
         code(
             r"""
             if pilot_rows:
-                pilot_scores = eu.build_uq_scores(benchmark, pilot_rows)
+                pilot_scores = eu.build_uq_scores(benchmark, pilot_rows, sampling_plan=eu.SamplingPlan.from_run_config(CONFIG))
                 fields = [
                     "model",
                     "task",
@@ -973,7 +973,7 @@ def notebook_03() -> list[nbf.NotebookNode]:
                         PROJECT_ROOT,
                         variant=BENCHMARK_VARIANT,
                         dataset_id=DATASET_ID,
-                        expected_stochastic_samples=int(stochastic["samples"]),
+                        sampling_plan=eu.SamplingPlan.from_run_config(CONFIG),
                     )
                     print(
                         f"Saved preliminary snapshot after {total_calls}/{planned_calls} calls: "
@@ -1342,7 +1342,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
         md("## Build UQ Scores"),
         code(
             r"""
-            scores = eu.build_uq_scores(result_benchmark, raw_rows)
+            scores = eu.build_uq_scores(result_benchmark, raw_rows, sampling_plan=eu.SamplingPlan.from_run_config(CONFIG))
             task3_scores = eu.build_task3_scores(task3_items, task3_raw_rows) if task3_items and task3_raw_rows else []
             baseline_scores = eu.build_rule_baseline_scores(result_benchmark)
             scores.extend(task3_scores)
@@ -1481,7 +1481,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
                 row["numeric_strength"] = eu.NUMERIC_STRENGTH_RECOMMENDED_075[row["source_modality"]]
                 benchmark_075.append(row)
 
-            scores_075 = eu.build_uq_scores(benchmark_075, raw_rows)
+            scores_075 = eu.build_uq_scores(benchmark_075, raw_rows, sampling_plan=eu.SamplingPlan.from_run_config(CONFIG))
             scores_075.extend(eu.build_rule_baseline_scores(benchmark_075))
             summary_075 = eu.metric_summary_by_model_task_method(scores_075)
             sensitivity_path = eu.artifact_path(PROJECT_ROOT / "data/processed/metrics_summary_recommended075.csv", DATASET_ID, BENCHMARK_VARIANT)

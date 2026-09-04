@@ -168,7 +168,11 @@ joins the author marker back on `item_id`. It writes:
   seed-clustered bootstrap CI (`eu.bootstrap_seed_metric_delta`): each
   iteration draws one resample of seeds and evaluates both arms on those
   seeds before differencing. Resampling the arms independently would treat
-  paired observations as unrelated and overstate the interval.
+  paired observations as unrelated and overstate the interval. The cohort is
+  the seeds *both* arms answered, built once before any resampling: a seed only
+  one arm answered is excluded up front and counted, so the number of pairs
+  cannot vary from replicate to replicate. `n_complete_pairs` and
+  `n_excluded_single_arm` report that cohort on every delta row.
 - `outputs/context_ablation_summary_provenance.json`: the run ids, start
   times, batching settings and `resolved_config_sha` behind every row.
 
