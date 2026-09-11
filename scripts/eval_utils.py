@@ -205,6 +205,22 @@ WEAK_MODALITY_PROBE_SUMMARY_FIELDS = [
     "pred_optional_rate",
     "pred_nice_to_have_rate",
     "mean_confidence",
+    "unresolved_n",
+    "no_readable_cue_n",
+    *[
+        f"{metric}{suffix}"
+        for metric in ("strict_text_over_commitment", "text_over_commitment")
+        for suffix in (
+            "",
+            "_n_numerator",
+            "_n_denominator",
+            "_ci_low",
+            "_ci_high",
+            "_seed_ci_low",
+            "_seed_ci_high",
+        )
+    ],
+    "bootstrap_ci_cluster_field",
 ]
 TASK3_VERIFICATION_FIELDS = [
     "item_id",
@@ -3701,7 +3717,6 @@ def _append_completion_jobs(
         "instructor_mode": instructor_mode,
         "validation_retries": validation_retries,
         "fallback_batch_size": fallback_batch_size,
-        "seed": seed,
         "send_seed": send_seed,
         "max_retries": max_retries,
         "batch_order": batch_order,
@@ -3712,6 +3727,7 @@ def _append_completion_jobs(
     jobs.append(
         completion_request_job(
             sample_kind="deterministic",
+            seed=seed,
             sample_index=0,
             temperature=float(deterministic["temperature"]),
             top_p=float(deterministic["top_p"]),
@@ -3723,6 +3739,7 @@ def _append_completion_jobs(
         jobs.append(
             completion_request_job(
                 sample_kind="stochastic",
+                seed=seed + sample_index + 1,
                 sample_index=sample_index,
                 temperature=float(stochastic["temperature"]),
                 top_p=float(stochastic["top_p"]),
@@ -4945,6 +4962,27 @@ def call_with_retries(
     return None, retry_count, last_error
 
 
+def provider_error_record(error: BaseException) -> dict[str, Any]:
+    """Retain an HTTP failure's body without copying request headers or credentials."""
+    response = getattr(error, "response", None)
+    body = getattr(error, "body", None)
+    raw_text = ""
+    if response is not None:
+        try:
+            raw_text = response.text
+            body = response.json()
+        except (ValueError, AttributeError):
+            pass
+    return {
+        "error": repr(error),
+        "status_code": getattr(
+            error, "status_code", getattr(response, "status_code", None)
+        ),
+        "response_json": body,
+        "raw_text": raw_text,
+    }
+
+
 def chat_completion(
     host: str,
     model: str,
@@ -4991,39 +5029,42 @@ def chat_completion(
     payload_sha = request_payload_sha(request_kwargs)
     # Carried on every return so the run transcript can record what was sent,
     # including the attempts call_with_retries would otherwise only count.
-    attempt_errors: list[str] = []
+    attempt_errors: list[dict[str, Any]] = []
     provenance = {
         "request_payload": transcript_request_payload(request_kwargs),
         "request_payload_sha": payload_sha,
         "request_seed": request_kwargs.get("seed"),
         "attempt_errors": attempt_errors,
+        "started_at_utc": utc_now_iso(),
     }
 
     start = time.perf_counter()
     response, retry_count, error = call_with_retries(
         lambda: client.chat.completions.create(**request_kwargs),
         max_retries=max_retries,
-        on_attempt_error=lambda _attempt, exc: attempt_errors.append(repr(exc)),
+        on_attempt_error=lambda _attempt, exc: attempt_errors.append(
+            provider_error_record(exc)
+        ),
     )
     latency_s = time.perf_counter() - start
     if error is not None:
         return {
             "ok": False,
-            "raw_text": "",
-            "response_json": None,
+            **provider_error_record(error),
             "latency_s": latency_s,
             "error": repr(error),
             "retry_count": retry_count,
             **provenance,
         }
+    response_json = None
     try:
-        raw_text = response.choices[0].message.content or ""
         response_json = response.model_dump(mode="json")
+        raw_text = response.choices[0].message.content or ""
     except Exception as exc:  # malformed provider payload
         return {
             "ok": False,
             "raw_text": "",
-            "response_json": None,
+            "response_json": response_json,
             "latency_s": latency_s,
             "error": repr(exc),
             "retry_count": retry_count,
@@ -7300,6 +7341,119 @@ def bootstrap_seed_metric_delta(
     return PairedDeltaCI(float(point), float(low), float(high), *counts)
 
 
+def exact_item_metric_pairs(rows_a, rows_b, eligible):
+    """Match source identities, never arm-local item IDs; reject ambiguous keys.
+
+    Counts are item identities except duplicate_rows (observations). A key that
+    occurs more than once in either arm is excluded from both, not arbitrarily
+    resolved. Retries should already have been deduplicated by completion key.
+    """
+
+    def indexed(rows):
+        result = {}
+        missing = 0
+        for row in rows:
+            identity = str(row.get("source_identity", ""))
+            modality = str(row.get("gold_modality", row.get("source_modality", "")))
+            if not identity or not modality:
+                missing += 1
+                continue
+            key = (
+                str(row.get("model", "")),
+                str(row.get("dataset_id", "")),
+                str(row.get("benchmark_variant", "")),
+                identity,
+                modality,
+            )
+            result.setdefault(key, []).append(row)
+        return result, missing
+
+    a, missing_a = indexed(rows_a)
+    b, missing_b = indexed(rows_b)
+    duplicates = {
+        key
+        for key in a.keys() | b.keys()
+        if len(a.get(key, [])) > 1 or len(b.get(key, [])) > 1
+    }
+    common = (a.keys() & b.keys()) - duplicates
+    paired = sorted(
+        key for key in common if eligible(a[key][0]) and eligible(b[key][0])
+    )
+    cohort_a, cohort_b = [], []
+    for key in paired:
+        pair_id = json.dumps(key)
+        cohort_a.append({**a[key][0], "exact_pair_id": pair_id})
+        cohort_b.append({**b[key][0], "exact_pair_id": pair_id})
+    counts = {
+        "n_matched_items": len(paired),
+        "n_matched_capabilities": len({key[:4] for key in paired}),
+        "n_unmatched_items": len((a.keys() ^ b.keys()) - duplicates),
+        "n_duplicate_identities": len(duplicates),
+        "n_excluded_ineligible_items": len(common) - len(paired),
+        "n_missing_identity_rows": missing_a + missing_b,
+    }
+    for arm, index, rows in (("bare", a, rows_a), ("document", b, rows_b)):
+        counts[f"n_{arm}_duplicate_rows"] = sum(
+            len(v) for v in index.values() if len(v) > 1
+        )
+        counts[f"n_{arm}_failed_items"] = sum(
+            r.get("response_status", "ok") != "ok" for r in rows
+        )
+        counts[f"n_{arm}_unclassified_items"] = sum(
+            r.get("response_status", "ok") == "ok"
+            and r.get("text_modality_parse_status") != "ok"
+            for r in rows
+        )
+        counts[f"n_{arm}_eligible_items"] = sum(eligible(r) for r in rows)
+    return cohort_a, cohort_b, counts
+
+
+def paired_request_clusters(rows_a, rows_b):
+    """Union request partitions from both arms, retaining whole exact pairs.
+
+    Crossing request partitions require connected components, not choosing one
+    arm's partition. Missing request metadata falls back to capability clusters.
+    """
+    if not rows_a:
+        return rows_a, rows_b, BOOTSTRAP_CLUSTER_FALLBACK_FIELD, "empty matched cohort"
+    # Same completeness rule as every other cluster bootstrap: the request is
+    # the unit only when both arms carry it on every row.
+    if any(
+        resolve_bootstrap_cluster_field(rows) != DEFAULT_BOOTSTRAP_CLUSTER_FIELD
+        for rows in (rows_a, rows_b)
+    ):
+        return (
+            rows_a,
+            rows_b,
+            BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
+            "missing request IDs; capability fallback",
+        )
+    parent = list(range(len(rows_a)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for rows in (rows_a, rows_b):
+        seen = {}
+        for i, row in enumerate(rows):
+            key = (row.get("model", ""), row.get("run_id", ""), row["batch_id"])
+            if key in seen:
+                parent[root(i)] = root(seen[key])
+            else:
+                seen[key] = i
+    a = [{**r, "paired_request_cluster": str(root(i))} for i, r in enumerate(rows_a)]
+    b = [{**r, "paired_request_cluster": str(root(i))} for i, r in enumerate(rows_b)]
+    return (
+        a,
+        b,
+        "paired_request_cluster",
+        "connected components of requests in both arms",
+    )
+
+
 def score_from_distribution(
     raw: dict[str, Any],
     item: dict[str, Any],
@@ -8910,8 +9064,16 @@ def provider_preflight(
     extra_body: Mapping[str, Any] | None = None,
     instructor_mode: str = "json",
     validation_retries: int = 2,
+    max_tokens: int = 48,
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
 ) -> dict[str, Any]:
+    """Send one fixed-answer request and check that the reply parses.
+
+    ``max_tokens`` defaults to a budget that fits the probe answer alone; a
+    profile whose models always emit a reasoning channel (Muse Glimmer,
+    gpt-oss) must pass its own budget, or the probe is truncated before the
+    answer starts and the preflight fails with an empty text.
+    """
     resolved_response_format, resolved_extra_body = resolve_response_format_args(
         "task1",
         structured_output=structured_output,
@@ -8947,7 +9109,7 @@ def provider_preflight(
         **completion_kwargs_for_job(
             preflight_job,
             prompt=LOGPROB_PROBE_PROMPT,
-            max_tokens=48,
+            max_tokens=max_tokens,
             response_format=resolved_response_format,
             extra_body=resolved_extra_body,
             batched=False,
@@ -9010,6 +9172,9 @@ def preflight_profile(
         extra_body=profile.get("extra_body"),
         instructor_mode=str(profile.get("instructor_mode", "json")),
         validation_retries=int(profile.get("validation_retries", 2)),
+        # The profile's per-item budget: reasoning models spend most of it
+        # before the answer, so the probe needs the same room a real item gets.
+        max_tokens=int(profile.get("max_tokens", 48)),
         completion_fn=completion_fn,
     )
     if not preflight["ok"]:
@@ -9680,22 +9845,30 @@ def overcommitment_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, floa
     }
 
 
-def unsupported_mandatory_acceptance_rate(
+def unsupported_mandatory_acceptance_counts(
     rows: list[dict[str, Any]], threshold: float
-) -> float:
+) -> tuple[int, int]:
+    """High-confidence yes decisions / valid nonmandatory-source Task 1 answers."""
     weak_rows = [
         row
         for row in rows
         if str(row.get("task", "")) == "task1" and int(row["y_true"]) == 0
     ]
-    if not weak_rows:
-        return math.nan
-    accepted = [
-        row
+    accepted = sum(
+        1
         for row in weak_rows
-        if row.get("p_yes") != "" and float(row["p_yes"]) >= threshold
-    ]
-    return len(accepted) / len(weak_rows)
+        if str(row.get("y_pred", "")) == "1"
+        and row.get("confidence") not in {None, ""}
+        and float(row["confidence"]) >= threshold
+    )
+    return accepted, len(weak_rows)
+
+
+def unsupported_mandatory_acceptance_rate(
+    rows: list[dict[str, Any]], threshold: float
+) -> float:
+    accepted, eligible = unsupported_mandatory_acceptance_counts(rows, threshold)
+    return accepted / eligible if eligible else math.nan
 
 
 def task2_high_confidence_overcommitment_rate(
@@ -10755,11 +10928,10 @@ def weak_intent_strict_strengthening_rate(
     is the denominator the per-model RQ1 table prints.
 
     ``threshold`` gates the numerator on verbalized confidence:
-    ``threshold=0.90`` reproduces ``strict_text_high_conf_overcommit_90`` (the
-    ``\\numWeakStrict`` headline), while ``None`` counts every strict
-    strengthening regardless of how confidently it was asserted. The two
-    coincide only pooled -- per model and per cell they differ -- so the RQ
-    table carries both.
+    ``threshold=0.90`` reproduces the high-confidence diagnostic
+    ``strict_text_high_conf_overcommit_90``. ``None`` counts all strict
+    strengthening and supplies the primary weak-intent headline. Keep the
+    two quantities distinct even if they coincide in a particular run.
     """
     weak_rows = [
         row

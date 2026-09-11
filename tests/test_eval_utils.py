@@ -1722,9 +1722,9 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_high_confidence_overcommitment_metrics(self):
         task1_rows = [
-            {"task": "task1", "y_true": 0, "p_yes": 0.95},
-            {"task": "task1", "y_true": 0, "p_yes": 0.20},
-            {"task": "task1", "y_true": 1, "p_yes": 0.95},
+            {"task": "task1", "y_true": 0, "y_pred": 1, "confidence": 0.95},
+            {"task": "task1", "y_true": 0, "y_pred": 0, "confidence": 0.80},
+            {"task": "task1", "y_true": 1, "y_pred": 1, "confidence": 0.95},
         ]
         task2_rows = [
             {
@@ -2511,9 +2511,9 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_high_confidence_denominators_are_explicit(self):
         task1_rows = [
-            {"task": "task1", "y_true": 0, "p_yes": 0.95},
-            {"task": "task1", "y_true": 0, "p_yes": 0.40},
-            {"task": "task1", "y_true": 1, "p_yes": 0.99},
+            {"task": "task1", "y_true": 0, "y_pred": 1, "confidence": 0.95},
+            {"task": "task1", "y_true": 0, "y_pred": 0, "confidence": 0.60},
+            {"task": "task1", "y_true": 1, "y_pred": 1, "confidence": 0.99},
         ]
         task2_rows = [
             {
@@ -2555,6 +2555,61 @@ class EvalUtilsTest(unittest.TestCase):
             0.5,
         )
         self.assertEqual(eu.weak_strengthening_rate(task2_rows, 0.90), 1.0)
+
+    def test_unsupported_acceptance_requires_a_confident_yes_decision(self):
+        rows = [
+            {
+                "task": "task1",
+                "y_true": 0,
+                "y_pred": 0,
+                "confidence": 0.05,
+                "p_yes": 0.95,
+            },
+            {
+                "task": "task1",
+                "y_true": "0",
+                "y_pred": "1",
+                "confidence": "0.90",
+                "p_yes": "0.90",
+            },
+            {
+                "task": "task1",
+                "y_true": 0,
+                "y_pred": 1,
+                "confidence": 0.89,
+                "p_yes": 0.89,
+            },
+            {
+                "task": "task1",
+                "y_true": 0,
+                "y_pred": 0,
+                "confidence": 0.99,
+                "p_yes": 0.01,
+            },
+            {
+                "task": "task1",
+                "y_true": 1,
+                "y_pred": 1,
+                "confidence": 0.99,
+                "p_yes": 0.99,
+            },
+            {
+                "task": "task2",
+                "y_true": 0,
+                "y_pred": 1,
+                "confidence": 0.99,
+                "p_yes": "",
+            },
+        ]
+        self.assertEqual(eu.unsupported_mandatory_acceptance_counts(rows, 0.90), (1, 4))
+        self.assertEqual(eu.unsupported_mandatory_acceptance_rate(rows, 0.90), 0.25)
+        self.assertEqual(eu.unsupported_mandatory_acceptance_counts(rows, 0.80), (2, 4))
+        self.assertEqual(
+            eu.unsupported_mandatory_acceptance_counts(rows[-2:], 0.90), (0, 0)
+        )
+        self.assertTrue(
+            math.isnan(eu.unsupported_mandatory_acceptance_rate(rows[-2:], 0.90))
+        )
 
     def test_task2_deterministic_scores_include_text_modality_fields(self):
         benchmark = eu.build_benchmark_items(export_report_seeds())
@@ -3013,9 +3068,27 @@ class EvalUtilsTest(unittest.TestCase):
 
     def test_headline_risk_ci_fields_cover_task1_and_task2_metrics(self):
         task1_rows = [
-            {"seed_id": "S0001", "task": "task1", "y_true": 0, "p_yes": 0.95},
-            {"seed_id": "S0002", "task": "task1", "y_true": 0, "p_yes": 0.40},
-            {"seed_id": "S0003", "task": "task1", "y_true": 1, "p_yes": 0.99},
+            {
+                "seed_id": "S0001",
+                "task": "task1",
+                "y_true": 0,
+                "y_pred": 1,
+                "confidence": 0.95,
+            },
+            {
+                "seed_id": "S0002",
+                "task": "task1",
+                "y_true": 0,
+                "y_pred": 0,
+                "confidence": 0.60,
+            },
+            {
+                "seed_id": "S0003",
+                "task": "task1",
+                "y_true": 1,
+                "y_pred": 1,
+                "confidence": 0.99,
+            },
         ]
         task2_rows = [
             {
@@ -7460,3 +7533,36 @@ class SamplingPlanTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreflightTokenBudgetTest(unittest.TestCase):
+    def test_preflight_profile_passes_the_profile_token_budget(self):
+        # A reasoning model spends the first few hundred tokens before its
+        # answer; the probe must get the same budget a real item gets.
+        seen: dict[str, object] = {}
+
+        def fake_completion(**kwargs):
+            seen.update(kwargs)
+            return {
+                "ok": True,
+                "raw_text": '{"decision":"yes","confidence":1.0,"brief_reason":"probe"}',
+                "response_json": {},
+                "error": "",
+                "latency_s": 0.0,
+            }
+
+        profile = {
+            "profile_id": "local_llama_cpp",
+            "base_url": "http://localhost:1/v1",
+            "api_key_env": "LLAMA_API_KEY",
+            "timeout_s": 10,
+            "json_mode": False,
+            "max_tokens": 512,
+        }
+        eu.preflight_profile(
+            profile,
+            model="m",
+            prompt_version="v2-conf01",
+            completion_fn=fake_completion,
+        )
+        self.assertEqual(seen["max_tokens"], 512)

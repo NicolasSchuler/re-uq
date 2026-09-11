@@ -72,6 +72,7 @@ TRANSCRIPT_FIELDS = (
     "latency_s",
     "retry_count",
     "error",
+    "status_code",
 )
 
 #: `attempt_kind` values: a failed transport attempt that `call_with_retries`
@@ -126,7 +127,7 @@ class TranscriptWriter:
         completion function returned, carrying `request_payload`, the response
         body, and the errors of any attempts that were retried.
         """
-        started_at = eu.utc_now_iso()
+        started_at = str(completion.get("started_at_utc") or eu.utc_now_iso())
         base = {
             "run_id": str(job.get("run_id", "")),
             "run_group_id": str(job.get("run_group_id", "")),
@@ -145,9 +146,7 @@ class TranscriptWriter:
             "request_seed": completion.get("request_seed"),
         }
 
-        # Attempts that failed and were retried: the provider never returned a
-        # body, so only the error is recordable. Without these rows a run that
-        # eventually succeeded looks like it succeeded first time.
+        # HTTP failures can have a useful body; transport failures may not.
         for attempt, error in enumerate(completion.get("attempt_errors") or []):
             eu.append_jsonl(
                 self.path,
@@ -161,6 +160,7 @@ class TranscriptWriter:
                     "latency_s": None,
                     "retry_count": attempt,
                     "error": str(error),
+                    **(error if isinstance(error, dict) else {}),
                 },
             )
 
@@ -178,5 +178,6 @@ class TranscriptWriter:
                 "latency_s": completion.get("latency_s"),
                 "retry_count": retry_count,
                 "error": str(completion.get("error", "")),
+                "status_code": completion.get("status_code"),
             },
         )

@@ -15,6 +15,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from typing import ClassVar
+from unittest.mock import patch
 
 from scripts import eval_utils as eu, run_transcripts as rt
 
@@ -93,6 +96,53 @@ class TranscriptTestCase(unittest.TestCase):
                 transcript=writer,
             )
         )
+
+
+class SamplingSeedTest(TranscriptTestCase):
+    def test_repetitions_have_distinct_repeatable_seeds(self):
+        args = {
+            "seed": 731,
+            "stochastic": {"temperature": 0.7, "top_p": 1.0, "samples": 5},
+        }
+        first = self.plan(**args)
+        second = self.plan(**args)
+        self.assertEqual([j["seed"] for j in first], [j["seed"] for j in second])
+        for item_id in {j["item"]["item_id"] for j in first}:
+            jobs = [j for j in first if j["item"]["item_id"] == item_id]
+            self.assertEqual([j["seed"] for j in jobs], [731, 732, 733, 734, 735, 736])
+
+
+class HttpErrorBodyTest(TranscriptTestCase):
+    def test_retried_http_body_is_preserved_without_headers(self):
+        class RateError(Exception):
+            status_code = 429
+            body: ClassVar[dict[str, str]] = {"error": "slow down"}
+            response = SimpleNamespace(
+                status_code=429,
+                text='{"error":"slow down"}',
+                json=lambda: {"error": "slow down"},
+                headers={"Authorization": "secret"},
+            )
+
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+            model_dump=lambda **kwargs: {"model": "served-m1", "choices": []},
+        )
+        with patch.object(eu, "OpenAI") as client, patch.object(eu.time, "sleep"):
+            client.return_value.chat.completions.create.side_effect = [
+                RateError("rate limit"),
+                response,
+            ]
+            result = eu.chat_completion("http://unused/v1", "m1", "test request", 0, 1)
+        writer = rt.TranscriptWriter(self.path)
+        writer.record(self.plan()[0], result)
+        saved = self.rows()
+        self.assertEqual(len(saved), 2)
+        self.assertEqual(saved[0]["status_code"], 429)
+        self.assertEqual(saved[0]["response_json"], {"error": "slow down"})
+        self.assertEqual(saved[0]["raw_text"], '{"error":"slow down"}')
+        self.assertIn("test request", str(saved[0]["request_payload"]))
+        self.assertNotIn("secret", self.path.read_text())
 
 
 class BatchedTranscriptTest(TranscriptTestCase):
