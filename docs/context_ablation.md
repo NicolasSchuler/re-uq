@@ -54,9 +54,12 @@ table says so rather than hiding it.
 
 The seed review table is `data/processed/seeds_review_pure.csv`
 (`include`, `capability_text_final` are the reviewer's columns, as for the
-other datasets). The author has completed human validation of the capability
-texts, originally produced by automatic extraction, and will repeat it before
-submission. See [validation review](validation_review.md).
+other datasets). On 2026-09-11 the author delegated a renewed AI-assisted
+source review after defects in the old extraction were found. All 180
+capabilities were reviewed and corrected, then 720 items regenerated. This is
+not renewed human validation. See [row-level decisions](pure_capability_ai_review.md)
+and [validation review](validation_review.md). Earlier benchmark inputs are
+archived under `outputs/pure_before_capability_review/`.
 
 **Items.** `--stage benchmark` renders the 180 seeds through the unchanged
 four modality templates (`eu.source_statement`: MUST / SHOULD / MAY / "It
@@ -81,17 +84,22 @@ resolved-config digest:
 
 | Arm | What the model sees | Prompt |
 | --- | --- | --- |
-| `bare` | today's Task 2 request, byte-identical to the paper condition (the batched wrapper's SHA and the job-config fingerprint are pinned in the tests) | `prompts/modality_extraction.txt`; batched wrapper of `docs/experimental_setup.md` §3.1 |
-| `document` | the same items in the same 16-item grouped batches, each with one extra `context` value (document, section path, the author's real marker, preceding and following requirement) and one neutral instruction sentence | `prompts/modality_extraction_context.txt`; batched wrapper below |
+| `bare` | one Task 2 source statement per request, using the final primary delivery protocol | `prompts/modality_extraction.txt` |
+| `document` | the same single item plus document, section path, original marker and neighboring requirements, with a context/preservation instruction | `prompts/modality_extraction_context.txt` |
 
-Everything else is held fixed: dataset, items, batch size 16, `batch_order:
+Everything else is held fixed: dataset, items, batch size 1, `batch_order:
 grouped`, deterministic sampling, request seed. Marker M vs O is a reported
 stratum, not a manipulated factor; the context always shows the author's
 real marker. The knob is refused outside `task=task2`, and the context prompt
 is only loaded for the `document` arm, so bare runs keep exactly the two
 frozen prompt inputs of the paper.
 
-### 3.1 Batched prompt, Task 2, `document` arm (verbatim, two real items)
+The old exploratory arms used size 16 and earlier capability clauses. They
+are not interchangeable with the corrected single-item context experiment.
+The ablation changes both document information and its accompanying
+instruction, so it does not isolate a pure information-only effect.
+
+### 3.1 Archived batched prompt, Task 2, `document` arm (two real items)
 
 ```text
 Extract exactly one requirement from each source statement.
@@ -129,7 +137,7 @@ differences are the third instruction line and the `context` values.
 ## 4. Running it
 
 ```bash
-# both arms, GLM half of the cohort (45 requests per arm per model)
+# both arms, GLM half of the cohort (720 requests per arm per model)
 .venv/bin/python scripts/run.py --multirun +experiment=context_ablation
 # both arms, non-GLM half
 .venv/bin/python scripts/run.py --multirun +experiment=context_ablation \
@@ -241,9 +249,10 @@ remain pending.
   transcript) are not modelled.
 - One domain (railway signalling and radio), two documents, one variant
   (MUST), Task 2 only, deterministic pass only.
-- The capability texts of the 180 seeds come from the automatic extraction
-  with human validation completed by the author. This does not establish
-  stakeholder intent outside the controlled transformation.
+- The 180 corrected capability texts have an author-delegated AI-assisted
+  review, not renewed human/expert validation. Generic system phrasing is a
+  capability abstraction; original operator/design responsibilities are not
+  an additional evaluated construct. Stakeholder intent remains unmeasured.
 - Naturally occurring stakeholder statements (for example Apache Jira "Wish"
   issues with a declared priority) are a separate track; candidates are in
   [`docs/external_validity_datasets.md`](external_validity_datasets.md).

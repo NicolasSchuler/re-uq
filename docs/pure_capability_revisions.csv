@@ -1,0 +1,181 @@
+seed_id,proposed_capability,review_decision
+S0003,enable all voice call services to operate between any combination of fixed and mobile equipment users,accepted_ai_review
+S0004,support point-to-point voice calls between any two call parties,accepted_ai_review
+S0005,allow both parties in a point-to-point call to talk simultaneously,accepted_ai_review
+S0008,support broadcast voice calls,accepted_ai_review
+S0020,support the transmission of point-to-point and point-to-multipoint text messages from the ground to mobile users,accepted_ai_review
+S0021,provide network support for receipt of mobile-originated text messages by the ground,accepted_ai_review
+S0024,provide network support for point-to-point data communications,accepted_ai_review
+S0029,provide network support for fax transmissions between the ground and mobile users,accepted_ai_review
+S0040,allow calls with a higher assigned priority to override existing calls of a lower priority,accepted_ai_review
+S0045,allow a user forwarding a voice call to converse with the intended recipient before forwarding,accepted_ai_review
+S0047,allow the user to temporarily exit an existing call by putting the call on hold,accepted_ai_review
+S0049,inform a user involved in an existing call of attempts by other users to contact them,accepted_ai_review
+S0050,provide information about call rates and ongoing call charges where network services are chargeable,accepted_ai_review
+S0057,provide network support for all EIRENE-compliant mobiles,accepted_ai_review
+S0088,"provide EIRENE mobile radio equipment whose design, testing and installation all comply with the quality procedures defined in ISO 9001",accepted_ai_review
+S0096,provide the driver with a handheld portable for communication outside the train,accepted_ai_review
+S0108,provide the driver with an audible and visual indication that the call to the controller is proceeding,accepted_ai_review
+S0111,display the connected party's alphanumeric functional-identity description to the driver when that description is present,accepted_ai_review
+S0115,display the group identity on the Cab radios of the participating drivers,accepted_ai_review
+S0129,display a multi-driver indication permanently at all Cab radios while the multi-driver call is ongoing,accepted_ai_review
+S0131,allow the lead driver to remove a member from the multi-driver call at any time during that call,accepted_ai_review
+S0133,provide a clear indication if a driver is disconnected from the multi-driver call,accepted_ai_review
+S0141,prompt the driver to select the train staff with whom to communicate after presenting the list of generic train staff,accepted_ai_review
+S0151,inform the driver of an ongoing broadcast call with a visual indication on the MMI,accepted_ai_review
+S0154,display a visual indication on the driver's MMI during a group call to remind the driver to use the PTT button,accepted_ai_review
+S0168,provide the link assurance tone via the loudspeaker,accepted_ai_review
+S0171,provide a means to enter and leave direct mode if direct mode is implemented,accepted_ai_review
+S0180,disconnect the Cab radio from the mobile network when the Cab radio is powered down,accepted_ai_review
+S0181,retain all numbers stored in the Cab radio at switch-off while the radio is switched off,accepted_ai_review
+S0187,"complete Cab radio soft-switch-off housekeeping on power failure as far as possible, including controlled termination of a current call, train-number deregistration where applicable, required-data storage and Railway emergency-call confirmation",accepted_ai_review
+S0213,allow the leading driver to accept or reject the train number returned by the network after an automated train-number request,accepted_ai_review
+S0216,warn the driver with audible and visual indications if a train with the same train number is already registered on the same network,accepted_ai_review
+S0220,"allow non-leading drivers to indicate their location in the train to the system during registration, such as second or third driver",accepted_ai_review
+S0221,automatically register the driver's functional number when the train number is registered and deregister it when the train number is deregistered,accepted_ai_review
+S0233,display the results of radio and MMI tests in a format similar to the self-test results displayed when the MMI is powered on,accepted_ai_review
+S0238,allow established calls to be put on hold or cleared down by pre-emption to meet other call priorities,accepted_ai_review
+S0241,provide an advisory indication to pre-empted parties where pre-emption occurs,accepted_ai_review
+S0243,allow the Cab radio to perform run-time diagnostic tests on all physical interfaces at the driver's request,accepted_ai_review
+S0245,make all failures available for recording in a train-borne recorder if run-time diagnostics are implemented,accepted_ai_review
+S0259,"allow the driver to adjust the brightness of buttons, indicator lights and displays to ambient cab lighting",accepted_ai_review
+S0260,allow the driver to adjust display contrast,accepted_ai_review
+S0262,make displays clearly readable from a normal driver's position at a normal reading distance,accepted_ai_review
+S0269,provide an audible and visual indication on the Cab radio if contact with the mobile radio network is lost,accepted_ai_review
+S0270,provide a driver safety device interface in DSD-equipped traction units to support DSD alarm transmission,accepted_ai_review
+S0272,automatically trigger the Cab radio to send a data message when the driver safety device is activated,accepted_ai_review
+S0274,transmit DSD alarm information to the primary controller,accepted_ai_review
+S0275,provide additional DSD alarm information if it is available from external systems,accepted_ai_review
+S0277,provide on-train mobiles with a standardised interface to ERTMS/ETCS,accepted_ai_review
+S0279,provide other interfaces in the Cab radio system,accepted_ai_review
+S0287,display the calling party's functional identity where available,accepted_ai_review
+S0288,provide a short audible and visual indication of the incoming call,accepted_ai_review
+S0291,provide a visual indication during a group call to remind the user to use the PTT function,accepted_ai_review
+S0303,display the national railway's default language when the radio is first powered on,accepted_ai_review
+S0305,provide a visual and audible indication when the mobile changes network automatically,accepted_ai_review
+S0308,allow the user to initiate a change of functional number when a change is required,accepted_ai_review
+S0311,provide a standard data interface for connecting a computer to the radio,accepted_ai_review
+S0318,make the General purpose radio suitable for use with a car adapter kit,accepted_ai_review
+S0320,make the General purpose radio MMI suitable for use by day and night,accepted_ai_review
+S0321,provide an on/off control designed to prevent accidental activation or deactivation,accepted_ai_review
+S0322,provide facilities to adjust loudspeaker volume,accepted_ai_review
+S0325,protect stored numbers and other set-up details against accidental alteration,accepted_ai_review
+S0327,provide a visual and audible indication when remaining battery capacity supports only 10 minutes of full-duplex call time,accepted_ai_review
+S0328,provide the user with a network service availability indication,accepted_ai_review
+S0337,attempt to establish a call to the obtained number with railway operation priority once an appropriate number has been obtained,accepted_ai_review
+S0338,provide the user with an audible and visual indication that the call to the controller is proceeding,accepted_ai_review
+S0339,provide the user with an audible and visual indication when the call connects to the controller,accepted_ai_review
+S0340,display the connected party's functional identity to the user if available,accepted_ai_review
+S0341,display an alphanumeric description of the connected party's identity where available,accepted_ai_review
+S0348,provide a means to enter and leave shunting mode if shunting mode is implemented,accepted_ai_review
+S0355,provide an Operational radio of a rugged design suitable for use by operational railway personnel in the railway environment,accepted_ai_review
+S0357,provide controls designed for use by people wearing gloves,accepted_ai_review
+S0362,make the Operational radio suitable for use with a car adapter kit,accepted_ai_review
+S0364,make the Operational radio MMI suitable for use by day and night,accepted_ai_review
+S0367,provide an emergency button designed to avoid accidental use,accepted_ai_review
+S0368,provide a link assurance button designed to avoid accidental use if shunting mode is implemented,accepted_ai_review
+S0369,provide a dedicated Push-To-Talk button,accepted_ai_review
+S0370,provide a visual and audible alarm when remaining battery capacity supports only 10 minutes of full-duplex call time,accepted_ai_review
+S0384,enable EIRENE users to originate and receive calls by functional number,accepted_ai_review
+S0385,identify each mobile by a unique telephone number,accepted_ai_review
+S0387,identify every on-train function by a unique standard number,accepted_ai_review
+S0389,identify every on-engine/coach function by a unique standard number,accepted_ai_review
+S0394,allow group call service areas to be freely configured within each railway network's operational responsibility,accepted_ai_review
+S0399,allocate the pre-defined local area for group calls on a bilateral basis in network boundary areas,accepted_ai_review
+S0400,allow authorised EIRENE users to receive calls from parties outside the EIRENE network,accepted_ai_review
+S0405,pre-empt the lowest-priority ongoing call before a higher-priority call,accepted_ai_review
+S0411,prevent the user from receiving calls from a group after that group is deactivated on the mobile,accepted_ai_review
+S0413,prevent mobiles with Railway emergency group call subscriptions from deactivating emergency groups while operational,accepted_ai_review
+S0418,allow a railway to impose additional restrictions on the access matrix if required,accepted_ai_review
+S0421,provide an addressing scheme that identifies users by numbers corresponding to their functional roles rather than numbers tied to the terminal equipment they use,accepted_ai_review
+S0426,allow a user to set up a functional number on one network and cancel it from another,accepted_ai_review
+S0444,provide a registration procedure with a means to prevent mis-allocation of functional numbers,accepted_ai_review
+S0451,remove the displayed functional number on the EIRENE mobile and indicate to the user that deregistration has occurred,accepted_ai_review
+S0452,support re-registration of functional numbers after selection of a new network to allow roaming between EIRENE networks,accepted_ai_review
+S0454,display the new registration details to the user after automatic re-registration,accepted_ai_review
+S0455,provide location-dependent addressing that routes calls for a function to a destination number determined by the user's location,accepted_ai_review
+S0459,make the location-dependent addressing scheme available to all mobiles,accepted_ai_review
+S0460,derive the EIRENE system's location information at least from network information such as the current cell or base station serving the mobile,accepted_ai_review
+S0471,provide a standard data interface between the mobile and the application module,accepted_ai_review
+S0475,determine the type of Railway emergency call automatically from the radio's mode of operation,accepted_ai_review
+S0478,inform the appropriate ERTMS/ETCS RBC when a Train emergency call is initiated,accepted_ai_review
+S0479,send the Shunting emergency call to all users involved in shunting operations in the shunting area,accepted_ai_review
+S0480,automatically prioritise the Shunting emergency call over the link assurance signal,accepted_ai_review
+S0482,allow a Railway emergency call to be initiated through a simple MMI action such as a single action on Cab and Operational radios,accepted_ai_review
+S0485,provide the user with an audible and visual indication of connection attempts during the 30-second automatic retry period for an unconnected Railway emergency call,accepted_ai_review
+S0488,provide different emergency-function activation indications at the originating and receiving terminals,accepted_ai_review
+S0489,provide a continuous visual indication of emergency-function activation at the originating and all receiving terminals,accepted_ai_review
+S0491,establish a speech connection immediately after the warning tone to allow the emergency-call originator to describe the emergency,accepted_ai_review
+S0494,deliver spoken emergency information to the same users who received the warning tone,accepted_ai_review
+S0501,start the Railway emergency-call confirmation message at the end of the emergency call or when the radio moves out of the call area,accepted_ai_review
+S0512,allow only the link-assurance-signal originator to speak to all other shunting group members using the PTT function during signal transmission,accepted_ai_review
+S0516,enable the shunting group member to activate and deactivate the link assurance signal on Operational radios used for shunting,accepted_ai_review
+S0517,use the link assurance signal to reassure the driver of the integrity of the member at the head of the shunting movement,accepted_ai_review
+S0541,provide the driver with ETCS information for driving the train safely,accepted_ai_review
+S0544,support ETCS operation up to a maximum train speed of 500 km/h,accepted_ai_review
+S0560,indicate the current operational status to the driver on the DMI,accepted_ai_review
+S0562,apply national values to a defined area,accepted_ai_review
+S0563,retain the validity of national values received onboard even if the onboard equipment is switched off,accepted_ai_review
+S0565,permanently store harmonised default values in all ERTMS/ETCS onboard equipment,accepted_ai_review
+S0568,indicate the self-test result on the DMI,accepted_ai_review
+S0569,require train-data entry before the onboard ETCS equipment allows train movement,accepted_ai_review
+S0571,allow the driver to enter or overwrite data manually only when the train is stationary,accepted_ai_review
+S0572,accept automatic train-data entry from a railway management system or train memory,accepted_ai_review
+S0577,allow entry of driver identification and selection of the language,accepted_ai_review
+S0578,allow changes to driver identification during a journey or to a Train Running Number,accepted_ai_review
+S0579,allow the driver to perform shunting or train movements after successful Train Data Entry,accepted_ai_review
+S0582,ask the driver to enter RBC contact details if the onboard equipment fails to contact the RBC when awakening,accepted_ai_review
+S0584,allow transfer to Shunting on the driver's selection only when the train is stationary,accepted_ai_review
+S0585,obtain RBC permission for transfer to Shunting when the train operates under RBC control to prevent unauthorised use,accepted_ai_review
+S0586,indicate received RBC permission for transfer to Shunting to the driver,accepted_ai_review
+S0590,supervise Shunting operation with ETCS up to the permitted national speed value,accepted_ai_review
+S0593,allow exit from Shunting only when the train is stationary,accepted_ai_review
+S0597,indicate Partial Supervision on the DMI,accepted_ai_review
+S0599,allow the train to be supervised to a ceiling speed during Partial Supervision,accepted_ai_review
+S0603,transfer to Full Supervision automatically when movement authority and all other necessary information arrive through track-to-train transmission,accepted_ai_review
+S0605,provide speed and distance supervision in Full Supervision,accepted_ai_review
+S0612,allow Unfitted operation if ordered by trackside,accepted_ai_review
+S0613,allow Unfitted operation if selected by the driver at start-up,accepted_ai_review
+S0619,allow the driver to change adhesion-condition information while giving priority to trackside information,accepted_ai_review
+S0620,enable trackside transmission of information for calculating speed profiles,accepted_ai_review
+S0622,provide track-to-train transmission of different speed profiles for specific train categories,accepted_ai_review
+S0623,supervise the end of movement authority with the ETCS trainborne equipment if that information is available onboard,accepted_ai_review
+S0627,define the ceiling speed level for an On Sight movement authority as a National Value,accepted_ai_review
+S0628,request driver acknowledgement before the train enters an occupied track,accepted_ai_review
+S0629,supervise the train according to available train-speed data during On Sight operation,accepted_ai_review
+S0637,calculate ETCS emergency and service braking curves based on all relevant data,accepted_ai_review
+S0638,make the train's front end respect the dynamic train-speed profile when changing to a lower speed level,accepted_ai_review
+S0639,make the train's rear end respect the static train-speed profile when changing to a higher speed level,accepted_ai_review
+S0641,provide braking curves that ensure the train complies with its speed requirements,accepted_ai_review
+S0644,indicate the release speed on the DMI,accepted_ai_review
+S0647,allow each railway to set a different release speed for every signal,accepted_ai_review
+S0648,determine the entire train's location with the ETCS trainborne equipment,accepted_ai_review
+S0649,transmit the entire train's location from ETCS trainborne equipment to the RBC on lines fitted with RBC,accepted_ai_review
+S0650,account for odometry error in train-location calculations,accepted_ai_review
+S0651,indicate actual speed on the DMI,accepted_ai_review
+S0657,supervise a train against its static and dynamic train-speed profiles,accepted_ai_review
+S0660,allow the driver to release an ETCS emergency-brake application when the train is stationary,accepted_ai_review
+S0661,allow the driver to release the ETCS emergency brake below the permitted speed if authorised by a national value,accepted_ai_review
+S0662,monitor the traction unit's movement direction against the permitted direction to protect against roll-away and unwanted reverse movements,accepted_ai_review
+S0663,apply the emergency brake with the trainborne equipment after the train travels the distance defined by a national value during roll-away or unwanted reverse movement,accepted_ai_review
+S0665,allow the driver to release the emergency brake applied for roll-away or unwanted reverse movement once the traction unit is at a standstill,accepted_ai_review
+S0667,disable roll-away and reverse-movement protection in all but the leading traction unit when more than one traction unit is used,accepted_ai_review
+S0669,record information accurately enough to provide a clear view of ETCS functioning and how the traction unit was driven,accepted_ai_review
+S0678,allow the driver to enter the driver ID when using multiple traction units,accepted_ai_review
+S0680,keep train speed at or below the speed specified by a national value during the procedure for passing a stop signal with restricted movement authority,accepted_ai_review
+S0681,allow the driver to select the override control for passing a stop signal with restricted movement authority according to the permission received,accepted_ai_review
+S0682,protect the override control against inadvertent operation,accepted_ai_review
+S0683,suppress the train-trip function when the train passes a stop signal using the override control under a restricted movement authority,accepted_ai_review
+S0685,show a special indication on the DMI during the procedure for passing a stop signal with restricted movement authority,accepted_ai_review
+S0691,command the ETCS emergency brake when a train has received an emergency stop,accepted_ai_review
+S0695,allow the driver to override the route-suitability protection function when the train is stationary,accepted_ai_review
+S0697,trigger the emergency brake when a traction unit passes a stop signal,accepted_ai_review
+S0699,apply the emergency brake following a train trip until the traction unit is stationary,accepted_ai_review
+S0702,allow the train to be driven backwards for a distance defined by a national value after the driver acknowledges the train-trip condition,accepted_ai_review
+S0707,indicate pantograph and power-supply information from the ETCS trainborne equipment on the DMI,accepted_ai_review
+S0711,alert the driver when the plain-text message appears on the DMI,accepted_ai_review
+S0713,use a character set that supports different languages for plain-text messages,accepted_ai_review
+S0717,"show information about inhibition of regenerative, eddy current and magnetic shoe brakes on the DMI",accepted_ai_review
+S0724,use the onboard equipment to check acceptance of the new target location proposed by the RBC for cooperative revocation of the movement authority,accepted_ai_review
+S0727,allow reversing as defined by a value supplied with the movement authority,accepted_ai_review
+S0734,support transitions between RBCs when the train has only one operational radio with a possible performance penalty,accepted_ai_review

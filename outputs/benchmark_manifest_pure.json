@@ -1,25 +1,25 @@
 {
   "artifacts": [
     {
-      "bytes": 643222,
+      "bytes": 649398,
       "exists": true,
       "path": "data/processed/seeds_review_pure.csv",
       "rows": 738,
-      "sha256": "b086c2d835ea1e21bf329945c029c2a6394f879e8bc390dbae1df46da802ed3c"
+      "sha256": "1785cc60f2fe6c201af6e68ecb02f78fb2e4e63150fba253204cf778f8a09ded"
     },
     {
-      "bytes": 129983,
+      "bytes": 136159,
       "exists": true,
       "path": "data/processed/seeds_selected_pure.csv",
       "rows": 180,
-      "sha256": "6c73b907f70ae7b3b585f06078068475e076761ce675c6c9237f287d91d92e75"
+      "sha256": "f6f598db1782ab361ec1b6441f1adacb871bdf9d75fd2fe8d55f92fd00899039"
     },
     {
-      "bytes": 622759,
+      "bytes": 696871,
       "exists": true,
       "path": "data/processed/benchmark_items_pure.csv",
       "rows": 720,
-      "sha256": "0e700e56ec5c1497158cc5bf62607f8000ef935798cda31627ae6d4d1a28ecee"
+      "sha256": "35ab8f8780cd6858e2c06c6a1257d0488786b79640947ec91961b19fda887032"
     },
     {
       "bytes": 417,
@@ -36,7 +36,7 @@
       "sha256": "5f716b8ce64917a886a096bd3d494844cd3114c74b706be94eefab7775920b31"
     }
   ],
-  "created_at_utc": "2026-09-04T02:52:26Z",
+  "created_at_utc": "2026-09-11T16:46:18Z",
   "metadata": {
     "dataset_id": "pure",
     "documents": {
