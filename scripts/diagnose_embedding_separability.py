@@ -137,6 +137,8 @@ def run_grid(
     pca_components: int,
     prediction_rows: list[dict[str, Any]] | None = None,
     cell_callback=None,
+    hgb_max_iter: int = 300,
+    hgb_budgets: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Score every feature set, with reduction and vectorization inside the fold."""
     source_modalities = np.asarray(
@@ -182,6 +184,8 @@ def run_grid(
                             groups=groups_scope[eligible],
                             target=target,
                             model_name=model_name,
+                            hgb_max_iter=hgb_max_iter,
+                            hgb_budgets=hgb_budgets,
                             scope=scope_name,
                             n_splits=n_splits,
                             random_state=random_state,
@@ -323,6 +327,14 @@ def main() -> None:
     )
     parser.add_argument("--pca-components", type=int, default=128)
     parser.add_argument("--n-splits", type=int, default=3)
+    parser.add_argument("--hgb-max-iter", type=int, default=300)
+    parser.add_argument(
+        "--hgb-budgets",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Optional finite budgets selected with inner capability validation, e.g. 300 600 1200",
+    )
     parser.add_argument("--bootstrap-samples", type=int, default=1000)
     parser.add_argument("--mlx-batch", type=int, default=256)
     parser.add_argument("--random-state", type=int, default=20260527)
@@ -390,6 +402,8 @@ def main() -> None:
             random_state=args.random_state,
             pca_components=args.pca_components,
             cell_callback=save_cell,
+            hgb_max_iter=args.hgb_max_iter,
+            hgb_budgets=args.hgb_budgets,
         )
 
     eu.write_csv_rows(output_dir / "probe_grid_folds.csv", fold_rows)
@@ -403,6 +417,8 @@ def main() -> None:
         "models": args.models,
         "pca_components": args.pca_components,
         "n_splits": args.n_splits,
+        "hgb_max_iter": args.hgb_max_iter,
+        "hgb_budgets": args.hgb_budgets,
         "bootstrap_samples": args.bootstrap_samples,
         "held_out_predictions": "probe_grid_predictions.jsonl",
         "uncertainty_scope": "capability bootstrap of fixed predictions; conditional on fitted models and splits",

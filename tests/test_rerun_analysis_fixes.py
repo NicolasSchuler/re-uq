@@ -199,6 +199,51 @@ def observations():
 
 
 class PredictionExportTest(unittest.TestCase):
+    def test_hgb_budget_validation_never_sees_outer_test_capabilities(self):
+        groups = np.repeat(np.arange(12).astype(str), 8)
+        y = np.tile([0, 1], 48)
+        X = np.column_stack([y, np.arange(len(y)) % 3]).astype(float)
+        observed = []
+        real = probe.select_hgb_budget
+
+        def select(X, y, groups, **kwargs):
+            result = real(X, y, groups, **kwargs)
+            observed.append((set(groups), result))
+            return result
+
+        with mock.patch.object(probe, "select_hgb_budget", side_effect=select):
+            folds = probe.fold_metrics(
+                X=X,
+                y_raw=y,
+                groups=groups,
+                target="deterministic_strict_text_overcommit",
+                model_name="hgb",
+                scope="global",
+                n_splits=3,
+                random_state=7,
+                pca_components=2,
+                hgb_budgets=[2, 4],
+            )
+        self.assertEqual(len(observed), 3)
+        for fold, (outer_train, (budget, diagnostics)) in zip(
+            folds, observed, strict=True
+        ):
+            self.assertEqual(fold["status"], "ok")
+            train = set(json.loads(diagnostics["budget_validation_train_groups"]))
+            validation = set(
+                json.loads(diagnostics["budget_validation_held_out_groups"])
+            )
+            self.assertFalse(train & validation)
+            self.assertEqual(train | validation, outer_train)
+            self.assertLess(len(outer_train), len(set(groups)))
+            self.assertIn(budget, [2, 4])
+            self.assertEqual(fold["max_iter"], budget)
+            self.assertEqual(len(json.loads(fold["budget_validation_curves"])), 2)
+
+    def test_invalid_hgb_budget_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "positive"):
+            probe.make_estimator("hgb", 7, hgb_max_iter=0)
+
     def fit(self, rows=None, **kwargs):
         rows = observations() if rows is None else rows
         y = probe.target_values(rows, "deterministic_strict_text_overcommit")

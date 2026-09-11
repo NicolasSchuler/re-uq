@@ -324,6 +324,8 @@ def make_estimator(
     *,
     pca_components: int | None = None,
     text_vectorizer: Any | None = None,
+    hgb_max_iter: int = 300,
+    fixed_budget: bool = False,
 ) -> Any:
     """Build the probe estimator, with the vectorizer and PCA as pipeline steps.
 
@@ -337,6 +339,10 @@ def make_estimator(
     the reducer is the truncated SVD that ``TfidfVectorizer`` output calls for.
     """
     steps = model_steps(model_name, random_state)
+    if model_name == "hgb":
+        if hgb_max_iter < 1:
+            raise ValueError("hgb_max_iter must be positive")
+        steps[-1].set_params(max_iter=hgb_max_iter, early_stopping=not fixed_budget)
     if pca_components is not None:
         steps.insert(
             0,
@@ -357,6 +363,80 @@ def make_estimator(
 
 def finite_metric(value: float) -> float | str:
     return "" if math.isnan(value) else float(value)
+
+
+def select_hgb_budget(
+    X, y, groups, *, budgets, random_state, pca_components=None, text_vectorizer=None
+):
+    """Select a finite training budget without seeing the outer test fold.
+
+    Preprocessing is refitted within the inner training split for every budget.
+    The caller then refits the selected budget on the complete outer training
+    fold. Curves are diagnostic evidence, not a claim of convergence.
+    """
+    budgets = sorted(set(budgets))
+    if not budgets or budgets[0] < 1:
+        raise ValueError("HGB budgets must be positive")
+    n_splits = min(5, len(np.unique(groups)))
+    if n_splits < 2:
+        raise ValueError("inner validation needs at least two capability groups")
+    splitter = StratifiedGroupKFold(
+        n_splits=n_splits, shuffle=True, random_state=random_state
+    )
+    classes = np.unique(y)
+    split = next(
+        (
+            (a, b)
+            for a, b in splitter.split(X, y, groups)
+            if len(np.unique(y[a])) == len(classes)
+            and len(np.unique(y[b])) == len(classes)
+        ),
+        None,
+    )
+    if split is None:
+        raise ValueError("no inner capability split contains all target classes")
+    train, validation = split
+    curves = []
+    for budget in budgets:
+        components = min(pca_components, len(train)) if pca_components else None
+        estimator = make_estimator(
+            "hgb",
+            random_state,
+            pca_components=components,
+            text_vectorizer=text_vectorizer,
+            hgb_max_iter=budget,
+            fixed_budget=True,
+        )
+        estimator.fit(X[train], y[train])
+        curves.append(
+            {
+                "iterations": budget,
+                "training_log_loss": float(
+                    log_loss(
+                        y[train], estimator.predict_proba(X[train]), labels=classes
+                    )
+                ),
+                "validation_log_loss": float(
+                    log_loss(
+                        y[validation],
+                        estimator.predict_proba(X[validation]),
+                        labels=classes,
+                    )
+                ),
+            }
+        )
+    best = min(curves, key=lambda row: (row["validation_log_loss"], row["iterations"]))
+    return best["iterations"], {
+        "budget_selection": "inner capability validation log loss",
+        "budget_validation_curves": json.dumps(curves),
+        "budget_validation_train_groups": json.dumps(
+            sorted(set(map(str, groups[train])))
+        ),
+        "budget_validation_held_out_groups": json.dumps(
+            sorted(set(map(str, groups[validation])))
+        ),
+        "budget_selected_at_upper_limit": best["iterations"] == budgets[-1],
+    }
 
 
 def positive_rate(y: np.ndarray) -> float:
@@ -447,6 +527,8 @@ def fold_metrics(
     sample_rows: list[dict[str, Any]] | None = None,
     prediction_rows: list[dict[str, Any]] | None = None,
     expected_classes: list[str] | None = None,
+    hgb_max_iter: int = 300,
+    hgb_budgets: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     metadata = sample_rows if sample_rows is not None else [{} for _ in y_raw]
     names = (
@@ -525,6 +607,7 @@ def fold_metrics(
             random_state + fold_index,
             pca_components=fold_components,
             text_vectorizer=text_vectorizer,
+            hgb_max_iter=hgb_max_iter,
         )
         fold_base = {
             **base,
@@ -550,9 +633,35 @@ def fold_metrics(
             )
             continue
         started = time.monotonic()
+        budget_diagnostics = {
+            "budget_selection": "fixed maximum; no validation selection"
+        }
         try:
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
+                if model_name == "hgb" and hgb_budgets:
+                    capability_groups = (
+                        group_values(metadata, "seed")
+                        if sample_rows is not None
+                        else groups
+                    )
+                    selected_budget, budget_diagnostics = select_hgb_budget(
+                        X[train_index],
+                        y[train_index],
+                        capability_groups[train_index],
+                        budgets=hgb_budgets,
+                        random_state=random_state + fold_index,
+                        pca_components=fold_components,
+                        text_vectorizer=text_vectorizer,
+                    )
+                    estimator = make_estimator(
+                        model_name,
+                        random_state + fold_index,
+                        pca_components=fold_components,
+                        text_vectorizer=text_vectorizer,
+                        hgb_max_iter=selected_budget,
+                        fixed_budget=True,
+                    )
                 estimator.fit(X[train_index], y[train_index])
             pred = estimator.predict(X[test_index])
             probability_matrix = ordered_class_probabilities(
@@ -581,6 +690,12 @@ def fold_metrics(
             estimator.predict_proba(X[train_index]), estimator.classes_, class_labels
         )
         diagnostics = {
+            **budget_diagnostics,
+            "stopping_score_source": "inner validation selected fixed budget"
+            if hgb_budgets and model_name == "hgb"
+            else "training loss (not validation)"
+            if model_name == "hgb"
+            else "optimizer tolerance",
             "fit_seconds": time.monotonic() - started,
             "estimator_parameters": json.dumps(
                 fitted.get_params(), sort_keys=True, default=str
@@ -946,6 +1061,14 @@ def main() -> None:
         "--models", nargs="+", default=["logreg", "hgb"], choices=["logreg", "hgb"]
     )
     parser.add_argument("--n-splits", type=int, default=3)
+    parser.add_argument("--hgb-max-iter", type=int, default=300)
+    parser.add_argument(
+        "--hgb-budgets",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Optional finite budgets selected with inner capability validation, e.g. 300 600 1200",
+    )
     parser.add_argument("--bootstrap-samples", type=int, default=1000)
     parser.add_argument("--group-mode", choices=["seed", "item"], default="seed")
     parser.add_argument("--pca-components", type=int, default=128)
@@ -1043,6 +1166,8 @@ def main() -> None:
                             groups=groups[eligible],
                             target=target,
                             model_name=model_name,
+                            hgb_max_iter=args.hgb_max_iter,
+                            hgb_budgets=args.hgb_budgets,
                             scope=scope,
                             n_splits=args.n_splits,
                             random_state=args.random_state,
