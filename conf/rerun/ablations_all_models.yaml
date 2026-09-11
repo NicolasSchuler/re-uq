@@ -1,9 +1,11 @@
-# Ablation sweep over the whole local cohort plus glm-5.3, deterministic Task 2
-# only, for per-model directional evidence (batching and document context on
-# every model; the weak-phrasing probe on glm-5.3 and the strongest local
-# strengthener). Same run groups as conf/rerun/ablations.yaml, so the twelve
+# Extension of the earlier ablation campaign: six additional local models
+# for deterministic Task 2 batching/context, plus the Muse weak-phrasing probe
+# (one single-pass and five stochastic answers). This is NOT a standalone
+# all-model campaign. Same run groups as conf/rerun/ablations.yaml, so the twelve
 # cells that finished 2026-09-10 (glm-5.3, qwen3.6-27b) are reused by the
-# comparison scripts, not re-run. Keeps its own state file:
+# comparison scripts when selecting the whole run group, not re-run. The
+# rerun driver's analysis restricted to this state does not merge earlier
+# states automatically. Keeps its own state file:
 #
 #   .venv/bin/python scripts/rerun_all.py --config conf/rerun/ablations_all_models.yaml \
 #     --state outputs/rerun/modality-rerun-2026-09/ablations_all_models_state.json \

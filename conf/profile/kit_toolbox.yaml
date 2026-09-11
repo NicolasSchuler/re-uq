@@ -9,7 +9,7 @@ api_key_env: ${oc.env:RE_UQ_KIT_TOOLBOX_API_KEY_ENV,KIT_TOOLBOX_API_KEY}
 models:
   - "kit.gemma4-31b-it"
 concurrency: 2
-batch_size: 16
+batch_size: 1
 timeout_s: 180
 max_tokens: 256
 seed: 20260518

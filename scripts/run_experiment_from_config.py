@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 try:
+    import build_pure_benchmark as pure_benchmark
     import eval_utils as eu
     import run_provenance as rp
     import run_transcripts as rt
@@ -23,6 +24,7 @@ try:
     from runner_args import RunnerArgs
 except ModuleNotFoundError:  # pragma: no cover
     from scripts import (
+        build_pure_benchmark as pure_benchmark,
         eval_utils as eu,
         run_provenance as rp,
         run_transcripts as rt,
@@ -505,6 +507,8 @@ def run_from_config(run_config: dict[str, Any], args: RunnerArgs) -> None:
         run_config, profile_id=args.profile, model=model_filter
     )
     datasets = eu.selected_values(list(run_config["datasets"]), args.dataset, "dataset")
+    if eu.DATASET_PURE in datasets and not args.fake_completion:
+        pure_benchmark.validate_existing_benchmark(root)
     variants = eu.selected_values(
         list(run_config["benchmark_variants"]), args.variant, "variant"
     )

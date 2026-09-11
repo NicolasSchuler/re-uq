@@ -51,7 +51,7 @@
         "gpt-oss-20b"
       ],
       "concurrency": 8,
-      "batch_size": 16,
+      "batch_size": 1,
       "timeout_s": 300,
       "max_tokens": 1024,
       "seed": 20260518,
@@ -59,7 +59,7 @@
       "max_retries": 3,
       "batch_order": "grouped",
       "json_mode": false,
-      "structured_output": "none",
+      "structured_output": "json_schema",
       "requires_manual_server": false,
       "notes": "Router loads models by request model name. The rerun driver completes all requests for one model before starting the next.",
       "extra_body": {
@@ -78,7 +78,7 @@
         "azure.gpt-4.1-mini"
       ],
       "concurrency": 2,
-      "batch_size": 16,
+      "batch_size": 1,
       "timeout_s": 180,
       "max_tokens": 256,
       "seed": 20260518,
@@ -99,7 +99,7 @@
         "kit.gemma4-31b-it"
       ],
       "concurrency": 2,
-      "batch_size": 16,
+      "batch_size": 1,
       "timeout_s": 180,
       "max_tokens": 256,
       "seed": 20260518,
@@ -126,7 +126,7 @@
         "glm-5.3-flash"
       ],
       "concurrency": 2,
-      "batch_size": 16,
+      "batch_size": 1,
       "timeout_s": 180,
       "max_tokens": 256,
       "seed": 20260518,
@@ -157,7 +157,7 @@
         "gpt-4.1-mini"
       ],
       "concurrency": 4,
-      "batch_size": 8,
+      "batch_size": 1,
       "timeout_s": 180,
       "max_tokens": 256,
       "seed": 20260518,
@@ -179,7 +179,7 @@
         "mistral-small-latest"
       ],
       "concurrency": 2,
-      "batch_size": 8,
+      "batch_size": 1,
       "timeout_s": 180,
       "max_tokens": 256,
       "seed": 20260518,
@@ -201,7 +201,7 @@
         "gemini-2.5-pro"
       ],
       "concurrency": 2,
-      "batch_size": 8,
+      "batch_size": 1,
       "timeout_s": 180,
       "max_tokens": 256,
       "seed": 20260518,
@@ -224,7 +224,7 @@
         "qwen3"
       ],
       "concurrency": 1,
-      "batch_size": 4,
+      "batch_size": 1,
       "timeout_s": 300,
       "max_tokens": 512,
       "seed": 20260518,

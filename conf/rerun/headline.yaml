@@ -1,7 +1,8 @@
 # Headline-only campaign: the paper's main cell (MLM-TAPT / MUST) for every
 # configured model, Task 1+2 plus the blind Task 3 audit, no ablations. Same
-# run group as the full plan in default.yaml, so its runs are the same runs a
-# later full campaign continues from; it only keeps its own state file:
+# run group as the full plan in default.yaml, so analysis can select these
+# runs. Driver state is NOT automatically shared or merged with a later full
+# campaign; starting that campaign with a new state schedules fresh runs:
 #
 #   .venv/bin/python scripts/rerun_all.py --config conf/rerun/headline.yaml \
 #     --state outputs/rerun/modality-rerun-2026-09/headline_state.json

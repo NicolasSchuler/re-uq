@@ -2,14 +2,15 @@
 
 These are the intended studies confirmed by the author. The implementation
 is available; the new measurements and manuscript interpretation remain
-pending. `scripts/rerun_all.py` executes them using the first configured ZAI
-model and the first configured local llama model. Choose representatives from
-different families if family diversity is part of the argument.
+pending. `conf/rerun/final.yaml` selects one hosted and seven local models for
+batching/context, and one hosted plus two local models for weak phrasing.
+The final main campaign uses one item per request and five stochastic samples
+in addition to the deterministic answer.
 
 | Study | Controlled comparison | Evidence to report |
 | --- | --- | --- |
-| Batching | MLM-TAPT/MUST; grouped 16-item, shuffled 16-item, and single-item requests; deterministic Task 2 | Strict/broad text strengthening, label accuracy, unreadable and failed outputs; paired changes against grouped delivery, counts and 95% intervals. |
-| Document context | 180 human-validated PURE capabilities; bare versus original document heading, marker and neighbors; deterministic Task 2, grouped batches of 16 | Outcomes and paired document-minus-bare changes, including strata where synthetic wording agrees/conflicts with original M/O markers. |
+| Batching | MLM-TAPT/MUST; sizes 1, 4, 16, with grouped and sibling-separated arms at sizes 4 and 16; deterministic Task 2 | Strict/broad text strengthening, label accuracy, unreadable and failed outputs; paired changes against single-item delivery, counts and conditional 95% intervals. This does not establish invariance of other tasks or stochastic UQ. |
+| Document context | 180 AI-reviewed corrected PURE capabilities; bare versus original heading, marker and neighbors plus the context instruction; deterministic Task 2, single-item requests | Outcomes and paired document-minus-bare changes, including strata where synthetic wording agrees/conflicts with original M/O markers. No claim of renewed human validation or isolated information-only effects. |
 | Weak phrasing | All 180 NICE capabilities × four weak templates; identical sampling and delivery settings within each model | Label and generated-text strengthening by template; readable and unresolved counts; paired deterministic text-strengthening changes against `useful_if`. |
 
 The detailed context proposal is in [context_ablation.md](context_ablation.md).

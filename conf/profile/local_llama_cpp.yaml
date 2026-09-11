@@ -18,22 +18,25 @@ models:
 # equal: fewer workers idle the GPU, more workers queue at the server and burn
 # the timeout. The headline cohort ran at 2 workers on 4 slots.
 concurrency: 8
-# The paper condition is 16 items per request. A 16-item answer needs more room
-# than a single one, and a local model without JSON mode needs the slack:
-# smoke-test one cell before the real runs and fall back to batch_size 4 with
-# max_tokens 256 if the answers truncate or stop parsing (docs/reproduction.md).
-batch_size: 16
+# Final primary protocol: one item per request. Server concurrency provides
+# parallelism without exposing sibling modality variants in one prompt.
+# Batching ablations override this explicitly; do not change it mid-campaign.
+batch_size: 1
 timeout_s: 300
 # 1024 rather than 512: Muse Glimmer and gpt-oss spend 100-500 tokens of
 # reasoning before the answer (separated into reasoning_content), and the
-# single-item ablation arm gives an item only this budget.
+# single-item primary protocol gives an item only this budget.
 max_tokens: 1024
 seed: 20260518
 send_seed: true
 max_retries: 3
 batch_order: "grouped"
 json_mode: false
-structured_output: "none"
+# Constrain the existing JSON contract, including GPT-OSS's Harmony final
+# header. Unconstrained output can emit a valid JSON-format header that this
+# server build rejects; Qwen3.5 audits also need JSON escaping constraints.
+# Qualification evidence: docs/generation_qualification_2026-09-11.md.
+structured_output: "json_schema"
 requires_manual_server: false
 # Qwen3.6 thinks by default and only writes the answer to `content` after the
 # reasoning, so a 16-item batch would spend its token budget on reasoning and

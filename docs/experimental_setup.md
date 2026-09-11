@@ -4,6 +4,16 @@ This page states the complete experimental setup. The setup is part of the
 result: the numbers in the paper hold for these items, these prompts, this
 batching policy, and this model cohort. Read it before citing any figure.
 
+**Protocol update, 2026-09-11:** numerical snapshots and archived-cohort sections
+below describe historical grouped runs. The new final campaign uses one item
+per request and five stochastic samples plus one deterministic answer, with
+sizes 4 and 16 as grouped/sibling-separated ablations. Revised PURE data has an
+AI-assisted source review. Local models now use task-specific JSON-schema
+decoding; reference-free extractions are audited but excluded from automatic
+audit correctness scores. The [generation qualification](generation_qualification_2026-09-11.md)
+documents the formatting comparison and failure accounting. Current settings and launch gates are documented in
+[final-run readiness](final_run_readiness.md); old results are not relabeled.
+
 Related pages: [`docs/evaluation.md`](evaluation.md) (metric definitions),
 [`docs/aggregation.md`](aggregation.md) (how per-cell numbers are pooled into
 headline numbers), [`docs/reproduction.md`](reproduction.md) (commands),
@@ -259,8 +269,10 @@ permuted job order, which at batch size 16 still left two variants of one seed
 together in roughly half of the 45 Task 2 batches (22 to 24 depending on the derived RNG seed) — it would have weakened the confound, not
 removed it. Resume no longer re-shuffles the pending subset, so a resumed
 shuffled run keeps the batch membership of the original run. The
-`batching_ablation` preset pins `batch_size: 16` for both batch-order arms, so
-grouped and shuffled differ only in membership, not in request size.
+historical comparison used size 16 for both batch-order arms. The final
+campaign instead uses single-item primary requests, with size-4 and size-16
+grouped/sibling-separated ablations. Historical numbers retain their original
+protocol; see [final-run readiness](final_run_readiness.md).
 
 ## 5. Model Cohort And Request Parameters
 
@@ -299,8 +311,10 @@ client was constructed with its default `max_retries=2`, which silently retries
 408/409/429/5xx responses and connection errors, so a batch could be sent up to
 three times without any record of it. Going forward the SDK's internal retries
 are disabled (`max_retries=0`) and `call_with_retries` is the only retry layer:
-3 attempts, retrying 408/429/5xx, timeouts and connection errors, and failing
-fast on 400/401/403/404/422 and every other 4xx. `retry_count` and
+3 attempts, retrying transient 408/429/5xx, timeouts and connection errors, and failing
+fast on 400/401/403/404/422 and every other 4xx. Native output-format HTTP 500
+rejections are generated failures, not transient errors: they remain failed
+samples and are not replaced during ordinary resume. `retry_count` and
 `retry_total` are now recorded for batched rows as well (see §6).
 
 Going forward these are explicit profile knobs: `seed`, `send_seed`,
@@ -316,8 +330,9 @@ such an endpoint are out of scope.
 
 The z.ai profile additionally sends
 `extra_body: {"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}}`.
-The `local_llama_cpp` example profile runs without JSON mode
-(`structured_output: none`); the institutional profile uses `json_schema`.
+The `local_llama_cpp` example profile now uses `structured_output: json_schema`
+without the legacy `json_mode` flag; the institutional profile also uses
+`json_schema`. Historical unconstrained local runs keep their recorded settings.
 
 ### 5.2.1 Local llama.cpp server (September 2026 cohort)
 
@@ -351,13 +366,19 @@ worker, 6/8 at two and 4/8 at four; after the move to 8 slots the same batches
 matched 3/8 at one worker and 1/8 at eight. Temperature-0 batches matched 6/8
 at either worker count. The differences are wording changes inside the
 generated requirement text (a few dozen of 128 items per replay), never the
-modality label. This is the expected behaviour of continuous batching: the
-numerics of a decode step depend on which other requests share it, so a
-recorded seed reproduces a request only when the co-scheduled load is the
-same. The reproducibility claim for the local models is therefore at the level
+modality label. Co-scheduled load and floating-point execution are plausible
+contributors, but these observations do not isolate the mechanism or establish
+that matching the load guarantees byte identity. The replay counts above are
+recorded observations; the underlying replay artifacts were not located in the
+2026-09-11 worktree review. Because wording is the evaluated outcome, unchanged
+labels do not establish unchanged strengthening or semantic-variation scores.
+The reproducibility claim for the local models is therefore at the level
 of the sampling configuration and the served model file, not byte identity of
 individual answers; the 2026-09-10 byte-identical repeats were obtained on an
 otherwise idle server.
+
+Intervals from the saved generations are conditional on those outputs; they
+do not measure variability across repeated server executions.
 
 Temperature 0.0 is treated as deterministic. It is not guaranteed to be
 deterministic on a hosted endpoint, and without a request seed and a recorded
@@ -377,9 +398,10 @@ reads the old files as the provenance record:
 | `batch_size: 8` on every profile | 16 in every official-cohort run (§4) |
 | `paper_cohort` preset sweeping 3 models, `must` only | all five GLM models and both benchmark variants |
 
-`run_configs/full_matrix.example.json` and `conf/profile/` now carry a
-`kit_toolbox` profile, the full `zai` model list, and `batch_size: 16`; the
-`paper_cohort` preset sweeps all five GLM models and both variants.
+That repair restored the historical cohort settings at the time. Current
+`run_configs/full_matrix.example.json` and `conf/profile/` have since changed:
+all defaults use size 1, the hosted list contains two served IDs, and the local
+profile contains seven models. These files are not the archived run settings.
 
 **Labels differ from the archived runs; prompts do not.** The official raw rows
 carry `prompt_version "v1"` (under the output contract `prompt_v2_confidence_0_1`)
@@ -388,7 +410,9 @@ runs `v2-conf01` and `provider-matrix-v2-2026-05`. The prompt text itself is
 unchanged: the batch prompt hashes recorded in the raw rows match the current
 `batch_prompt_for_completion_jobs` output for 45/45 `glm-5.1` Task 2
 deterministic batches in every one of the four cells. A rerun from the current
-configs therefore differs from the archive in run labels, not in what is sent.
+configs no longer reproduces the archive's request composition or model list.
+The prompt-hash agreement above describes the inspected historical batched
+payloads, not a guarantee that current defaults send identical requests.
 
 Local registries also contain `complete` rows dated 2026-05-21 whose raw rows
 were later removed. They are stale bookkeeping, not results; the exporter now

@@ -3,7 +3,7 @@
 # same minimal-pair sentence change modality preservation?
 #
 # Cell: dataset pure, variant must, Task 2, deterministic pass only, grouped
-# 16-item batches (the paper condition). The two arms differ only in
+# single-item requests (the final primary condition). The two arms differ only in
 # `item_context`: `bare` sends today's prompt, `document` adds each item's
 # document, section, author marker and neighbouring requirements.
 #
@@ -23,13 +23,13 @@ defaults:
   - override /variant: must
   - override /sampling: deterministic_only
 
-run_group_id: context-ablation-2026-09
+run_group_id: context-manuscript-final
 task: task2
 mode: full
 model: glm-5.3
 
 profile:
-  batch_size: 16
+  batch_size: 1
   batch_order: grouped
 
 hydra:

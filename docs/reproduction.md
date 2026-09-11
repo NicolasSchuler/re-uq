@@ -6,6 +6,12 @@ For the prepared campaign, follow the [experiment rerun runbook](experiment_runb
 for ordered setup, credentials, configuration, smoke checks, launch, monitoring,
 resume and result review. This page is the detailed command reference.
 
+The final campaign is explicitly `--config conf/rerun/final.yaml`: size 1,
+five stochastic samples plus one deterministic answer, and the corrected
+AI-reviewed PURE inputs. Older commands and snapshots on this page document
+historical campaigns; do not resume them under changed profiles or treat their
+grouped outputs as single-item evidence.
+
 ## The Whole Rerun, One Command
 
 Everything below is still the canonical, fine-grained interface. For a full

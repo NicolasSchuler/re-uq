@@ -31,6 +31,7 @@ def _score_row(item_id, *, seed_id, strict, arm_batch_id):
         "uq_method": "verbalized_confidence",
         "item_id": item_id,
         "seed_id": seed_id,
+        "source_identity": seed_id,
         "batch_id": arm_batch_id,
         "source_modality": "nice_to_have",
         "gold_modality": "nice_to_have",
@@ -46,6 +47,18 @@ def _score_row(item_id, *, seed_id, strict, arm_batch_id):
 
 
 class BatchingArmTest(unittest.TestCase):
+    def test_raw_observations_retain_failed_items_and_source_identity(self):
+        from tests.test_paper_exports import ContextAblationTableTest
+
+        fixture = ContextAblationTableTest()
+        benchmark = fixture._pure_benchmark()
+        raw = fixture._raw_rows(benchmark, "a", "m", strengthen_weak=False)
+        raw[0].update(parse_status="invalid_json", parsed_json=None)
+        scores = batching.task2_scores(benchmark, raw, sampling_plan=eu.SamplingPlan(5))
+        self.assertEqual(len(scores), len(raw))
+        self.assertTrue(all(r["source_identity"] for r in scores))
+        self.assertEqual(sum(r["response_status"] != "ok" for r in scores), 1)
+
     def test_registry_rows_are_read_as_arms_by_their_batching_plan(self):
         cases = [
             ({"batch_size": 16, "batch_order": "grouped"}, batching.ARM_GROUPED),
@@ -55,6 +68,9 @@ class BatchingArmTest(unittest.TestCase):
             ({"batch_size": 1, "batch_order": "shuffled"}, batching.ARM_SINGLE),
             # Pre-`batch_order` rows are the grouped paper condition.
             ({"batch_size": 16, "batch_order": ""}, batching.ARM_GROUPED),
+            ({"batch_size": 4, "batch_order": "grouped"}, "grouped_4"),
+            ({"batch_size": 4, "batch_order": "shuffled"}, "shuffled_4"),
+            ({"batch_size": 8, "batch_order": "grouped"}, "grouped_8"),
         ]
         for row, expected in cases:
             with self.subTest(**row):
@@ -123,7 +139,7 @@ class BatchingArmTest(unittest.TestCase):
         )
 
         # Strengthening drops from 3/4 to 1/4 when the batch is taken apart.
-        self.assertEqual(strict["grouped"], 0.75)
+        self.assertEqual(strict["baseline_value"], 0.75)
         self.assertEqual(strict["arm_value"], 0.25)
         self.assertAlmostEqual(strict["delta"], -0.5)
         # Every item is answered in both arms, and the resampling unit is the
@@ -195,7 +211,188 @@ class BatchingArmTest(unittest.TestCase):
             self.assertTrue(paths["deltas_csv"].exists())
             self.assertIn("arm - grouped", paths["markdown"].read_text())
             provenance = json.loads(paths["provenance"].read_text())
-            self.assertEqual(provenance["paper_batch_size"], 16)
+            self.assertEqual(provenance["baseline_arm"], "grouped")
+
+    def test_delta_uses_joint_eligibility_not_separate_readable_denominators(self):
+        grouped = [
+            _score_row(f"i{i}", seed_id=f"S{i}", strict=i < 2, arm_batch_id="r")
+            for i in range(3)
+        ]
+        other = [
+            {**r, "strict_text_overcommit": False, "text_overcommit": False}
+            for r in grouped
+        ]
+        other[0]["text_modality_parse_status"] = "unknown"
+        rows = batching.delta_rows(
+            "m1", "single", "all", grouped, other, bootstrap_samples=0
+        )
+        strict = next(r for r in rows if r["metric"] == "strict_text_strengthening")
+        labels = next(r for r in rows if r["metric"] == "label_accuracy")
+        self.assertEqual(strict["n_complete_pairs"], 2)
+        self.assertEqual(strict["n_excluded_ineligible_items"], 1)
+        self.assertEqual(strict["baseline_value"], 0.5)
+        self.assertEqual(strict["arm_value"], 0)
+        self.assertEqual(strict["delta"], -0.5)
+        self.assertAlmostEqual(strict["full_arm_baseline_descriptive"], 2 / 3)
+        self.assertEqual(labels["n_complete_pairs"], 3)
+
+    def test_ambiguous_identities_and_failed_responses_are_excluded(self):
+        base = [
+            _score_row(f"i{i}", seed_id=f"S{i}", strict=True, arm_batch_id="r")
+            for i in range(3)
+        ]
+        other = [dict(r) for r in base]
+        other[1]["response_status"] = "request_error"
+        rows = batching.delta_rows(
+            "m1", "single", "all", [*base, base[0]], other, bootstrap_samples=0
+        )
+        for row in rows:
+            self.assertEqual(row["n_complete_pairs"], 1)
+            self.assertEqual(row["n_duplicate_identities"], 1)
+            self.assertEqual(row["n_excluded_ineligible_items"], 1)
+            self.assertEqual(row["delta_ci_low"], "")
+
+    def test_empty_paired_cohort_reports_unavailable_not_zero(self):
+        row = _score_row("i", seed_id="S", strict=True, arm_batch_id="r")
+        other = {**row, "text_modality_parse_status": "unknown"}
+        strict = batching.delta_rows(
+            "m1", "single", "all", [row], [other], bootstrap_samples=0
+        )[1]
+        self.assertEqual(strict["n_complete_pairs"], 0)
+        self.assertEqual(strict["delta"], "")
+        self.assertEqual(strict["baseline_value"], "")
+        self.assertTrue(strict["unavailable_reason"])
+
+    def test_single_baseline_names_and_delta_direction_are_explicit(self):
+        single = [_score_row("i", seed_id="S", strict=False, arm_batch_id="single")]
+        grouped = [{**single[0], "strict_text_overcommit": True}]
+        strict = batching.delta_rows(
+            "m1",
+            "grouped_4",
+            "all",
+            single,
+            grouped,
+            bootstrap_samples=0,
+            baseline_arm="single",
+        )[1]
+        self.assertEqual(strict["baseline_arm"], "single")
+        self.assertEqual(strict["baseline_value"], 0)
+        self.assertEqual(strict["arm_value"], 1)
+        self.assertEqual(strict["delta"], 1)
+        self.assertEqual(strict["n_baseline"], 1)
+
+    def test_different_sizes_cannot_replace_each_other_in_selection(self):
+        base = {
+            "run_group_id": "g",
+            "model": "m",
+            "status": "complete",
+            "deterministic_item_coverage": 1,
+            "batch_order": "grouped",
+        }
+        selected = batching.select_arm_runs(
+            [{**base, "run_id": f"r{size}", "batch_size": size} for size in (1, 4, 16)],
+            run_group_id="g",
+            include_smoke=False,
+        )
+        self.assertEqual(
+            set(selected), {("m", "single"), ("m", "grouped_4"), ("m", "grouped")}
+        )
+
+    def test_failed_deterministic_answer_is_counted_not_scored_in_arm_rows(self):
+        from tests.test_paper_exports import ContextAblationTableTest
+
+        fixture = ContextAblationTableTest()
+        benchmark = fixture._pure_benchmark()
+        registry, raw = [], []
+        for size, order in [(1, "grouped"), (16, "grouped")]:
+            run_id = eu.batching_arm_name(size, order)
+            registry.append(
+                {
+                    "run_id": run_id,
+                    "run_group_id": "g",
+                    "model": "m",
+                    "status": "complete",
+                    "deterministic_item_coverage": 1,
+                    "batch_size": size,
+                    "batch_order": order,
+                }
+            )
+            raw.extend(fixture._raw_rows(benchmark, run_id, "m", strengthen_weak=False))
+        failed = next(r for r in raw if r["run_id"] == "grouped")
+        failed.update(parse_status="model_output_error", parsed_json=None)
+        tables = batching.build_tables(
+            benchmark,
+            registry,
+            raw,
+            run_group_id="g",
+            include_smoke=False,
+            bootstrap_samples=0,
+            sampling_plan=eu.SamplingPlan(0),
+        )
+        grouped_all = next(
+            r for r in tables["arms"] if r["arm"] == "grouped" and r["stratum"] == "all"
+        )
+        single_all = next(
+            r for r in tables["arms"] if r["arm"] == "single" and r["stratum"] == "all"
+        )
+        self.assertEqual(grouped_all["n"], single_all["n"])
+        self.assertEqual(grouped_all["n_failed"], 1)
+        self.assertEqual(single_all["n_failed"], 0)
+        self.assertEqual(
+            grouped_all["n_text_readable"], single_all["n_text_readable"] - 1
+        )
+        delta = next(r for r in tables["deltas"] if r["stratum"] == "all")
+        self.assertEqual(delta["n_comparison_failed_items"], 1)
+        self.assertEqual(delta["n_complete_pairs"], single_all["n"] - 1)
+
+    def test_five_arm_tables_use_single_reference_end_to_end(self):
+        from tests.test_paper_exports import ContextAblationTableTest
+
+        fixture = ContextAblationTableTest()
+        benchmark = fixture._pure_benchmark()
+        registry, raw = [], []
+        for size, order in [
+            (1, "grouped"),
+            (4, "grouped"),
+            (4, "shuffled"),
+            (16, "grouped"),
+            (16, "shuffled"),
+        ]:
+            run_id = eu.batching_arm_name(size, order)
+            registry.append(
+                {
+                    "run_id": run_id,
+                    "run_group_id": "g",
+                    "model": "m",
+                    "status": "complete",
+                    "deterministic_item_coverage": 1,
+                    "batch_size": size,
+                    "batch_order": order,
+                }
+            )
+            raw.extend(
+                fixture._raw_rows(benchmark, run_id, "m", strengthen_weak=size > 1)
+            )
+        tables = batching.build_tables(
+            benchmark,
+            registry,
+            raw,
+            run_group_id="g",
+            include_smoke=False,
+            bootstrap_samples=0,
+            sampling_plan=eu.SamplingPlan(0),
+        )
+        self.assertEqual(len(tables["arms"]), 10)
+        self.assertEqual(len(tables["deltas"]), 24)
+        self.assertEqual(tables["baseline_arm"], "single")
+        self.assertTrue(
+            all(row["baseline_arm"] == "single" for row in tables["deltas"])
+        )
+        self.assertFalse(any(row["arm"] == "single" for row in tables["deltas"]))
+        strict = [
+            r for r in tables["deltas"] if r["metric"] == "strict_text_strengthening"
+        ]
+        self.assertTrue(all(row["delta"] > 0 for row in strict))
 
 
 class WeakModalityProbeTest(unittest.TestCase):

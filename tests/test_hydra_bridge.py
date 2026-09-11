@@ -73,8 +73,8 @@ class HydraCompositionTest(unittest.TestCase):
                     p for p in json_config["profiles"] if p["profile_id"] == profile_id
                 )
                 self.assertEqual(composed["profiles"][0], expected)
-                # Every official run delivered 16 items per request.
-                self.assertEqual(composed["profiles"][0]["batch_size"], 16)
+                # Current defaults are single-item; historical state is immutable.
+                self.assertEqual(composed["profiles"][0]["batch_size"], 1)
                 for key in (
                     "run_group_id",
                     "prompt_version",
@@ -206,8 +206,8 @@ class HydraCompositionTest(unittest.TestCase):
         self.assertEqual(run_config["tasks"], ["task2"])
         self.assertEqual(run_config["stochastic"]["samples"], 0)
         self.assertEqual(run_config["profiles"][0]["models"], ["glm-5.3"])
-        # The grouped baseline arm is the paper condition: 16 items per request.
-        self.assertEqual(run_config["profiles"][0]["batch_size"], 16)
+        # The preset starts with the single-item reference.
+        self.assertEqual(run_config["profiles"][0]["batch_size"], 1)
 
     def test_context_ablation_preset_targets_the_pure_cell_with_its_own_group(self):
         cfg = compose_config(overrides=["+experiment=context_ablation"])
@@ -217,9 +217,9 @@ class HydraCompositionTest(unittest.TestCase):
         self.assertEqual(run_config["tasks"], ["task2"])
         self.assertEqual(run_config["stochastic"]["samples"], 0)
         self.assertEqual(run_config["profiles"][0]["models"], ["glm-5.3"])
-        self.assertEqual(run_config["profiles"][0]["batch_size"], 16)
+        self.assertEqual(run_config["profiles"][0]["batch_size"], 1)
         self.assertEqual(run_config["profiles"][0]["batch_order"], "grouped")
-        self.assertEqual(run_config["run_group_id"], "context-ablation-2026-09")
+        self.assertEqual(run_config["run_group_id"], "context-manuscript-final")
         # The default arm is the paper condition; the sweep flips it.
         self.assertEqual(run_config["item_context"], "bare")
         swept = compose_config(
@@ -245,7 +245,7 @@ class HydraCompositionTest(unittest.TestCase):
             run_config["profiles"][0]["models"],
             ["glm-5.3", "glm-5.3-flash"],
         )
-        self.assertEqual(run_config["profiles"][0]["batch_size"], 16)
+        self.assertEqual(run_config["profiles"][0]["batch_size"], 1)
         # `compose()` strips the `hydra` node, so read the sweep off the preset.
         sweep = OmegaConf.load(
             CONF_DIR / "experiment/paper_cohort.yaml"

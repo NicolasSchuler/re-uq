@@ -31,6 +31,7 @@ JSON-based tools need is generated into `outputs/rerun/run_config.json`.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import shlex
@@ -44,9 +45,10 @@ from typing import Any
 from omegaconf import OmegaConf
 
 try:
+    import build_pure_benchmark as pure_benchmark
     import eval_utils as eu
 except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
-    from scripts import eval_utils as eu
+    from scripts import build_pure_benchmark as pure_benchmark, eval_utils as eu
 
 
 DEFAULT_RERUN_CONFIG = Path("conf/rerun/default.yaml")
@@ -235,14 +237,22 @@ def generated_run_config(
 
 
 def cohort_models(
-    root: Path, rerun: dict[str, Any]
+    root: Path, rerun: dict[str, Any], *, profiles: list[dict[str, Any]] | None = None
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """(profile, model) pairs of the official cohort and of the local cohort."""
 
     def pairs(profile_ids: list[str]) -> list[tuple[str, str]]:
         selected: list[tuple[str, str]] = []
         for profile_id in profile_ids:
-            profile = load_profile(root, profile_id)
+            profile = (
+                next((p for p in profiles if p["profile_id"] == profile_id), None)
+                if profiles is not None
+                else load_profile(root, profile_id)
+            )
+            if profile is None:
+                raise StageError(
+                    f"Recorded configuration has no profile {profile_id!r}"
+                )
             models = [str(model) for model in profile.get("models", [])]
             if not models:
                 raise StageError(
@@ -568,6 +578,27 @@ def embedding_backend_problems(root: Path, *, fake: bool = False) -> list[str]:
     return []
 
 
+def primary_protocol_problems(
+    rerun: dict[str, Any], profiles: list[dict[str, Any]]
+) -> list[str]:
+    return [
+        f"{profile['profile_id']}: primary protocol requires {field}={expected!r}, got {profile.get(field)!r}"
+        for profile in profiles
+        for field, expected in rerun.get("primary_protocol", {}).items()
+        if profile.get(field) != expected
+    ]
+
+
+def primary_sampling_problems(
+    rerun: dict[str, Any], run_config: dict[str, Any]
+) -> list[str]:
+    return [
+        f"primary sampling requires {kind}.samples={expected}, got {run_config.get(kind, {}).get('samples')!r}"
+        for kind, expected in rerun.get("primary_sampling", {}).items()
+        if run_config.get(kind, {}).get("samples") != expected
+    ]
+
+
 def stage_preflight(
     root: Path,
     rerun: dict[str, Any],
@@ -585,7 +616,7 @@ def stage_preflight(
     stage: generation runs on any host that can reach the endpoints, and the
     analysis is run separately on a Mac with Metal (docs/experiment_runbook.md).
     """
-    problems: list[str] = []
+    problems = primary_protocol_problems(rerun, profiles)
     for profile in profiles:
         key_env = str(profile.get("api_key_env", ""))
         if not fake and key_env and not os.getenv(key_env):
@@ -615,6 +646,15 @@ def stage_preflight(
         )
         if not path.exists():
             problems.append(f"context benchmark missing: {path}")
+        elif not fake:
+            try:
+                pure_benchmark.validate_existing_benchmark(root)
+            except (ValueError, FileNotFoundError) as error:
+                message = str(error)
+                if dry_run:
+                    print(f"[preflight] warning: {message}", file=sys.stderr)
+                else:
+                    problems.append(message)
     problems.extend(
         embedding_backend_problems(root, fake=fake or dry_run or not analysis)
     )
@@ -708,6 +748,25 @@ def stage_task3(
                     )
 
 
+def batching_arm_specs(config: dict[str, Any]) -> list[tuple[str, int, str]]:
+    """Explicit size/composition sweep; old states retain their three arms."""
+    sizes = config.get("batch_sizes", [16, 1])
+    orders = config.get("batch_orders", ["grouped", "shuffled"])
+    if not sizes or not orders:
+        raise StageError("batching ablation requires batch sizes and orders")
+    arms = {}
+    for size in sizes:
+        for order in orders:
+            size = eu.positive_int(size, "batch_size")
+            order = eu.normalize_batch_order(order)
+            arm = eu.batching_arm_name(size, order)
+            arms[arm] = (arm, size, "grouped" if size == 1 else order)
+    baseline = config.get("baseline_arm", "grouped")
+    if baseline not in arms:
+        raise StageError(f"batching baseline {baseline!r} is absent from its arms")
+    return list(arms.values())
+
+
 def stage_ablations(
     runner: Runner,
     state: RerunState,
@@ -724,11 +783,7 @@ def stage_ablations(
         profile_id, model = str(entry["profile"]), str(entry["model"])
         # Composed explicitly rather than through +experiment=batching_ablation:
         # the preset carries a sweeper, and one job per arm is unambiguous.
-        for arm, batch_size, batch_order in (
-            ("grouped", 16, "grouped"),
-            ("shuffled", 16, "shuffled"),
-            ("single", 1, "grouped"),
-        ):
+        for arm, batch_size, batch_order in batching_arm_specs(batching):
             run_cell_with_retry(
                 runner,
                 state,
@@ -772,8 +827,8 @@ def stage_ablations(
                     "task=task2",
                     *runner.run_overrides(),
                     "sampling=deterministic_only",
-                    "profile.batch_size=16",
-                    "profile.batch_order=grouped",
+                    f"profile.batch_size={context.get('batch_size', 16)}",
+                    f"profile.batch_order={context.get('batch_order', 'grouped')}",
                     f"item_context={arm}",
                     f"run_group_id={context_group}",
                 ],
@@ -843,6 +898,8 @@ def stage_analysis(
     rerun: dict[str, Any],
     cohort: list[tuple[str, str]],
     local: list[tuple[str, str]],
+    *,
+    refresh: bool = False,
 ) -> None:
     """Every table, macro and figure, in dependency order."""
     incomplete = [
@@ -876,7 +933,7 @@ def stage_analysis(
             if name == "batching":
                 keys = [
                     f"batching:{arm}:{profile_id}:{model}:{ablation.get('dataset', 'mlm_tapt')}:{ablation.get('variant', 'must')}"
-                    for arm in ("grouped", "shuffled", "single")
+                    for arm, _, _ in batching_arm_specs(ablation)
                 ]
             elif name == "context":
                 keys = [
@@ -1025,6 +1082,23 @@ def stage_analysis(
         *models,
         *local_models,
     ]
+    protocols = {
+        (int(profile.get("batch_size", 16)), str(profile.get("batch_order", "grouped")))
+        for profile in state.configuration.get("run_config", {}).get("profiles", [])
+    }
+    if len(protocols) > 1:
+        raise StageError("Main paper export requires one matched request protocol")
+    primary = rerun.get("primary_protocol", {})
+    batch_size, batch_order = next(
+        iter(protocols),
+        (primary.get("batch_size", 16), primary.get("batch_order", "grouped")),
+    )
+    export_argv += [
+        "--expected-batch-size",
+        str(batch_size),
+        "--expected-batch-order",
+        batch_order,
+    ]
     for key, entry in state.cells.items():
         if key.startswith("cohort:"):
             export_argv += ["--run-id", str(entry["run_id"])]
@@ -1097,6 +1171,8 @@ def stage_analysis(
             "analysis:batching-ablation",
             [
                 "scripts/compare_batching_ablation.py",
+                "--baseline-arm",
+                str(batching.get("baseline_arm", "grouped")),
                 "--bootstrap-samples",
                 bootstrap,
                 *[
@@ -1133,16 +1209,22 @@ def stage_analysis(
                 ]
             )
         )
+    steps = [
+        (key, argv)
+        for key, argv in steps
+        if all(
+            key != f"analysis:{name}-ablation"
+            or rerun.get("ablations", {}).get(name, {}).get("models")
+            for name in ("context", "batching")
+        )
+    ]
+    if refresh:
+        # Invalidate dependants before the first write. If refresh fails, an
+        # ordinary resume must not skip stale downstream artifacts as complete.
+        for key, _ in steps:
+            state.record(key, "pending")
     for key, argv in steps:
-        if key == "analysis:context-ablation" and not rerun.get("ablations", {}).get(
-            "context", {}
-        ).get("models"):
-            continue
-        if key == "analysis:batching-ablation" and not rerun.get("ablations", {}).get(
-            "batching", {}
-        ).get("models"):
-            continue
-        if state.done(key):
+        if state.done(key) and not refresh:
             print(f"[skip] {key} already complete")
             continue
         code = runner.run(argv, label=key)
@@ -1173,6 +1255,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=STAGES,
         default=[],
         help="Run only these stages. Repeatable; default is all of them.",
+    )
+    parser.add_argument(
+        "--refresh-analysis",
+        action="store_true",
+        help="Recompute derived analysis in dependency order; requires --only analysis. Generation is never repeated.",
     )
     parser.add_argument(
         "--dry-run",
@@ -1228,15 +1315,48 @@ def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     root = eu.project_root()
     stages = args.only or list(STAGES)
-    rerun = load_rerun_config(root, args.config)
-    cohort, local = cohort_models(root, rerun)
-    profiles = [
-        load_profile(root, profile_id)
-        for profile_id in list(rerun["cohort_profiles"])
-        + list(rerun.get("local_profiles", []))
-    ]
-    resolve_ablation_models(rerun, profiles)
-    run_config = generated_run_config(root, rerun, profiles)
+    if args.refresh_analysis and stages != ["analysis"]:
+        raise StageError(
+            "--refresh-analysis requires --only analysis; generation is not allowed"
+        )
+    if args.refresh_analysis:
+        if args.state is None:
+            raise StageError(
+                "--refresh-analysis requires an explicit --state with recorded configuration"
+            )
+        recorded = RerunState.load(args.state, dry_run=args.dry_run).configuration
+        if not recorded.get("rerun") or not recorded.get("run_config", {}).get(
+            "profiles"
+        ):
+            raise StageError(
+                "Analysis refresh needs a state with recorded run configuration"
+            )
+        if bool(recorded.get("fake_completion")) != args.fake_completion:
+            raise StageError(
+                "Analysis refresh must match the state's fake-completion mode"
+            )
+        rerun = copy.deepcopy(recorded["rerun"])
+        run_config = copy.deepcopy(recorded["run_config"])
+        profiles = run_config["profiles"]
+        cohort, local = cohort_models(root, rerun, profiles=profiles)
+        args.smoke_items = recorded.get("smoke_items", args.smoke_items)
+        print(
+            "[analysis] using the explicitly selected state's recorded cohort and settings; live profiles are not consulted"
+        )
+    else:
+        rerun = load_rerun_config(root, args.config)
+        cohort, local = cohort_models(root, rerun)
+        profiles = [
+            load_profile(root, profile_id)
+            for profile_id in list(rerun["cohort_profiles"])
+            + list(rerun.get("local_profiles", []))
+        ]
+        resolve_ablation_models(rerun, profiles)
+        run_config = generated_run_config(root, rerun, profiles)
+    protocol_problems = primary_protocol_problems(rerun, profiles)
+    protocol_problems += primary_sampling_problems(rerun, run_config)
+    if protocol_problems:
+        raise StageError("\n".join(protocol_problems))
     run_config_path = root / GENERATED_RUN_CONFIG
     selected = select_profiles(list(args.profile), rerun)
     if args.profile and "analysis" in stages:
@@ -1329,7 +1449,9 @@ def _main(argv: list[str] | None = None) -> int:
         if "ablations" in stages:
             stage_ablations(runner, state, model_rerun, run_config_path)
     if "analysis" in stages:
-        stage_analysis(runner, state, rerun, cohort, local)
+        stage_analysis(
+            runner, state, rerun, cohort, local, refresh=args.refresh_analysis
+        )
 
     failures = state.failures(selected)
     if failures:

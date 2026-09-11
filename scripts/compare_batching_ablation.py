@@ -1,33 +1,12 @@
-"""Compare the batching arms of the request-composition ablation (TODO A).
+"""Compare deterministic Task 2 request sizes and sibling composition.
 
-Every archived run sent 16 benchmark items per request, in `seed x variant`
-order, so each Task 2 request carried all four modality variants of the same
-four seeds. The prompt says to evaluate each item independently, but the
-minimal-pair contrast sat inside the context window: no reported number is free
-of that confound until it is measured.
-
-Three arms answer the same items with the same seeds and parameters and differ
-only in how the requests were composed:
-
-* `grouped` -- the paper condition, 16 items per request, consecutive seeds;
-* `shuffled` -- 16 items per request, but never two source variants of one seed
-  in the same request (a constrained shuffle derived from the run seed);
-* `single` -- one item per request, the frozen single-item prompt.
-
-This is the context ablation's sibling (`scripts/compare_context_ablation.py`)
-and writes the same two tables: per arm, and `arm - grouped` deltas with a
-paired cluster bootstrap. Two differences follow from what is being varied.
-The pairing unit is the **item**, not the seed: the arms disagree about which
-items share a request, so a seed is not a unit both arms measure the same way.
-And the delta is resampled by **seed** rather than by request, because the
-request is exactly what the ablation changes -- a `single` arm request holds
-one item, a `grouped` one holds sixteen, and resampling those as if they were
-the same unit would compare two different cluster sizes.
-
-    .venv/bin/python scripts/compare_batching_ablation.py
-
-Outputs `outputs/batching_ablation_summary.{csv,md}`, a `_deltas.csv`, and a
-provenance JSON naming the run behind every row.
+The final primary protocol is `single`. Archived `grouped` and `shuffled`
+names mean 16 items; other sizes are explicit, e.g. `grouped_4`. Shuffled
+requests separate siblings, while grouped requests follow benchmark order.
+Every delta compares the same jointly eligible exact items, resampled by
+capability, against an explicitly named baseline. These intervals condition
+on the saved generations and do not model cross-capability request dependence.
+Use `--baseline-arm grouped` when reproducing historical 16-item comparisons.
 """
 
 from __future__ import annotations
@@ -50,14 +29,11 @@ DEFAULT_RUN_GROUP_ID = "provider-matrix-v2-2026-05"
 DEFAULT_OUTPUT_PREFIX = Path("outputs/batching_ablation_summary")
 DEFAULT_BOOTSTRAP_SAMPLES = 1000
 BOOTSTRAP_SEED = 20260518
-PAPER_BATCH_SIZE = 16
 
-#: Arm ids, in reporting order. `grouped` is the baseline every delta is
-#: measured against because it is the condition the archived runs used.
+# Archived 16-item names remain stable; other sizes must not collapse into them.
 ARM_GROUPED = "grouped"
 ARM_SHUFFLED = "shuffled"
 ARM_SINGLE = "single"
-ARMS = (ARM_GROUPED, ARM_SHUFFLED, ARM_SINGLE)
 STRATA = ("all", "weak_intent")
 METRICS: tuple[tuple[str, Callable[[list[dict[str, Any]]], float]], ...] = (
     ("label_accuracy", lambda rows: eu.task_accuracy(rows, "task2")),
@@ -73,6 +49,7 @@ ARM_FIELDS = [
     "batch_size",
     "batch_order",
     "n",
+    "n_failed",
     "n_text_readable",
     "label_accuracy",
     "strict_text_strengthening",
@@ -93,17 +70,33 @@ DELTA_FIELDS = [
     "arm",
     "stratum",
     "metric",
-    "grouped",
+    "baseline_arm",
+    "baseline_value",
     "arm_value",
+    "full_arm_baseline_descriptive",
+    "full_arm_comparison_descriptive",
     "delta",
     "delta_ci_low",
     "delta_ci_high",
     "delta_cluster_field",
     "n_delta_clusters",
-    "n_grouped",
+    "n_baseline",
     "n_arm",
     "n_complete_pairs",
     "n_excluded_single_arm",
+    "n_matched_capabilities",
+    "n_excluded_ineligible_items",
+    "n_duplicate_identities",
+    "n_missing_identity_rows",
+    "n_baseline_failed_items",
+    "n_comparison_failed_items",
+    "n_baseline_unclassified_items",
+    "n_comparison_unclassified_items",
+    "n_baseline_eligible_items",
+    "n_comparison_eligible_items",
+    "unavailable_reason",
+    "delta_ci_unavailable_reason",
+    "cluster_note",
 ]
 
 
@@ -113,14 +106,10 @@ def registry_arm(row: Any) -> str:
     A registry row written before `batch_order` existed is a grouped paper run;
     that is the same reading `select_cell_runs` applies to the archive.
     """
-    try:
-        batch_size = int(row.get("batch_size", 0) or 0)
-    except (TypeError, ValueError):
-        batch_size = 0
-    if batch_size == 1:
-        return ARM_SINGLE
-    order = str(row.get("batch_order", "") or eu.DEFAULT_BATCH_ORDER)
-    return ARM_SHUFFLED if order == eu.BATCH_ORDER_SHUFFLED else ARM_GROUPED
+    return eu.batching_arm_name(
+        row.get("batch_size", 0),
+        str(row.get("batch_order", "") or eu.DEFAULT_BATCH_ORDER),
+    )
 
 
 def select_arm_runs(
@@ -162,14 +151,44 @@ def task2_scores(
     sampling_plan: eu.SamplingPlan,
 ) -> list[dict[str, Any]]:
     """Deterministic Task 2 score rows of one arm."""
-    current = eu.benchmark_rows_with_current_raw_outputs(benchmark, raw_rows)
-    scores = eu.build_uq_scores(current, raw_rows, sampling_plan=sampling_plan)
-    return [
+    deterministic = [
         row
-        for row in scores
-        if str(row.get("task", "")) == "task2"
-        and str(row.get("uq_method", "")) == "verbalized_confidence"
+        for row in eu.dedupe_raw_rows(raw_rows)
+        if row.get("task") == "task2" and row.get("sample_kind") == "deterministic"
     ]
+    by_id = {str(item["item_id"]): item for item in benchmark}
+    for row in deterministic:
+        item = by_id.get(str(row.get("item_id", "")))
+        if item is None or not eu.raw_record_matches_benchmark_item(row, item):
+            raise ValueError(
+                f"Raw source differs from current benchmark: {row.get('item_id')}"
+            )
+    scores = eu.build_uq_scores(benchmark, deterministic, sampling_plan=sampling_plan)
+    by_item = {str(row["item_id"]): row for row in scores}
+    observations = []
+    for raw in deterministic:
+        item = by_id[str(raw["item_id"])]
+        score = by_item.get(str(raw["item_id"]))
+        observations.append(
+            {
+                **(score or {}),
+                "item_id": item["item_id"],
+                "source_identity": f"{item.get('source_corpus', '')}::{item['seed_id']}",
+                "seed_id": item["seed_id"],
+                "model": raw.get("model", ""),
+                "run_id": raw.get("run_id", ""),
+                "batch_id": raw.get("batch_id", ""),
+                "dataset_id": raw.get("dataset_id", ""),
+                "benchmark_variant": raw.get("benchmark_variant", "must"),
+                "task": "task2",
+                "source_modality": item["source_modality"],
+                "gold_modality": item["source_modality"],
+                "response_status": "ok"
+                if score
+                else raw.get("parse_status") or "missing_score",
+            }
+        )
+    return observations
 
 
 def stratum_rows(rows: list[dict[str, Any]], stratum: str) -> list[dict[str, Any]]:
@@ -209,8 +228,11 @@ def arm_row(
     *,
     bootstrap_samples: int,
 ) -> dict[str, Any]:
+    # Failed observations (request, output-format or parse failures) carry no
+    # prediction; they are counted, not scored. `n` stays the planned total.
+    answered = [row for row in rows if row.get("response_status", "ok") == "ok"]
     ci = eu.text_over_commitment_ci_fields(
-        rows, iterations=bootstrap_samples, seed=BOOTSTRAP_SEED
+        answered, iterations=bootstrap_samples, seed=BOOTSTRAP_SEED
     )
     return {
         "model": model,
@@ -220,8 +242,9 @@ def arm_row(
         "batch_size": registry_row.get("batch_size", ""),
         "batch_order": registry_row.get("batch_order", ""),
         "n": len(rows),
+        "n_failed": len(rows) - len(answered),
         "n_text_readable": ci["text_over_commitment_n_denominator"],
-        "label_accuracy": eu.task_accuracy(rows, "task2") if rows else "",
+        "label_accuracy": eu.task_accuracy(answered, "task2") if answered else "",
         "strict_text_strengthening": ci["strict_text_over_commitment"],
         "strict_text_strengthening_ci_low": ci["strict_text_over_commitment_ci_low"],
         "strict_text_strengthening_ci_high": ci["strict_text_over_commitment_ci_high"],
@@ -239,7 +262,7 @@ def arm_row(
             "text_over_commitment_seed_ci_high"
         ],
         "bootstrap_ci_cluster_field": ci.get("bootstrap_ci_cluster_field", ""),
-        "weak_strict_text_strengthening_90": _weak_strict_90(rows)
+        "weak_strict_text_strengthening_90": _weak_strict_90(answered)
         if stratum == "weak_intent"
         else "",
     }
@@ -253,20 +276,32 @@ def delta_rows(
     other: list[dict[str, Any]],
     *,
     bootstrap_samples: int,
+    baseline_arm: str = ARM_GROUPED,
 ) -> list[dict[str, Any]]:
-    """`arm - grouped` per metric, paired by item and resampled by seed."""
+    """`arm - baseline` per metric, paired by item and resampled by seed."""
     rows: list[dict[str, Any]] = []
     for metric_name, metric in METRICS:
+
+        def eligible(row, name=metric_name):
+            return (
+                row.get("response_status", "ok") == "ok"
+                and row.get("pred_modality") in eu.MODALITIES
+                and (
+                    name == "label_accuracy"
+                    or row.get("text_modality_parse_status") == "ok"
+                )
+            )
+
+        a, b, counts = eu.exact_item_metric_pairs(grouped, other, eligible)
         paired = eu.bootstrap_seed_metric_delta(
-            grouped,
-            other,
+            a,
+            b,
             metric,
-            # The request is what this ablation varies, so it cannot also be
-            # the resampling unit; the seed is the coarsest unit both arms
-            # measure identically. Pairing is by item because the arms do not
-            # agree on which items share a request.
+            # Capability-conditional sensitivity interval: changing request
+            # partitions can induce dependence across capabilities. This does
+            # not estimate variability over new request compositions/reruns.
             cluster_field=eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
-            pair_field="item_id",
+            pair_field="exact_pair_id",
             iterations=bootstrap_samples,
             seed=BOOTSTRAP_SEED,
         )
@@ -276,17 +311,56 @@ def delta_rows(
                 "arm": arm,
                 "stratum": stratum,
                 "metric": metric_name,
-                "grouped": _finite(metric(grouped)) if grouped else "",
-                "arm_value": _finite(metric(other)) if other else "",
+                "baseline_arm": baseline_arm,
+                "baseline_value": _finite(metric(a)) if a else "",
+                "arm_value": _finite(metric(b)) if b else "",
+                "full_arm_baseline_descriptive": _finite(
+                    metric([r for r in grouped if eligible(r)])
+                ),
+                "full_arm_comparison_descriptive": _finite(
+                    metric([r for r in other if eligible(r)])
+                ),
                 "delta": _finite(paired.delta),
-                "delta_ci_low": _finite(paired.ci_low),
-                "delta_ci_high": _finite(paired.ci_high),
+                "delta_ci_low": _finite(paired.ci_low)
+                if paired.n_clusters >= 2
+                else "",
+                "delta_ci_high": _finite(paired.ci_high)
+                if paired.n_clusters >= 2
+                else "",
                 "delta_cluster_field": paired.cluster_field,
                 "n_delta_clusters": paired.n_clusters,
-                "n_grouped": len(grouped),
+                "n_baseline": len(grouped),
                 "n_arm": len(other),
-                "n_complete_pairs": paired.n_complete_pairs,
-                "n_excluded_single_arm": paired.n_excluded_single_arm,
+                "n_complete_pairs": counts["n_matched_items"],
+                "n_excluded_single_arm": counts["n_unmatched_items"],
+                **{
+                    key: counts[key]
+                    for key in (
+                        "n_matched_capabilities",
+                        "n_excluded_ineligible_items",
+                        "n_duplicate_identities",
+                        "n_missing_identity_rows",
+                    )
+                },
+                **{
+                    f"n_{arm_name}_{suffix}": counts[f"n_{source}_{suffix}"]
+                    for arm_name, source in (
+                        ("baseline", "bare"),
+                        ("comparison", "document"),
+                    )
+                    for suffix in (
+                        "failed_items",
+                        "unclassified_items",
+                        "eligible_items",
+                    )
+                },
+                "unavailable_reason": "" if a else "no jointly eligible exact items",
+                "delta_ci_unavailable_reason": "fewer than two capabilities"
+                if paired.n_clusters < 2
+                else "bootstrap disabled"
+                if bootstrap_samples <= 0
+                else "",
+                "cluster_note": "capability-conditional; cross-capability request dependence not modelled",
             }
         )
     return rows
@@ -301,6 +375,7 @@ def build_tables(
     include_smoke: bool,
     bootstrap_samples: int,
     sampling_plan: eu.SamplingPlan,
+    baseline_arm: str = ARM_SINGLE,
 ) -> dict[str, Any]:
     selected = select_arm_runs(
         registry_rows, run_group_id=run_group_id, include_smoke=include_smoke
@@ -337,12 +412,16 @@ def build_tables(
     arm_table: list[dict[str, Any]] = []
     delta_table: list[dict[str, Any]] = []
     for model in sorted({model for model, _ in scores_by_arm}):
+        arms = sorted(arm for m, arm in scores_by_arm if m == model)
+        # Keep the reference visible first, even when it is absent (deltas
+        # then explicitly report no matched items rather than inventing zeros).
+        arms = [baseline_arm, *[arm for arm in arms if arm != baseline_arm]]
         for stratum in STRATA:
             per_arm = {
                 arm: stratum_rows(scores_by_arm.get((model, arm), []), stratum)
-                for arm in ARMS
+                for arm in arms
             }
-            for arm in ARMS:
+            for arm in arms:
                 if (model, arm) not in scores_by_arm:
                     continue
                 arm_table.append(
@@ -355,23 +434,30 @@ def build_tables(
                         bootstrap_samples=bootstrap_samples,
                     )
                 )
-            for arm in (ARM_SHUFFLED, ARM_SINGLE):
-                if (model, arm) not in scores_by_arm:
+            for arm in arms:
+                if arm == baseline_arm or (model, arm) not in scores_by_arm:
                     continue
                 delta_table.extend(
                     delta_rows(
                         model,
                         arm,
                         stratum,
-                        per_arm[ARM_GROUPED],
+                        per_arm[baseline_arm],
                         per_arm[arm],
                         bootstrap_samples=bootstrap_samples,
+                        baseline_arm=baseline_arm,
                     )
                 )
-    return {"arms": arm_table, "deltas": delta_table, "provenance": provenance}
+    return {
+        "arms": arm_table,
+        "deltas": delta_table,
+        "provenance": provenance,
+        "baseline_arm": baseline_arm,
+    }
 
 
 def write_outputs(tables: dict[str, Any], output_prefix: Path) -> dict[str, Path]:
+    baseline_arm = tables.get("baseline_arm", ARM_GROUPED)
     csv_path = output_prefix.with_suffix(".csv")
     delta_csv_path = output_prefix.with_name(f"{output_prefix.name}_deltas.csv")
     md_path = output_prefix.with_suffix(".md")
@@ -382,27 +468,28 @@ def write_outputs(tables: dict[str, Any], output_prefix: Path) -> dict[str, Path
     lines = [
         "# Batching Ablation Summary",
         "",
-        "Deterministic Task 2 rows of one cell under three request compositions:",
-        "`grouped` (the paper condition, 16 items per request in seed order),",
-        "`shuffled` (16 items, never two variants of one seed together), and",
-        "`single` (one item per request). Strata: `all` and `weak_intent`.",
+        "Deterministic Task 2 rows of one cell under different request compositions.",
+        "`single` means one item; `grouped`/`shuffled` mean 16 items, and",
+        "other sizes have a suffix (e.g. `grouped_4`). Shuffled requests never",
+        "contain two variants of one capability. Exact sizes are in the arm table.",
+        f"Reference arm: `{baseline_arm}`. Strata: `all` and `weak_intent`.",
         "",
         "Per-arm CIs are the usual request-clustered bootstraps with the",
         "seed-clustered pair alongside. The **deltas** are resampled by seed,",
-        "not by request: the request is what the arms vary, so it cannot also",
-        "be the unit of independence. Pairs are items answered in both arms",
-        "(`n_complete_pairs`); items answered in only one are excluded and",
-        "counted (`n_excluded_single_arm`).",
+        "conditional on these generations and request compositions; they do not",
+        "model cross-capability request dependence or variability across reruns.",
+        "Pairs are exact source items eligible for the metric in both arms",
+        "(`n_complete_pairs`). Unmatched, ineligible, failed, unclassified and",
+        "ambiguous identities are counted separately. Full-arm rates are descriptive.",
         "",
-        "If a delta's interval covers zero, the grouped numbers stand as",
-        "reported. If it does not, the grouped numbers are a bound and the",
-        "paper has to say in which direction.",
+        "An interval containing zero is not evidence of invariance. Grouped",
+        "rates are protocol-specific estimates, not bounds on another protocol.",
         "",
         "## Arms",
         "",
         eu.markdown_table(tables["arms"], ARM_FIELDS),
         "",
-        "## Deltas (arm - grouped)",
+        f"## Deltas (arm - {baseline_arm})",
         "",
         eu.markdown_table(tables["deltas"], DELTA_FIELDS),
         "",
@@ -412,7 +499,7 @@ def write_outputs(tables: dict[str, Any], output_prefix: Path) -> dict[str, Path
         provenance_path,
         {
             "generated_at_utc": eu.utc_now_iso(),
-            "paper_batch_size": PAPER_BATCH_SIZE,
+            "baseline_arm": baseline_arm,
             "runs": tables["provenance"],
         },
     )
@@ -430,6 +517,11 @@ def main(argv: list[str] | None = None) -> dict[str, Path]:
     parser.add_argument("--variant", default=DEFAULT_VARIANT)
     parser.add_argument("--run-group-id", default=DEFAULT_RUN_GROUP_ID)
     parser.add_argument("--include-smoke", action="store_true")
+    parser.add_argument(
+        "--baseline-arm",
+        default=ARM_SINGLE,
+        help="Reference arm (single by default; grouped for archived 16-item studies).",
+    )
     parser.add_argument(
         "--run-id", action="append", help="Only compare these run IDs (repeatable)."
     )
@@ -478,6 +570,7 @@ def main(argv: list[str] | None = None) -> dict[str, Path]:
         include_smoke=args.include_smoke,
         bootstrap_samples=args.bootstrap_samples,
         sampling_plan=eu.SamplingPlan(stochastic_samples=args.stochastic_samples),
+        baseline_arm=args.baseline_arm,
     )
     output_prefix = (
         args.output_prefix

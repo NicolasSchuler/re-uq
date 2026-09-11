@@ -10,7 +10,7 @@ models:
   - "gemini-2.5-flash"
   - "gemini-2.5-pro"
 concurrency: 2
-batch_size: 8
+batch_size: 1
 timeout_s: 180
 max_tokens: 256
 seed: 20260518

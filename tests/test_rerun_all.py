@@ -321,6 +321,22 @@ class RunnerOverridesTest(unittest.TestCase):
 
 
 class PreflightTest(unittest.TestCase):
+    def test_frozen_primary_protocol_rejects_profile_drift(self):
+        with TemporaryDirectory() as tmp:
+            config = {
+                "datasets": [],
+                "variants": [],
+                "run_group_id": "g",
+                "primary_protocol": {"batch_size": 16, "batch_order": "grouped"},
+            }
+            profile = {"profile_id": "p", "batch_size": 1, "batch_order": "shuffled"}
+            with self.assertRaisesRegex(
+                rerun_all.StageError, "primary protocol requires batch_size"
+            ):
+                rerun_all.stage_preflight(
+                    Path(tmp), config, [profile], [("p", "m")], [], fake=True
+                )
+
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -424,6 +440,116 @@ class PreflightTest(unittest.TestCase):
 
 
 class AnalysisGateTest(unittest.TestCase):
+    def test_refresh_recomputes_completed_analysis_in_dependency_order(self):
+        with TemporaryDirectory() as tmpdir:
+            runner = RecordingRunner(Path(tmpdir))
+            state = rerun_all.RerunState.load(Path(tmpdir) / "state.json")
+            source_key = "cohort:zai:glm:nice:must"
+            state.record(source_key, "complete", run_id="full-1")
+            state.record("task3:zai:glm:nice:must", "complete", run_id="audit-1")
+            config = {
+                "run_group_id": "g",
+                "datasets": ["nice"],
+                "variants": ["must"],
+                "analysis": {},
+                "ablations": {},
+            }
+            rerun_all.stage_analysis(runner, state, config, [("zai", "glm")], [])
+            first = list(runner.commands)
+            runner.commands.clear()
+            rerun_all.stage_analysis(runner, state, config, [("zai", "glm")], [])
+            self.assertEqual(runner.commands, [])
+            rerun_all.stage_analysis(
+                runner, state, config, [("zai", "glm")], [], refresh=True
+            )
+            self.assertEqual(runner.commands, first)
+            labels = [key for key, _ in first]
+            self.assertLess(
+                labels.index("analysis:" + source_key), labels.index("analysis:acse")
+            )
+            self.assertLess(
+                labels.index("analysis:acse"), labels.index("analysis:embedding-probe")
+            )
+            self.assertEqual(state.run_id(source_key), "full-1")
+            self.assertTrue(all(key.startswith("analysis:") for key in labels))
+
+    def test_refresh_rejects_generation_before_loading_configuration(self):
+        with patch.object(rerun_all, "load_rerun_config") as load:
+            self.assertEqual(rerun_all.main(["--refresh-analysis"]), 2)
+            self.assertEqual(
+                rerun_all.main(["--refresh-analysis", "--only", "cohort"]), 2
+            )
+            load.assert_not_called()
+
+    def test_failed_refresh_leaves_downstream_analysis_pending(self):
+        with TemporaryDirectory() as tmp:
+            state = rerun_all.RerunState.load(Path(tmp) / "state.json")
+            source = "cohort:zai:glm:nice:must"
+            state.record(source, "complete", run_id="full-1")
+            state.record("task3:zai:glm:nice:must", "complete", run_id="audit-1")
+            config = {
+                "run_group_id": "g",
+                "datasets": ["nice"],
+                "variants": ["must"],
+                "analysis": {},
+                "ablations": {},
+            }
+            runner = RecordingRunner(Path(tmp))
+            rerun_all.stage_analysis(runner, state, config, [("zai", "glm")], [])
+            runner.exit_codes = {"analysis:acse": [1]}
+            with self.assertRaises(rerun_all.StageError):
+                rerun_all.stage_analysis(
+                    runner, state, config, [("zai", "glm")], [], refresh=True
+                )
+            self.assertEqual(state.status("analysis:acse"), "failed")
+            self.assertEqual(state.status("analysis:paper-tables"), "pending")
+            self.assertEqual(state.status("analysis:embedding-probe"), "pending")
+            self.assertTrue(state.done(source))
+
+    def test_refresh_uses_recorded_settings_without_reading_live_profiles(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "state.json"
+            stored = {
+                "rerun": {
+                    "run_group_id": "g",
+                    "cohort_profiles": ["old"],
+                    "local_profiles": [],
+                    "datasets": ["nice"],
+                    "variants": ["must"],
+                    "ablations": {},
+                },
+                "run_config": {
+                    "profiles": [{"profile_id": "old", "models": ["old-model"]}]
+                },
+                "fake_completion": False,
+                "smoke_items": 8,
+            }
+            eu.write_json(path, {"configuration": stored, "cells": {}})
+            before = path.read_bytes()
+            with (
+                patch.object(eu, "project_root", return_value=root),
+                patch.object(rerun_all, "load_profile") as live,
+                patch.object(rerun_all, "stage_analysis") as analysis,
+            ):
+                self.assertEqual(
+                    rerun_all.main(
+                        [
+                            "--only",
+                            "analysis",
+                            "--refresh-analysis",
+                            "--state",
+                            str(path),
+                            "--dry-run",
+                        ]
+                    ),
+                    0,
+                )
+            live.assert_not_called()
+            self.assertEqual(analysis.call_args.args[3], [("old", "old-model")])
+            self.assertTrue(analysis.call_args.kwargs["refresh"])
+            self.assertEqual(path.read_bytes(), before)
+
     def test_the_analysis_stage_refuses_an_incomplete_cohort(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -449,6 +575,11 @@ class AnalysisGateTest(unittest.TestCase):
             root = Path(tmpdir)
             runner = RecordingRunner(root)
             state = rerun_all.RerunState.load(root / "state.json")
+            state.configuration = {
+                "run_config": {
+                    "profiles": [{"batch_size": 1, "batch_order": "grouped"}]
+                }
+            }
             state.record("cohort:zai:glm-5.1:nice:must", "complete", run_id="full-1")
             state.record("task3:zai:glm-5.1:nice:must", "complete", run_id="task3-1")
             rerun = {
@@ -480,6 +611,7 @@ class AnalysisGateTest(unittest.TestCase):
                 "provider-matrix-v2-2026-05",
             )
             self.assertEqual(export[export.index("--cell") + 1], "nice/must")
+            self.assertEqual(export[export.index("--expected-batch-size") + 1], "1")
             self.assertIn("--local-model", export)
             self.assertIn("--run-id", export)
             self.assertIn("full-local", export)
@@ -559,9 +691,71 @@ class GeneratedRunConfigTest(unittest.TestCase):
             {model for _, model in cohort + local},
             {model for profile in config["profiles"] for model in profile["models"]},
         )
-        # Every provider run of the rerun is batched the paper way.
+        # Single-item requests are the shared default, including audit sources.
         for profile in config["profiles"]:
-            self.assertEqual(int(profile["batch_size"]), 16, profile["profile_id"])
+            self.assertEqual(int(profile["batch_size"]), 1, profile["profile_id"])
+
+    def test_final_batching_sweep_keeps_size_and_composition_distinct(self):
+        rerun = rerun_all.load_rerun_config(
+            eu.project_root(), Path("conf/rerun/final.yaml")
+        )
+        self.assertEqual(
+            rerun_all.batching_arm_specs(rerun["ablations"]["batching"]),
+            [
+                ("single", 1, "grouped"),
+                ("grouped_4", 4, "grouped"),
+                ("shuffled_4", 4, "shuffled"),
+                ("grouped", 16, "grouped"),
+                ("shuffled", 16, "shuffled"),
+            ],
+        )
+        self.assertEqual(rerun["primary_protocol"]["batch_size"], 1)
+        self.assertEqual(
+            rerun["primary_sampling"], {"deterministic": 1, "stochastic": 5}
+        )
+        self.assertFalse(
+            rerun_all.primary_sampling_problems(
+                rerun,
+                {"deterministic": {"samples": 1}, "stochastic": {"samples": 5}},
+            )
+        )
+        self.assertTrue(
+            rerun_all.primary_sampling_problems(
+                rerun,
+                {"deterministic": {"samples": 1}, "stochastic": {"samples": 3}},
+            )
+        )
+        self.assertEqual(rerun["ablations"]["context"]["batch_size"], 1)
+        with self.assertRaisesRegex(rerun_all.StageError, "baseline"):
+            rerun_all.batching_arm_specs({"batch_sizes": [4], "baseline_arm": "single"})
+
+    def test_ablation_commands_honor_configured_sizes_including_context(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runner = RecordingRunner(root)
+            state = rerun_all.RerunState(root / "state.json", dry_run=True)
+            config = {
+                "run_group_id": "final-test",
+                "ablations": {
+                    "batching": {
+                        "models": [{"profile": "p", "model": "m"}],
+                        "batch_sizes": [1, 4, 16],
+                        "baseline_arm": "single",
+                    },
+                    "context": {
+                        "models": [{"profile": "p", "model": "m"}],
+                        "batch_size": 1,
+                    },
+                },
+            }
+            with patch.object(rerun_all, "run_cell_with_retry") as run:
+                rerun_all.stage_ablations(runner, state, config, root / "config.json")
+            calls = [call.kwargs for call in run.call_args_list]
+            self.assertEqual(len(calls), 7)
+            self.assertEqual(len({c["key"] for c in calls}), 7)
+            for call in calls:
+                if call["key"].startswith("context:"):
+                    self.assertIn("profile.batch_size=1", call["overrides"])
 
 
 class RerunSafetyTest(unittest.TestCase):

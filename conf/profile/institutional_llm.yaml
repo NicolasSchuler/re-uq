@@ -9,7 +9,7 @@ api_key_env: ${oc.env:RE_UQ_INSTITUTIONAL_LLM_API_KEY_ENV,INSTITUTIONAL_LLM_API_
 models:
   - "azure.gpt-4.1-mini"
 concurrency: 2
-batch_size: 16
+batch_size: 1
 timeout_s: 180
 max_tokens: 256
 seed: 20260518

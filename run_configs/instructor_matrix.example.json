@@ -43,7 +43,7 @@
         "institutional.gemma4-31b-it"
       ],
       "concurrency": 2,
-      "batch_size": 8,
+      "batch_size": 1,
       "fallback_batch_size": 1,
       "timeout_s": 180,
       "max_tokens": 256,
@@ -67,7 +67,7 @@
         "glm-4.5-air"
       ],
       "concurrency": 2,
-      "batch_size": 8,
+      "batch_size": 1,
       "fallback_batch_size": 1,
       "timeout_s": 180,
       "max_tokens": 256,

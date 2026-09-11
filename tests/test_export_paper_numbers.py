@@ -523,7 +523,12 @@ def write_fixture(outputs_dir: Path, models: list[str] | None = None) -> None:
     # Written last: `stale_provenance` compares mtimes against this file.
     eu.write_json(
         outputs_dir / exporter.SNAPSHOT_PROVENANCE,
-        {"models_hosted": exporter.order_models(models), "models_local": []},
+        {
+            "models_hosted": exporter.order_models(models),
+            "models_local": [],
+            "expected_batch_size": 16,
+            "expected_stochastic_samples": 5,
+        },
     )
 
 
@@ -677,6 +682,19 @@ class HeadlineMacroTest(ExporterFixtureTest):
         self.assertEqual(macros["numTaskTwoReadable"], "29,600")
         self.assertEqual(macros["numBatchSize"], "16")
         self.assertEqual(macros["numStochasticSamples"], "5")
+
+    def test_request_protocol_macros_follow_recorded_export_not_live_defaults(self):
+        path = self.outputs / exporter.SNAPSHOT_PROVENANCE
+        metadata = json.loads(path.read_text())
+        metadata.update(expected_batch_size=1, expected_stochastic_samples=3)
+        eu.write_json(path, metadata)
+        macros, _ = self.export()
+        self.assertEqual(macros["numBatchSize"], "1")
+        self.assertEqual(macros["numStochasticSamples"], "3")
+        metadata["expected_batch_size"] = None
+        eu.write_json(path, metadata)
+        with self.assertRaisesRegex(SystemExit, "invalid expected_batch_size"):
+            self.export()
 
 
 class PerModelMacroTest(ExporterFixtureTest):

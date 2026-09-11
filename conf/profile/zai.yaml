@@ -14,7 +14,7 @@ models:
   - "glm-5.3"
   - "glm-5.3-flash"
 concurrency: 2
-batch_size: 16
+batch_size: 1
 timeout_s: 180
 max_tokens: 256
 seed: 20260518

@@ -1,9 +1,16 @@
 # Experiment rerun runbook
 
 Use this guide to launch the prepared campaign from the repository root. The
-entry point is `scripts/rerun_all.py`: it runs Task 1/2, audits those outputs
+entry point is `scripts/rerun_all.py --config conf/rerun/final.yaml`: it runs Task 1/2, audits those outputs
 with Task 3, runs the configured ablations, and produces the analysis exports.
 No notebook execution is required.
+
+**Final-run gate (2026-09-11): not yet launched.** The author changed the
+primary protocol to one item per request, using server concurrency for
+parallelism. Batch sizes 4 and 16, both grouped and sibling-separated, are
+prominent ablations. Use the explicit final configuration below, not the old
+exploratory campaign state. Follow
+[final-run readiness](final_run_readiness.md) before spending provider budget.
 
 The commands below assume this checkout at `/Users/nicolas/re-uq` and macOS
 with Apple Silicon and Metal GPU access, as required by the configured MLX
@@ -15,31 +22,32 @@ runs on this Mac and nothing has to run on the box.
 
 ## 1. Know what will run
 
-The configuration checked on 2026-09-10 selects:
+The configuration checked on 2026-09-11 selects:
 
 | Setting | Prepared value |
 | --- | --- |
-| Campaign group | `modality-rerun-2026-09` |
+| Campaign group | `manuscript-final`, from `conf/rerun/final.yaml` |
 | Hosted profile | `zai`: `glm-5.3`, `glm-5.3-flash` |
-| Local profile | `local_llama_cpp`: `qwen3.6-27b` (llama-swap on the lab GPU box) |
+| Local profile | `local_llama_cpp`: Qwen3.6-27B, Qwen3.8-27B, Qwen3.5-9B, Gemma4-31B, Gemma4-12B, Muse Glimmer-30B, GPT-OSS-20B; exact IDs in the profile |
 | Benchmark cells | NICE/MUST, NICE/SHALL, MLM-TAPT/MUST, MLM-TAPT/SHALL |
 | Items per cell | 720: 180 capabilities × four modalities |
 | Main runs | Both Task 1 and Task 2, one deterministic answer plus five stochastic answers per item/task |
 | Audit | Blind Task 3, tied to each recorded Task 1/2 source run |
-| Batching ablation | Task 2 on MLM-TAPT/MUST: grouped batches of 16, sibling-separated shuffled batches of 16, single-item requests; deterministic only |
-| Context ablation | Task 2 on PURE/MUST: bare versus document context, 720 items per arm; deterministic only |
+| Batching ablation | Task 2 on MLM-TAPT/MUST: sizes 1, 4, 16; grouped and sibling-separated at sizes 4 and 16; deterministic only, single-item reference |
+| Context ablation | Task 2 on revised PURE/MUST: bare versus document context, 720 single-item requests per arm; deterministic only |
 | Weak-phrasing probe | Four weak templates over the 180 NICE capabilities, using the configured deterministic and stochastic sampling |
 | Embeddings | `mlx-community/Qwen3-Embedding-0.6B-8bit` |
 | Analysis resampling | 1,000 bootstrap samples in the driver-controlled table/comparison/embedding-diagnostic commands |
 
-The two ablation representatives are currently `glm-5.3` and
-`qwen3.6-27b`: each ablation defaults to the **first model in each selected
-profile**. Alternative embedding models are available as configurations but
+The final batching/context comparisons use `glm-5.3` and all seven local
+models. Weak phrasing uses `glm-5.3`, `qwen3.6-27b`, and `muse-glimmer-30b`.
+The single-item batching arm is a separate deterministic repeat, not a reuse
+of the main run. Alternative embedding models are available as configurations but
 are not automatically swept by this campaign.
 
-There are 12 main Task 1/2 runs. Each plans 8,640 item answers
-(`720 × 2 tasks × 6 answers`), or 103,680 across the main matrix. At batch size
-16 that is 6,480 main-generation requests before provider probes, retries,
+There are 36 main Task 1/2 runs for the current nine models. Each plans 8,640 item answers
+(`720 × 2 tasks × 6 answers`), or 311,040 across the main matrix. At batch size
+1 that is 311,040 main-generation requests before provider probes, retries,
 single-item fallbacks, audits, and ablations. This is a workload count, not a
 price or duration estimate; use live smoke timings and provider usage to plan
 the run.
@@ -149,21 +157,22 @@ leave the prepared protocol settings in place:
 | --- | --- | --- |
 | `base_url` | `https://api.z.ai/api/coding/paas/v4` | `http://141.3.52.248:9292/v1` |
 | `api_key_env` | `ZAI_API_KEY` | `LLAMA_API_KEY` |
-| `concurrency` | 2 | 2 |
-| `batch_size` / `batch_order` | 16 / `grouped` | 16 / `grouped` |
+| `concurrency` | 2 | 8 (headline runs used 2 workers on 4 server slots) |
+| `batch_size` / `batch_order` | 1 / `grouped` | 1 / `grouped` |
 | `timeout_s` | 180 | 300 |
-| `max_tokens` | 256 per item | 512 per item |
+| `max_tokens` | 256 per item | 1024 per item (historical Qwen3.6 headline used 512) |
 | `max_retries` | 3 | 3 |
 | `seed` / `send_seed` | 20260518 / `true` | 20260518 / `true` |
-| `json_mode` / `structured_output` | `true` / `json_object` | `false` / `none` |
-| `extra_body` | `thinking: disabled`, `response_format: json_object` | `chat_template_kwargs.enable_thinking: false` |
+| `json_mode` / `structured_output` | `true` / `json_object` | `false` / `json_schema` |
+| `extra_body` | `thinking: disabled`, `response_format: json_object` | `chat_template_kwargs.enable_thinking: false`, `reasoning_effort: low` |
 
 The Z.AI profile is configured for the Coding Plan endpoint. If your account
 uses the standard paid API, the profile's documented alternative is
 `https://api.z.ai/api/paas/v4`; select the endpoint supported by your account.
-Both profiles disable the model's thinking mode through `extra_body`: Z.AI
-with `thinking: disabled`, llama.cpp with the chat template's
-`enable_thinking: false`. Without it Qwen3.6 spends the whole output budget on
+The hosted profile requests `thinking: disabled`. The local profile requests
+disabled thinking where supported; Muse and GPT-OSS use low reasoning effort
+and can still generate reasoning tokens. Qwen3.6 uses the chat template's
+`enable_thinking: false`; without it, observed requests exhausted their budget on
 reasoning and returns an empty answer. Z.AI also requests JSON there.
 
 Z.AI lists more model IDs than it serves under their own name: on 2026-09-10
@@ -173,11 +182,13 @@ profile therefore lists only `glm-5.3` and `glm-5.3-flash`. After any smoke
 cell, compare `served_model` in the transcript with the requested ID.
 
 The batched runner multiplies `max_tokens` by the number of items: a full
-16-item request permits 4,096 output tokens on Z.AI and 8,192 locally. Ensure
+16-item ablation request permits 4,096 output tokens on Z.AI and 16,384 locally.
+Single-item primary requests permit 256 and 1,024 respectively. Ensure
 the local server can accommodate the prompt and this output allowance.
 If smoke results truncate, inspect the transcript and server limits before
-changing the profile. Reducing batch size changes the experiment; batching
-and context ablations explicitly pin their own sizes to 16 or 1.
+changing the profile. The batching ablation pins its size/composition sweep;
+both context arms explicitly pin size 1. Changing settings after a cell starts
+requires a new campaign, not an in-place resume of historical grouped runs.
 
 Sampling is temperature `0.0`, `top_p: 1.0`, one deterministic sample, and
 temperature `0.7`, `top_p: 1.0`, five stochastic samples. Stochastic repetitions
@@ -203,7 +214,7 @@ from every ablation's `profiles:` or explicit `models:` list.
 used by `scripts/reproduce.sh` do not configure this driver. It generates
 `outputs/rerun/run_config.json` from `conf/`; do not edit that generated file.
 Likewise, Hydra overrides such as `profile=zai` belong to `scripts/run.py`,
-not `scripts/rerun_all.py`.
+not `scripts/rerun_all.py --config conf/rerun/final.yaml`.
 
 ## 5. Check the plan and execution before the full launch
 
@@ -211,7 +222,7 @@ First print the whole plan without credentials, provider calls, or campaign
 artifact writes:
 
 ```bash
-.venv/bin/python scripts/rerun_all.py --dry-run
+.venv/bin/python scripts/rerun_all.py --config conf/rerun/final.yaml --dry-run
 ```
 
 Check that the model list, dataset/variant combinations, ablation arms,
@@ -220,7 +231,7 @@ embedding model and output locations match your intended campaign.
 Then exercise the synthetic chain:
 
 ```bash
-.venv/bin/python scripts/rerun_all.py --fake-completion --smoke-items 8
+.venv/bin/python scripts/rerun_all.py --config conf/rerun/final.yaml --fake-completion --smoke-items 8
 ```
 
 This makes no provider calls. Raw records go to `data/processed/smoke/`;
@@ -232,7 +243,7 @@ wiring, not model behavior or the complete neural analysis.
 With keys set and the local server running, check the real prerequisites:
 
 ```bash
-.venv/bin/python scripts/rerun_all.py --only preflight
+.venv/bin/python scripts/rerun_all.py --config conf/rerun/final.yaml --only preflight
 ```
 
 This checks key presence, benchmark-file presence, profile constraints, and,
@@ -257,7 +268,8 @@ done
   embedding=qwen3_06b run_group_id=provider-smoke-2026-09
 ```
 
-Sixteen items exercise a full production-sized batch. For each command,
+Sixteen items exercise concurrent single-item requests. Also smoke-test the
+size-4 and size-16 ablation overrides before the full sweep. For each command,
 inspect the reported run ID, parse failures, truncation, retries and request
 transcript. Repeat with the remaining hosted model IDs before relying on the
 whole model list. Smoke rows remain separate and do not satisfy full campaign
@@ -269,13 +281,13 @@ subsequent requests.
 Once smoke checks pass and the configuration is fixed:
 
 ```bash
-.venv/bin/python -u scripts/rerun_all.py
+.venv/bin/python -u scripts/rerun_all.py --config conf/rerun/final.yaml
 ```
 
 On this Mac, you can instead keep the machine awake while the command runs:
 
 ```bash
-caffeinate -i .venv/bin/python -u scripts/rerun_all.py
+caffeinate -i .venv/bin/python -u scripts/rerun_all.py --config conf/rerun/final.yaml
 ```
 
 Keep the terminal and local server running. Use one driver at a time in this
@@ -285,10 +297,10 @@ shared even between campaign groups.
 To separate generation from analysis, use these two commands in order:
 
 ```bash
-.venv/bin/python -u scripts/rerun_all.py \
+.venv/bin/python -u scripts/rerun_all.py --config conf/rerun/final.yaml \
   --only preflight --only cohort --only task3 --only ablations
 
-.venv/bin/python -u scripts/rerun_all.py --only analysis
+.venv/bin/python -u scripts/rerun_all.py --config conf/rerun/final.yaml --only analysis
 ```
 
 `--only` is repeatable and does not automatically add prerequisites. Analysis
@@ -309,10 +321,10 @@ run at the same time as one driver per profile, each in its own `tmux`
 session, against the same state file (records merge per cell under a lock):
 
 ```bash
-.venv/bin/python -u scripts/rerun_all.py --profile zai \
+.venv/bin/python -u scripts/rerun_all.py --config conf/rerun/final.yaml --profile zai \
   --only preflight --only cohort --only task3 --only ablations
 
-.venv/bin/python -u scripts/rerun_all.py --profile local_llama_cpp \
+.venv/bin/python -u scripts/rerun_all.py --config conf/rerun/final.yaml --profile local_llama_cpp \
   --only preflight --only cohort --only task3 --only ablations
 ```
 
@@ -321,16 +333,16 @@ same generated run config, which is identical, and append to the same
 per-dataset raw files and registries, which the runners already serialise
 with file locks. Run the analysis stage afterwards without `--profile`.
 
-A headline-only plan already exists: `conf/rerun/headline.yaml` runs the
-MLM-TAPT/MUST cell for every configured model with its blind audit and no
-ablations, in the same run group, so its runs are the ones a later full
-campaign continues from. Give it its own `--state` path.
+`conf/rerun/headline.yaml` is an exploratory plan. Its historical outputs used
+grouped requests; they are not single-item main evidence. Driver states do not
+merge automatically, even when run groups match. Use the recorded state only
+for an explicitly selected historical analysis refresh.
 
 For a separate campaign plan, copy and edit the rerun YAML, then use its path
 consistently for launch, monitoring and resume:
 
 ```bash
-cp conf/rerun/default.yaml conf/rerun/my_campaign.yaml
+cp conf/rerun/final.yaml conf/rerun/my_campaign.yaml
 # Edit my_campaign.yaml, including a distinct run_group_id, before starting.
 .venv/bin/python scripts/rerun_all.py --config conf/rerun/my_campaign.yaml --dry-run
 .venv/bin/python -u scripts/rerun_all.py --config conf/rerun/my_campaign.yaml
@@ -350,7 +362,7 @@ cd /Users/nicolas/re-uq
 import json
 from pathlib import Path
 
-path = Path('outputs/rerun/modality-rerun-2026-09/state.json')
+path = Path('outputs/rerun/manuscript-final/state.json')
 if not path.exists():
     print('No campaign state yet; inspect the launching terminal.')
 else:
@@ -379,7 +391,7 @@ To stop, press Ctrl-C in the driver terminal. Restart the same command with
 the **same configuration and state path**:
 
 ```bash
-.venv/bin/python -u scripts/rerun_all.py
+.venv/bin/python -u scripts/rerun_all.py --config conf/rerun/final.yaml
 ```
 
 Complete cells are skipped. Unfinished cells resume their recorded run IDs;

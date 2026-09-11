@@ -797,6 +797,22 @@ def _benchmark_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
     _check_against_design(
         artifacts.outputs_dir, datasets, conditions, seeds_per_dataset, warnings
     )
+    path = artifacts.outputs_dir / SNAPSHOT_PROVENANCE
+    protocol = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    def recorded_positive_int(key: str, archived_default: int) -> int:
+        if key not in protocol:
+            warnings.append(
+                f"{SNAPSHOT_PROVENANCE}: {key} absent; using archived default {archived_default}"
+            )
+            return archived_default
+        try:
+            return eu.positive_int(protocol[key], key)
+        except (TypeError, ValueError) as exc:
+            raise PaperNumbersError(f"{SNAPSHOT_PROVENANCE}: invalid {key}") from exc
+
+    batch_size = recorded_positive_int("expected_batch_size", 16)
+    stochastic_samples = recorded_positive_int("expected_stochastic_samples", 5)
     return [
         Macro("numSeedsPerDataset", str(seeds_per_dataset)),
         Macro("numSeeds", str(seeds), f"{len(datasets)} datasets"),
@@ -805,10 +821,10 @@ def _benchmark_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         Macro("numItemsPerCell", fmt_count(items_per_cell)),
         Macro("numCells", str(len(cells))),
         Macro("numModels", str(len(models))),
-        Macro("numBatchSize", str(export_paper_tables.DEFAULT_PAPER_BATCH_SIZE)),
+        Macro("numBatchSize", str(batch_size)),
         Macro(
             "numStochasticSamples",
-            str(export_paper_tables.DEFAULT_EXPECTED_STOCHASTIC_SAMPLES),
+            str(stochastic_samples),
         ),
         Macro(
             "numTaskTwoAnswers",
