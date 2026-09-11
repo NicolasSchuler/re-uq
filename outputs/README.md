@@ -20,7 +20,8 @@ When in doubt, final paper claims should come from `outputs/evaluation_<dataset>
 
 | File | What it holds |
 | --- | --- |
-| `paper_per_model_modality_table.csv` / `.md` | Per-model breakdown by source modality condition: label accuracy, strict and broad text strengthening, high-confidence share, answer length. |
+| `paper_per_model_modality_table.csv` / `.md` | Per-model and per-cell breakdown by source modality: strict/broad strengthening, high-confidence share, separate coverage counts, and answer length. |
+| `paper_per_model_modality_pooled.csv` / `.md` | Model-by-modality and pooled-model counts and intervals for manuscript Table 5, recomputed from the underlying observations across cells. |
 | `paper_per_model_headline.csv` / `.md` | One row per model, with seed-clustered 95% CIs on strict and broad strengthening. Strict strengthening ranges from 0.3% (`glm-4.7`) to 16.9% (`kit.gemma4-31b-it`). |
 | `paper_per_model_rq_table.csv` / `.md` | Every RQ1/RQ2/RQ3 quantity per model, per cell, and pooled: Task 1 acceptance, strict/broad/no-cue strengthening, weak intent (gated and ungated), high-confidence share, sample agreement, the meaning-variation and verbalized-confidence AUROCs, and the blind-check rates -- each with counts and both cluster intervals. Source of `tab:rq1` and `tab:rq23`; see [`docs/aggregation.md`](../docs/aggregation.md) section 6. |
 | `paper_headline_bootstrap_ci.csv` | Pooled headline intervals: strict [8.2%, 9.0%], broad [13.2%, 14.4%]. |
@@ -39,7 +40,7 @@ Root-level `paper_*` files that predate the exporter are diagnostic/stale; regen
 
 ## Construct Review Status
 
-`docs/weak_modality_construct_review.csv` (tracked under `docs/`, not here) backs the weak-intent construct-validity gate. It is complete and the gate passes, but **both reviewer slots hold an author-delegated LLM-assisted review**, declared in the `reviewer_role` column. It is **pending human sign-off**. Weak-intent numbers in `weak_modality_probe_summary.*` and in any `paper_*` table must carry that caveat until two human reviewers confirm the judgments (`TODO.md`, section D).
+Human validation is complete, as confirmed by the author on 2026-09-04, and will be repeated before submission. The original LLM-assisted judgments remain separately identified. See [`docs/validation_review.md`](../docs/validation_review.md) for the scope and the wording checks' limitations; no independent two-human agreement is claimed.
 
 ## Tracked here
 
@@ -49,7 +50,7 @@ Root-level `paper_*` files that predate the exporter are diagnostic/stale; regen
 - **Pilot and probe summaries**:
   - `pilot_results_summary.md`
   - `prompt_sensitivity_summary.csv`, `task2_prompt_sensitivity_summary.csv`
-  - `weak_modality_probe_summary.csv` / `.md` — four weak-intent phrasings, `qwen/qwen3.5-9b` only, 20 pilot seeds; 100% strengthening on all four templates.
+  - `weak_modality_probe/<run_id>/weak_modality_probe_summary*.csv` / `.md` and `weak_modality_text_deltas.csv` — four weak-intent phrasings over every benchmark capability of the probed cell, one directory per run and model.
   - `weak_modality_template_sanity_check.csv` / `.md`
   - `modality_template_inventory.csv` / `.md`
   - `logprob_probe.json`

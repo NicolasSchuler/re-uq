@@ -145,7 +145,7 @@ Every derivation step above is backed by a tracked review record:
 | `mlm_tapt` | `MUST` | [`outputs/benchmark_statements_review_mlm_tapt.csv`](../outputs/benchmark_statements_review_mlm_tapt.csv) | 180 |
 | `mlm_tapt` | `SHALL` | [`outputs/benchmark_statements_review_mlm_tapt_shall.csv`](../outputs/benchmark_statements_review_mlm_tapt_shall.csv) | 180 |
 
-3. **Weak-template construct review.** `docs/weak_modality_construct_review.csv` — 8 rows over the four weak templates; current reviewer roles: `llm-assisted review (author-delegated); PENDING HUMAN CONFIRMATION`. Until the pending human sign-off ([`TODO.md`](../TODO.md) section D), weak-intent claims carry that caveat.
+3. **Weak-template construct review.** `docs/weak_modality_construct_review.csv` — 12 rows over the four weak templates; current reviewer roles: `human author validation (completion reported 2026-09-04)`, `llm-assisted review (author-delegated)`. The author has confirmed completed human validation; the original LLM-assisted reviews remain identified separately. See [validation review](validation_review.md).
 
 4. **File integrity.** Each dataset manifest records sha256 digests and row counts for its seed and benchmark tables:
 

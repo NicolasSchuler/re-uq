@@ -97,22 +97,24 @@ reports`, intended gold modality, note).
 
 ### 2.3 Weak-intent phrasing probe
 
-The four `probe_*` templates were run as a separate probe to check that the
+The four `probe_*` templates are run as a separate probe to check that the
 weak-intent finding is not an artifact of the single `It would be useful if …`
-wording. Scope: `qwen/qwen3.5-9b` only, 20 pilot seeds, run through notebook
-`02b`. Results are in `outputs/weak_modality_probe_summary.csv`: all four
-templates show 100% strengthening (over-commitment rate 1.0, deterministic
-samples). The probe is a diagnostic, not a headline result, and it was not
-repeated on the official cohort.
+wording. `scripts/run_weak_modality_probe.py` runs every benchmark capability
+of one cell through all four templates (a smoke run keeps the 20 pilot seeds)
+and writes one directory per run under `outputs/weak_modality_probe/<run_id>/`:
+the per-template summary and the paired text-strengthening deltas against the
+`useful_if` baseline. The rerun driver runs it on the representative model of
+each endpoint. The probe is a diagnostic, not a headline result.
 
 ### 2.4 Construct-validity review
 
-`docs/weak_modality_construct_review.csv` records two reviewer slots (`R1`,
-`R2`) judging whether each weak template is weaker than `SHOULD/recommended`.
-Both slots currently contain an **author-delegated LLM-assisted review**, which
-is declared in the `reviewer_role` column. The gate passes, but the judgments
-are **pending human confirmation** before submission. See
-[`TODO.md`](../TODO.md).
+`docs/weak_modality_construct_review.csv` retains the two original
+LLM-assisted reviews and adds separate author-confirmation rows. The author
+confirmed completed human validation on 2026-09-04 and will repeat it before
+submission. The assistant also checked the benchmark construction and four
+weak-template mappings. See [validation review](validation_review.md) for the
+scope and the wording parser's mixed-clause limitation. Two independent human
+raters or agreement statistics are not claimed.
 
 ## 3. Prompts
 
@@ -317,6 +319,33 @@ The z.ai profile additionally sends
 The `local_llama_cpp` example profile runs without JSON mode
 (`structured_output: none`); the institutional profile uses `json_schema`.
 
+### 5.2.1 Local llama.cpp server (September 2026 cohort)
+
+The seven local models run on one llama.cpp server (build b10900) behind
+llama-swap v255 on a single RTX PRO 6000 (96 GB), one model resident at a
+time, all layers on the GPU, flash attention on, continuous batching on,
+unquantised KV cache, context 131,072 shared across the request slots. The
+harness sends `temperature`, `top_p`, `seed`, `max_tokens` and the thinking
+switch (`chat_template_kwargs.enable_thinking=false` for Qwen and Gemma,
+`reasoning_effort: low` for Muse Glimmer and gpt-oss, whose reasoning the
+server separates into `reasoning_content`). Parameters the harness does not
+send keep the GGUF metadata defaults, which differ per model family: `top_k`
+20 (Qwen3.6/3.8), 40 (Qwen3.5-9B, gpt-oss, Muse Glimmer), 64 (Gemma 4);
+`min_p` 0.05; repetition penalty off. The server honours every parameter
+sent: a repeated request with the same seed at temperature 0.7 returns a
+byte-identical answer, checked 2026-09-10.
+
+Concurrency is a throughput knob with one reproducibility caveat. The
+headline cohort ran with two harness workers against four server slots
+(`--parallel 4`). After that cohort the server was raised to eight slots and
+the profile to eight workers, because decode on one GPU is bandwidth-bound and
+extra streams cost almost nothing per step. Request content, batch membership
+and request seeds are planned before dispatch and do not depend on the worker
+count; only the order in which rows land in the raw file does, and every
+downstream step keys on identifiers rather than file position. Whether the
+seed-repeat identity survives a different number of concurrent streams was
+checked separately: CONCURRENCY_DETERMINISM_RESULT.
+
 Temperature 0.0 is treated as deterministic. It is not guaranteed to be
 deterministic on a hosted endpoint, and without a request seed and a recorded
 served-model version this cannot be checked after the fact for the existing
@@ -512,8 +541,9 @@ strict strengthening — see `scripts/diagnose_embedding_separability.py`.
    Cross-family generalisation is not established.
 5. **Provenance gaps in the existing runs.** No request seed was sent and no
    served model version was recorded, so an exact rerun cannot be verified.
-6. **Construct review pending human sign-off.** Both reviewer slots in
-   `docs/weak_modality_construct_review.csv` are LLM-assisted.
+6. **Construct review completed by the author.** The original LLM-assisted
+   judgments remain labelled separately; see `docs/validation_review.md`. The
+   operational ordering still does not establish intent in arbitrary contexts.
 7. **Broad strengthening rests on a convention.** The `heuristic_system_verb`
    default is a modelling choice, and it covers an 11.5% slice over all four
    cells (17.6% in the `MUST` cells, 5.5% in the `SHALL` cells).

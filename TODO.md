@@ -75,11 +75,11 @@ an owner, and neighbours.
 
 **Still open.**
 
-1. The runs themselves (`glm-5.1`, `kit.gemma4-31b-it`) and the table; then
+1. The runs themselves (the first configured ZAI and local model) and the table; then
    the write-up in `docs/context_ablation.md` and the manuscript's robustness
    paragraph.
-2. A human pass over `capability_text_final` for the 180 `pure` seeds (the
-   automatic extraction is used as is).
+2. Human validation of the 180 PURE capabilities is complete, as confirmed by
+   the author on 2026-09-04; the author will repeat it before submission.
 3. A **marker-flipped** third arm (same context, M ↔ O swapped) to isolate the
    marker from heading and neighbours.
 4. The remaining envelope factors of the original sketch, as a fractional
@@ -103,36 +103,21 @@ an owner, and neighbours.
 
 ## C. More diverse model families
 
-**Why.** Five of the six official models are GLM. One outside model is not a
-cross-family claim.
+The resubmission uses the configured ZAI models and local models served by
+llama.cpp. Set `models` in `conf/profile/zai.yaml` and
+`conf/profile/local_llama_cpp.yaml`. The local router selects models by name;
+`scripts/rerun_all.py` finishes all requests for one model before the next.
+Both profiles enter pooled tables; per-model rows preserve the hosted/local
+split. Claims about family diversity must follow the actual chosen families.
 
-**Do.**
+## D. Human confirmation of the construct review — complete
 
-1. Run the new example provider profiles: `openai`, `mistral`,
-   `google_gemini`, `ollama_local`. Scope rule: OpenAI-compatible
-   chat-completions endpoints only — a provider is in scope as soon as it
-   exposes one; providers without such an endpoint are out of scope.
-2. Same cells as the official cohort (`nice` and `mlm_tapt`, `must`; `shall` if
-   budget allows).
-3. Export per-model tables with `scripts/export_paper_tables.py` →
-   `outputs/paper_per_model_modality_table.csv` and
-   `outputs/paper_per_model_headline.csv`.
-4. State which models are hosted, which are local, and which had JSON mode.
-
-**Note.** `ollama_local` also gives a fully offline replication path for
-reviewers without paid API access.
-
-## D. Human confirmation of the construct review
-
-`docs/weak_modality_construct_review.csv` is complete and the analysis gate
-passes, but both reviewer slots (`R1`, `R2`) hold an author-delegated
-LLM-assisted review, declared in the `reviewer_role` column.
-
-**Do.** Two human reviewers independently re-judge the four weak templates
-against `SHOULD/recommended`, record agreement, and replace the `reviewer_role`
-values. Until then, weak-intent claims carry a construct-validity caveat and
-`outputs/README.md`, `docs/results_mapping.md`, and
-`docs/experimental_setup.md` must keep saying so.
+The author confirmed completed human validation on 2026-09-04 and will repeat
+it before submission. The original LLM-assisted rows remain labelled as such;
+separate author rows record confirmation. The assistant's construction and
+wording-rule review is recorded in
+[`docs/validation_review.md`](docs/validation_review.md), including a known
+mixed-clause limitation. No independent two-human agreement is claimed.
 
 ## E. Regenerate paper snapshots
 

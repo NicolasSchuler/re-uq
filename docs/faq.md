@@ -36,7 +36,7 @@ Task 3 is a **diagnostic** blind text audit, not the headline. It asks whether t
 
 Then `scripts/generate_evaluation_analysis.py` will refuse to write paper-facing artifacts and weak-intent results stay diagnostic. Complete [`docs/weak_modality_construct_review.csv`](weak_modality_construct_review.csv) with two reviewer judgments per template before claiming weak-intent results in the paper. See `docs/evaluation.md` for the gate definition.
 
-The tracked file is currently complete, so the gate passes — but both reviewer slots hold an author-delegated **LLM-assisted** review, declared in the `reviewer_role` column. It is pending human sign-off ([`TODO.md`](../TODO.md), section D), and weak-intent claims must carry that caveat until then.
+Human validation is complete, as confirmed by the author on 2026-09-04, and will be repeated before submission. The original LLM-assisted judgments remain separately identified. See [validation review](validation_review.md) for the scope and the wording checks' limitations; no independent two-human agreement is claimed.
 
 ## Are the prompts in `README.md` what the models actually received?
 

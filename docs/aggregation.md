@@ -197,23 +197,28 @@ cells) by `per_model_row` (`scripts/export_paper_tables.py:410`).
 - **macro-of-cells (unweighted)**: the arithmetic mean of the four per-cell
   rates. Strict `0.0860`, broad `0.1386`.
 
-The README quotes 8.6% strict (pooled and macro agree at that rounding) and
-13.8% broad (pooled, the conservative convention; the macro is 13.9%). The
-weak-intent headline (29.8%) is a single named cell, `mlm_tapt/must`, not an
-aggregate. It is strict text strengthening at `confidence >= 0.90` over the
-weak-intent (`nice_to_have`) source rows of that cell whose generated text had a
-readable modality: `304 / 1020 = 0.298`. Over all 1080 weak rows of the cell,
-including those whose text modality was unreadable, it is 28.1%. The exporter
-writes it as `weak_strict_text_strengthening_90` — alongside `weak_n` (1080),
-`weak_n_readable` (1020) and `weak_strict_text_strengthening_90_all_weak`
-(0.281) — into `outputs/paper_task2_text_drift_metrics.csv`, and
-`scripts/aggregate_paper_headline_metrics.py` reads the headline from that
-column, falling back to `outputs/blind_task3_analysis_summary.csv` only when the
-column is absent.
+The revised manuscript's rates are pooled over all four cells and the selected
+models. In particular, `numWeakStrict` and its numerator/denominator use
+`task2_weak_strict_strengthening` from the grand row of
+`paper_per_model_rq_table.csv`, without a confidence threshold. This is the
+same weak-intent outcome shown in the RQ1 table. Per-cell and per-model ranges
+use that same outcome in their respective cohorts.
 
-The high-confidence share (98.4%) is the unweighted macro over cells, with the
-strict-strengthened counts as per-cell n. Repeated-sample agreement is unanimous
-in every cell.
+The archived 29.8% weak-intent headline described one MLM-TAPT/MUST cell with a
+confidence threshold. It must not be reused as the revised pooled rate.
+High-confidence and agreement shares now use their recorded eligible subsets;
+meaning-variation AUROC is recomputed on the pooled scored observations.
+
+`paper_per_model_modality_pooled.csv` supplies the manuscript's model-by-modality
+table. Each model/modality row pools the underlying answers across cells and
+recomputes its request-clustered interval. Additional `model=all` rows pool
+models by modality. Never average per-cell interval bounds. These rows remain
+separate from the per-cell CSV so consumers cannot count both scopes twice.
+
+Coverage uses `n_items` (planned), `n_valid`, `n_parse_failures`, and
+`n_text_unclassified`. The no-cue share is unclassified wording divided by valid
+answers; failed responses are excluded. Selected models and source modalities
+with no valid answers retain rows with zero eligible counts.
 
 ## 6. Bootstrap procedure
 
@@ -277,15 +282,20 @@ it, and each additional slice costs a full bootstrap.
 
 Denominators, per metric family:
 
-- **Task 1** -- `task1_unsupported_acceptance_90` divides acceptances at
-  p >= 0.90 by the Task 1 items whose source is *not* mandatory (`y_true == 0`).
+- **Task 1** -- `task1_unsupported_acceptance_90` divides `yes` decisions with
+  reported confidence >= 0.90 by valid Task 1 answers whose source is *not*
+  mandatory (`y_true == 0`). Counts and bootstrap estimates use the same rule.
+  Before September 2026 the count used `p_yes >= 0.90` instead, which also
+  admitted confident *no* answers (`p_yes` is `1 - confidence` for a `no`);
+  the archived May tables therefore carry a slightly larger rate under the
+  same column name and are not directly comparable.
 - **Task 2** -- strict and broad strengthening divide by the answers with a
   readable text modality; `task2_no_cue` divides the unreadable ones by all
   answers.
-- **Weak intent** -- reported twice. `task2_weak_strict_strengthening` counts
-  every strict strengthening of a `nice_to_have` source;
-  `task2_weak_strict_high_conf_90` additionally requires confidence >= 0.90 and
-  is the `\numWeakStrict` headline. The two coincide only pooled.
+- **Weak intent** -- `task2_weak_strict_strengthening` counts every strict
+  strengthening of a `nice_to_have` source and supplies `\numWeakStrict` pooled
+  over all cells and models. `task2_weak_strict_high_conf_90` additionally requires
+  confidence >= 0.90 and remains a separate diagnostic.
 - **RQ2** -- the high-confidence share and the sample agreement divide by the
   strict-strengthened answers; agreement further requires a complete stochastic
   group, and the excluded count is reported beside it.
@@ -295,7 +305,7 @@ Denominators, per metric family:
 - **Task 3** -- the blind-check rates divide by the strict-strengthened answers
   that actually received a verdict; `task3_strict_unaudited_n` reports the rest
   rather than shrinking the denominator silently. The verdicts are clustered on
-  the *audited* Task 2 request, not on the audit's own request.
+  their own Task 3 request. The source Task 2 request is retained separately.
 
 Task 3 audits are selected by pinning each model to the audit whose registry
 `notes` name the Task 2 run already chosen for that model, and their items are
@@ -337,6 +347,12 @@ The snapshots committed under `outputs/` predate this change: their
 request-clustered primaries and the seed-clustered pair alongside.
 
 ## 7. Answer length and bloat
+
+Pooled mean word counts use `requirement_word_count_n`, the number of outputs
+contributing a finite word count, as their weight. They do not use planned
+`n_items` or the subset with classifiable modality. A missing word count is
+excluded and never treated as zero. Word-count comparisons are descriptive;
+interpret associations with strengthening within model and source modality.
 
 `answer_length_fields` (`scripts/eval_utils.py:5308`) adds
 `requirement_word_count`, `source_word_count`,

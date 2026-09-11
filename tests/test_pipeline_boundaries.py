@@ -231,9 +231,11 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
     def test_checked_weak_modality_probe_rows_are_balanced(self):
         rows = eu.read_csv_rows("data/processed/weak_modality_probe_items.csv")
 
-        self.assertEqual(len(rows), 80)
-        self.assertEqual(len({row["item_id"] for row in rows}), 80)
-        self.assertEqual(len({row["seed_id"] for row in rows}), 20)
+        # All 180 seeds since the 2026-09-10 rerun (the probe covers the full
+        # benchmark, see docs/ablation_proposals.md); previously a 20-seed subset.
+        self.assertEqual(len(rows), 720)
+        self.assertEqual(len({row["item_id"] for row in rows}), 720)
+        self.assertEqual(len({row["seed_id"] for row in rows}), 180)
         self.assertEqual({row["template_id"] for row in rows}, self.WEAK_TEMPLATES)
         self.assertEqual({row["source_modality"] for row in rows}, {"nice_to_have"})
         self.assertEqual({row["task2_gold_modality"] for row in rows}, {"nice_to_have"})

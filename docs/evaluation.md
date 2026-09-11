@@ -39,7 +39,7 @@ For each accepted seed capability, generate four controlled source variants:
 
 The benchmark holds functional content constant and varies only requirement strength. This makes modality preservation and over-commitment measurable without relying on naturally occurring modality labels.
 
-Before treating weak-intent findings as paper-ready, complete `docs/weak_modality_construct_review.csv` with two reviewer judgments. Every weak template should be marked weaker than `SHOULD/recommended` on the study scale. The tracked file is currently filled by an author-delegated LLM-assisted review in both reviewer slots (declared in `reviewer_role`) and is pending human confirmation.
+Human validation is complete, as confirmed by the author on 2026-09-04, and will be repeated before submission. The original LLM-assisted judgments remain separately identified. See [validation review](validation_review.md) for the scope and the wording checks' limitations; no independent two-human agreement is claimed.
 
 The full template inventory, including the `SHALL` swap and the four weak-intent phrasing-probe templates, is exported to `outputs/modality_template_inventory.csv` / `.md` by `eval_utils.write_main_modality_template_inventory`.
 
@@ -111,7 +111,7 @@ Core correctness and calibration:
 
 Task 1 headline risk:
 
-- `unsupported_mandatory_acceptance@tau`: among non-mandatory sources, the fraction assigned `p_yes >= tau` for the mandatory candidate.
+- `unsupported_mandatory_acceptance@tau`: among valid answers to non-mandatory sources, the fraction returning `yes` for the mandatory candidate with reported confidence at least `tau`.
 
 Task 2 headline risks:
 

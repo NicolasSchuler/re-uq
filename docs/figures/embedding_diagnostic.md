@@ -1,130 +1,92 @@
-# Embedding diagnostic figure (RQ3)
+# Embedding diagnostic figure
 
-> **Status: this page describes the committed PDF, which is one revision behind the
-> script.** `plot_embedding_diagnostic_figure_v2.py` now selects the
-> **requirement-only** substrate for the target bars (`mlx / reqonly / seed`:
-> 0.707 global, 0.613 / 0.612 / 0.620 within level) and shows the label-prefixed
-> 0.822 as a separate, hatched **leakage control**. The prefixed string begins
-> `modality: <predicted label>` and strengthening is derived partly from that
-> label, so it cannot serve as the headline substrate. The numbers, PDF, LaTeX
-> caption and the paper's Table 1 below still show the previous prefixed
-> configuration; rerun the commands under **Reproduce** to bring them in line.
+Status: the manuscript contains an explicit rerun placeholder. The existing
+PDFs are archived diagnostics and must not be presented as revised results.
 
-Paper figure showing that black-box text embeddings encode the **input commitment
-level** and **source dataset** of a generated requirement, but not whether the
-model **strengthened** it — the strengthening signal that a global classifier
-appears to pick up collapses to chance once the input level is held fixed.
+Figure 2 retains a horizontal comparison with three separate groups:
 
-- `docs/figures/embedding_diagnostic.pdf` — the paper figure (single AUROC bar chart)
-- `docs/figures/embedding_diagnostic.png` — raster preview
-- `docs/figures/embedding_diagnostic_tsne_supp.{pdf,png}` — **supplementary only**
-  (the two t-SNE maps dropped from the paper figure), for the replication package
-- Data: `outputs/embedding_diagnostic/probe_grid_summary.{csv,md}` (full factorial),
-  `outputs/embedding_diagnostic/task2_reqonly_mlx_embeddings.npz` (requirement-only re-embedding cache)
+- Requirement-only predictions of strict strengthening in the corresponding
+  single-pass output, overall and within each nonmandatory source modality.
+- The same prediction with the sampled declared modality added to the text.
+- Auxiliary predictions of source modality and dataset-by-keyword origin.
 
-## What the figure shows (v2)
+The classifier reads sampled requirement text. The primary strengthening target
+belongs to the separate single-pass output, not to the text being embedded.
+Adding a declared label is an input comparison; a performance change alone does
+not demonstrate target leakage. Auxiliary targets also answer different questions.
 
-A single horizontal bar chart. Every bar is a held-out **AUROC** (the one metric,
-named on the x-axis; 0.5 = chance, 1.0 = perfect). The multi-class probes use
-macro-averaged one-vs-rest AUROC; the strengthening probes are binary AUROC. Two
-visually separated groups:
+The plotting selectors and manuscript macros use capability grouping. Compare
+input representations on the same target, eligible observations, and capability
+splits. All preprocessing is fitted within the training split.
 
-**Context (not the target)** — what the embedding trivially encodes:
+Analysis/export support is implemented; experimental evidence is pending.
+`diagnose_embedding_separability.py` writes:
 
-| Bar | AUROC | probe_grid row |
-|---|---|---|
-| Input commitment level | **0.84** | `mlx / reqonly / item / global / source_modality` |
-| Source dataset | **0.73** | `mlx / reqonly / item / global / dataset_variant` |
+- `probe_grid_predictions.jsonl`: identity of each held-out sampled text, original capability
+  and source-condition identity, item, source model/run, sample index, input
+  condition/backend, target and observed target value, classifier, ordered class
+  labels, probabilities, and fold. The source artifact directory and item/sample indices resolve the sampled text
+  and corresponding single-pass requirement in the ACSE cache. Only successful
+  fits have predictions. Grid predictions are streamed per analysis cell.
+- `probe_grid_folds.csv`: training/test sample and group counts, class counts,
+  status and unavailable reasons, iteration count and limit, convergence warnings,
+  fitting duration, estimator settings, training accuracy/log loss, and available
+  training/validation score histories.
+- `probe_grid_summary.csv` / `.md`: recomputable AUROC/AP, AP baseline, ordered
+  classes and class counts for eligible and evaluated samples, evaluated fold IDs,
+  excluded samples, capability counts, fitting-review flags, and 95% intervals.
 
-**Target: was the text strengthened?** — what we actually want to detect
-(**these three match the paper's Table 1 exactly**):
+For each target/scope the eligible observations are the intersection of usable
+inputs across representations, recognized sampled labels, identified capabilities,
+valid targets, and (for strengthening) classifiable corresponding output wording.
+Unclassified or failed deterministic outputs are not negative target examples.
+The same observations, labels, ordering and seeded grouped splitter give comparable
+representations identical folds. Capability grouping (`seed`) holds all samples,
+modalities, models and keyword renderings of a capability together. Item grouping
+remains a separate sensitivity analysis; only capability grouping feeds Figure 2
+and manuscript macros. PCA, SVD, scaling and text vectorization remain fold-local.
 
-| Bar | AUROC | probe_grid row |
-|---|---|---|
-| Global classifier (all inputs pooled) | **0.822** | `mlx / prefixed / seed / global / deterministic_strict_text_overcommit` |
-| Within recommended-only inputs | **0.519** | `mlx / prefixed / seed / source_modality=recommended / deterministic_strict_text_overcommit` |
-| Within optional-only inputs | **0.582** | `mlx / prefixed / seed / source_modality=optional / deterministic_strict_text_overcommit` |
-| Within weak-intent inputs | **0.600** | `mlx / prefixed / seed / source_modality=nice_to_have / deterministic_strict_text_overcommit` |
+The reported score is the **equal mean of evaluable held-out folds**, not a pooled
+OOF score and not a sample-size-weighted fold mean. Binary AP uses the strengthened
+class and its baseline is the mean positive prevalence in those same folds.
+Auxiliary multiclass AUROC/AP are macro one-vs-rest; macro AP's baseline is `1/K`
+for `K` classes. Fold standard deviations remain descriptive columns only.
 
-All three within-level strata are shown so the check is not cherry-picked to two
-of them. The **mandatory** stratum is omitted because it is *undefined*: mandatory
-is the top of the ordinal scale (`ORDINAL_STRENGTH` in `eval_utils.py`), so no
-generated text can be *stronger* — there are zero positives and no AUROC. For
-**weak-intent** inputs, "strengthened" nearly coincides with "contains any
-explicit modal word," so its 0.600 is a looser test than the recommended/optional
-strata (which require *must*-vs-*should* / *should*-vs-*may* distinctions); it is
-still near chance, which is why showing it strengthens rather than weakens the
-claim. These four bars match the paper's Table 1 exactly.
+Intervals use a deterministic percentile bootstrap of **capabilities**, retaining
+all their repeated samples (and associated model/keyword observations), with
+fixed predictions and fixed folds. Every draw must retain all target classes in
+every evaluated fold; the number of defined draws is recorded. Fewer than 90%
+defined draws (or fewer than two defined draws) makes the interval unavailable.
+This describes held-out cohort uncertainty conditional on the fitted classifiers
+and splits. It does not quantify retraining, alternative split selection, or
+new model-generation uncertainty. The CLI accepts `--bootstrap-samples`; the
+one-command driver passes its analysis bootstrap setting.
 
-The global-vs-within comparison (0.822 → 0.519 / 0.582 / 0.600) is on a **single substrate**
-(mlx / prefixed / seed / deterministic-strict), so the collapse is a clean,
-same-metric, same-target contrast: holding the input level fixed removes the
-signal, i.e. the global 0.822 is inflated by **input-level leakage**.
+Missing target classes, insufficient groups, failed fitting, and test folds missing
+classes are exported explicitly. Class-deficient test-fold predictions are retained
+but excluded from ranking summaries. Zero evaluable folds yields unavailable
+estimates. The HGB fit uses up to 300 boosting iterations and records its loss
+history with training-loss stopping (20 rounds without improvement, no separate
+internal validation subset). Logistic regression retains its 1,000-iteration
+limit. Limit hits, convergence warnings, no training-loss improvement, or too few
+training samples for a tree split flag the summary and plot for fitting review. Training-loss stopping is not evidence of generalization or convergence;
+inspect the curves and limits before interpreting weak performance. No fitting
+budget extension or experimental comparison was run as part of implementation.
 
-### Metric / substrate notes
+The horizontal figure reads estimates and interval bounds from the current summary,
+separates prediction targets, displays unavailable scores/intervals explicitly, and
+marks fitting-review flags. `export_paper_numbers.py` reads the same summary and
+exports intervals, baseline, sample/capability/fold counts as additional macros.
+`numEmbAddedLabel` names the added-input comparison; `numEmbLeakControl` is retained
+only as a legacy macro alias, without a leakage claim. No historical score constants
+are used. The standalone `probe_acse_embedding_separability.py` also exports held-out
+predictions and the same summary convention.
 
-- **Metric consistency** (the critical fix): all five bars are AUROC. The context
-  0.84/0.73 were *already* AUROC (macro-OvR), not accuracy — `roc_auc_score(...,
-  multi_class="ovr", average="macro")` in `diagnose_embedding_separability.py` —
-  so nothing had to be recomputed; no metrics are mixed.
-- **Context substrate** is the de-circularized *requirement-text-only, item-grouped*
-  probe. We deliberately do **not** use the prefixed source-modality probe (AUROC
-  0.96), because there the modality word is literally prepended to the embedded
-  string, so 0.96 just reads the label off the prefix. The honest 0.84/0.73 make
-  the "input level is recoverable" point without that circularity. (Pinning
-  dataset to 0.73 specifically requires item-grouping; seed-grouping gives ~0.82.)
-- **Target substrate** is `prefixed / seed`, exactly the configuration the paper's
-  Table 1 reports, so bars 3–5 match Table 1 to the digit. The global bar is the
-  one-shot (`deterministic_strict`) variant, 0.822; the sampled variant is 0.828.
-- The figure script **asserts** bars 3–5 equal 0.822 / 0.519 / 0.582 and errors
-  out if a regenerated `probe_grid_summary.csv` ever drifts from Table 1.
+Before publication, run the configured cohort, inspect actual fitting diagnostics
+and exclusions, check intervals and class balance, and regenerate the figure.
+The manuscript's result placeholders and stale archived figures remain unchanged.
 
-## LaTeX include
-
-```latex
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\linewidth]{figures/embedding_diagnostic.pdf}
-  \caption{\textbf{Black-box text embeddings reveal what kind of input a generated
-  requirement came from, but not whether the model strengthened it.} Held-out AUROC
-  of a probe on \texttt{Qwen3-Embedding-0.6B} embeddings of Task~2 generated
-  requirements (0.5~=~chance, 1.0~=~perfect). The input's commitment level ($0.84$)
-  and its source dataset ($0.73$) are easily recovered. A global classifier appears
-  to detect strengthening ($0.822$), but within a single input level the signal
-  collapses to chance (recommended $0.519$, optional $0.582$, weak intent $0.600$;
-  mandatory is undefined): the global number partly reflects the input condition
-  rather than a genuine strengthening signal.}
-  \label{fig:embedding-diagnostic}
-\end{figure}
-```
-
-The two t-SNE maps (previously panels a/b) are exported separately as
-`embedding_diagnostic_tsne_supp.pdf` for the replication package; include them in
-the supplement if desired, not in the main paper.
-
-## Reproduce
-
-```bash
-# optional MLX dep (the Qwen3 model is already cached under .cache/huggingface)
-VIRTUAL_ENV=.venv uv pip install mlx mlx-embeddings
-
-export HF_HOME=$PWD/.cache/huggingface HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-
-# factorial probe (MLX/TF-IDF x prefixed/reqonly x seed/item) + AUPRC
-.venv/bin/python scripts/diagnose_embedding_separability.py --models hgb
-
-# the paper figure (single AUROC bar chart) -> docs/figures/embedding_diagnostic.pdf
-.venv/bin/python scripts/plot_embedding_diagnostic_figure_v2.py
-
-# supplementary t-SNE maps -> docs/figures/embedding_diagnostic_tsne_supp.pdf
-.venv/bin/python scripts/plot_embedding_diagnostic_tsne_supp.py
-```
-
-Scripts:
-- `scripts/diagnose_embedding_separability.py` — builds the four feature sets,
-  reduces each to 128 dims, runs grouped CV, writes `outputs/embedding_diagnostic/`.
-- `scripts/plot_embedding_diagnostic_figure_v2.py` — the single-bar paper figure
-  (pulls the five bars from `probe_grid_summary.csv`; asserts Table-1 agreement).
-- `scripts/plot_embedding_diagnostic_tsne_supp.py` — the supplementary t-SNE maps.
-- `scripts/plot_embedding_diagnostic_figure.py` — the previous three-panel figure
-  (superseded; kept for reference).
+Figure 3 is reserved for paired ablation changes with intervals, matched counts,
+and a zero-change reference. Keep document-context results separate from the
+main benchmark. The t-SNE files remain exploratory supplementary material;
+visible overlap is not evidence that embeddings lack relevant information.

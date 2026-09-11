@@ -11,6 +11,9 @@ Modal-Force Strengthening in LLM-Assisted Requirements Engineering."**
 > for every headline number is in [`docs/aggregation.md`](docs/aggregation.md).
 > Known gaps and planned work are in [`TODO.md`](TODO.md).
 
+To launch the prepared experiment campaign, follow the
+[experiment rerun runbook](docs/experiment_runbook.md).
+
 ## Graphical Abstract
 
 [![Graphical abstract showing a controlled modality benchmark feeding an LLM-assisted requirements engineering evaluation and uncertainty-quantification metrics.](docs/figures/graphical_abstract.png)](docs/figures/graphical_abstract.pdf)

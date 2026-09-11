@@ -2,6 +2,10 @@
 
 This is the command-first path for reproducing the publication artifacts. The notebooks are useful for inspection, but these scripts are the canonical interface for provider runs and final analysis.
 
+For the prepared campaign, follow the [experiment rerun runbook](experiment_runbook.md)
+for ordered setup, credentials, configuration, smoke checks, launch, monitoring,
+resume and result review. This page is the detailed command reference.
+
 ## The Whole Rerun, One Command
 
 Everything below is still the canonical, fine-grained interface. For a full
@@ -26,14 +30,46 @@ Everything else about a run stays in `conf/profile/<id>.yaml`.
 | `--fake-completion` | Verify the whole chain with synthesized answers, in the smoke tree, for free. The MLX-backed steps and the macro file are skipped (they need embeddings a fake run does not produce). |
 | `--only <stage>` | `preflight`, `cohort`, `task3`, `ablations`, `analysis`. Repeatable. |
 
-It is resumable: `outputs/rerun_state.json` records each cell's status and run
-id, a failed cell is retried once as `--mode resume` on the same run id, and
-re-invoking the command continues where it stopped. Nothing about a cell is
-re-requested twice.
+It is resumable: `outputs/rerun/<run_group_id>/state.json` records each cell's
+status, run ID, and resolved configuration. Re-invoking the same command skips
+complete cells and resumes unfinished ones, including the phrasing probe.
+Failed transport or parsing attempts can be retried; completed item records
+are reused. A changed configuration requires a new `run_group_id` (or a new
+`--state` path), so old pre-fix runs cannot silently satisfy the new plan.
 
-Run `--fake-completion` once before spending anything: it exercises the same
-code path end to end, and preflight reports missing credentials, missing
-benchmarks and a missing embedding backend before the first request.
+All generation stages finish for one model before the next model starts:
+Task 1/2 → blind audits of those exact outputs → that model's ablations.
+The local endpoint must route/load by the requested model name. Both profiles
+contribute to pooled estimates and retain separate per-model table groups.
+Each ablation uses the **first model in each profile's list** unless explicit
+`models` are supplied in `conf/rerun/default.yaml`; reorder the lists to choose
+representatives. See [ablation proposals](ablation_proposals.md).
+
+The driver forces request transcripts, events, and progress files on:
+
+| Artifact | Location |
+| --- | --- |
+| Stage stdout/stderr, command and exit status (appended) | `outputs/rerun/logs/*.log` |
+| Per-run log | `data/processed/logs/<safe_run_id>.log` |
+| Complete request payloads, response bodies, retries and HTTP error bodies | `data/processed/logs/<safe_run_id>.transcript.jsonl` |
+| Resolved configuration (key environment-variable names only) | `data/processed/logs/<safe_run_id>.resolved.yaml` |
+| Parsed item rows and error records | `data/processed/model_outputs_raw*.jsonl` |
+| Events, progress, registry | `data/processed/run_events*.jsonl`, `run_progress_live*.csv`, `run_registry*.csv` |
+| Exported CSVs and generated LaTeX macros | `outputs/paper_*.csv`, `outputs/paper_numbers.tex` |
+| Candidate regenerated figures | `outputs/rerun/figures/` |
+
+The driver uses exact recorded run IDs for audits, exports, embedding caches,
+and ablation comparisons. The manuscript's RQ tables consume generated row
+macros, but its numbers file is not overwritten automatically: integrate the
+fresh export when reviewing the rerun results. Current manuscript values are
+provisional. A zero denominator or undefined AUROC remains missing, never
+converted into a success rate or a chance score.
+
+Run `--fake-completion` to check execution without credentials. Its state,
+generated config, analysis, and stage logs live under `outputs/smoke/`; raw
+records use the smoke tree and per-run logs remain named by smoke run IDs.
+This checks execution and table exports, not real providers or neural
+embedding results. `--dry-run` needs no API keys and writes no state.
 
 ## Task → Command Cheat-sheet
 
@@ -54,7 +90,7 @@ benchmarks and a missing embedding backend before the first request.
 | Batching ablation table | `.venv/bin/python scripts/compare_batching_ablation.py` (after the three `+experiment=batching_ablation` arms) |
 | Weak-phrasing probe | `.venv/bin/python scripts/run_weak_modality_probe.py --config run_configs/current_run.json --profile zai --model glm-5.1 --dataset nice --mode full` |
 | Resolve Task 3 source runs | `.venv/bin/python scripts/task3_sources.py --config run_configs/current_run.json` |
-| Export cross-cell paper tables | `.venv/bin/python scripts/export_paper_tables.py` (selects the rerun group `provider-matrix-v2-2026-05`; add `--run-group-id provider-matrix-2026-05 --models glm-4.5-air glm-4.7 glm-5 glm-5-turbo glm-5.1 kit.gemma4-31b-it` for the archived runs) |
+| Export cross-cell paper tables | `.venv/bin/python scripts/export_paper_tables.py` (selects the rerun group `modality-rerun-2026-09`; add `--run-group-id provider-matrix-2026-05 --models glm-4.5-air glm-4.7 glm-5 glm-5-turbo glm-5.1 kit.gemma4-31b-it` for the archived runs) |
 | Recompute request- and seed-clustered CIs without touching `outputs/` | `.venv/bin/python scripts/export_paper_tables.py --output-dir /tmp/reuq-cluster-ci` (see §6) |
 | Regenerate the manuscript's number macros | `.venv/bin/python scripts/export_paper_numbers.py --strict` (add `--output manuscript/numbers.tex` to write the paper; the default writes `outputs/paper_numbers.tex` and prints a macro-level diff). `--strict` refuses to write when a macro would carry a non-finite value or a consistency check disagrees, so the manuscript never receives a `nan` |
 | Print the Task 3 queue without running it | `TASK3_DRY_RUN=1 bash scripts/enqueue_task3_runs.sh` |
@@ -112,16 +148,21 @@ Edit `run_configs/current_run.json` for the provider, model, endpoint, concurren
 
 The tracked example configs define Task 1 and Task 2 as the primary benchmark tasks. Task 3 is run separately after a complete Task 2 run.
 
-**A rerun differs from the archived runs in labels, not in prompts.** The
+**The rerun protocol differs from the archived runs.** The
 configs shipped with the first release could not have produced the cohort
 (`kit.gemma4-31b-it` ran under a `kit_toolbox` profile, not `institutional_llm`;
 the `zai` profile listed 3 of the 5 GLM models; every profile said
 `batch_size: 8` where the runs used 16). That is fixed, but the run labels still
 differ: the archived raw rows carry `prompt_version "v1"` and `run_group_id
 provider-matrix-2026-05`, while the current configs write `v2-conf01` and
-`provider-matrix-v2-2026-05`. The prompt text is unchanged — the batch prompt
+`modality-rerun-2026-09`. The prompt text is unchanged — the batch prompt
 hashes in the archived rows match the current builder — so treat the difference
-as bookkeeping. Details in
+as bookkeeping for the old prompt-version change only. The new rerun also
+sends reproducible, distinct seeds for stochastic repetitions, persists
+embedding configuration, and records complete requests and responses.
+The deterministic request uses the configured seed; stochastic repetition
+indices 0–4 use seed+1 through seed+5. Provider support for seeds remains
+provider-dependent. Details in
 [`docs/experimental_setup.md`](experimental_setup.md) §5.3.
 
 ## 3. Task 1 And Task 2 Runs

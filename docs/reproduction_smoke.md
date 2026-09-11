@@ -93,10 +93,10 @@ If any of the above fail, the pipeline plumbing has regressed. If they succeed, 
 
 ## What This Does **Not** Verify
 
-- Real provider response parsing under network conditions, rate limits, or structured-output enforcement.
-- Batching behaviour against a real model. Fake completions always parse, so the batch-fallback path (re-sending a failed batch as single items) is not exercised end-to-end.
-- The construct-validity gate (`docs/weak_modality_construct_review.csv`) — that still needs a two-reviewer pass before paper-facing weak-intent claims, and the tracked file is currently LLM-assisted and pending human confirmation.
-- The analysis gates in `scripts/generate_evaluation_analysis.py` in their strict form (registry completeness, confidence-scale contract, prompt-row freshness) — the smoke analysis relaxes them.
-- Any numeric result. Fake completions carry no information about model behaviour.
+- Real provider response parsing, network failures, rate limits, or structured-output enforcement.
+- Batch fallback against a real model. Fake completions always parse.
+- The strict coverage and provenance gates relaxed for a truncated smoke run.
+- Any scientific result. Fake completions contain no evidence about model behavior.
+- Human semantic validation. The author has completed it and will repeat it; see [validation review](validation_review.md).
 
 For the real path, see [`docs/reproduction.md`](reproduction.md); for what the real runs actually sent, see [`docs/experimental_setup.md`](experimental_setup.md).

@@ -54,9 +54,9 @@ table says so rather than hiding it.
 
 The seed review table is `data/processed/seeds_review_pure.csv`
 (`include`, `capability_text_final` are the reviewer's columns, as for the
-other datasets); the capability texts were taken from the automatic
-extraction and have not yet had a separate human pass, which the ablation
-write-up must state.
+other datasets). The author has completed human validation of the capability
+texts, originally produced by automatic extraction, and will repeat it before
+submission. See [validation review](validation_review.md).
 
 **Items.** `--stage benchmark` renders the 180 seeds through the unchanged
 four modality templates (`eu.source_statement`: MUST / SHOULD / MAY / "It
@@ -149,48 +149,70 @@ tables (`scripts/export_paper_tables.py` gates on the run group). Each
 Hydra run writes its resolved config next to the logs and its digest into the
 registry `notes` column.
 
-## 5. The table
+## 5. The table (implemented; experimental results pending)
 
-`scripts/compare_context_ablation.py` selects the latest complete, fully
-covered run per `(model, item_context)` (a blank registry column reads as
-`bare`, exactly like `batch_order`), scores the deterministic Task 2 rows
-with the same calls as `scripts/compare_run_matrix.py`
-(`eu.benchmark_rows_with_current_raw_outputs` → `eu.build_uq_scores`), and
-joins the author marker back on `item_id`. It writes:
+`scripts/compare_context_ablation.py` selects the latest complete, fully covered
+MUST run per `(model, item_context)` in the PURE context run group. The rerun
+driver also restricts selection to its recorded run IDs. It scores deterministic
+Task 2 observations only; comparison does not compute stochastic embeddings.
 
-- `outputs/context_ablation_summary.csv` / `.md`: one row per model × arm ×
-  stratum with `n`, the number of rows whose generated text yielded a
-  modality, declared-label accuracy, strict and broad text strengthening
-  with request-clustered bootstrap CIs (`eu.text_over_commitment_ci_fields`,
-  [`aggregation.md`](aggregation.md) §6) and the seed-clustered pair alongside
-  as `*_seed_ci_low` / `*_seed_ci_high`,
-  and in the weak-intent stratum the README-style p ≥ 0.90 strict rate.
-- `outputs/context_ablation_summary_deltas.csv` and the second table of the
-  Markdown: `document − bare` per model × stratum × metric with a **paired**
-  cluster bootstrap CI (`eu.bootstrap_seed_metric_delta`): each iteration
-  draws one resample and evaluates both arms on it before differencing.
-  Resampling the arms independently would treat paired observations as
-  unrelated and overstate the interval. Pairing and resampling are different
-  units: rows are **paired by seed**, because that is the same capability seen
-  bare and in its document, while the **resampling unit is the request**. A
-  seed's four source conditions sit inside one request, so a request contains
-  whole pairs and is only the coarser unit. The two arms are separate runs and
-  their request ids differ, but the partition of seeds into requests is a
-  property of the batching and is the same in both, so each paired seed is
-  assigned to the request observed for it in the bare arm.
-  `delta_ci_low` / `delta_ci_high` are request-clustered,
-  `delta_seed_ci_low` / `delta_seed_ci_high` the seed-clustered pair, and
-  `delta_cluster_field` / `n_delta_clusters` record the unit used. The cohort is
-  the seeds *both* arms answered, built once before any resampling: a seed only
-  one arm answered is excluded up front and counted, so the number of pairs
-  cannot vary from replicate to replicate. `n_complete_pairs` and
-  `n_excluded_single_arm` report that cohort on every delta row.
-- `outputs/context_ablation_summary_provenance.json`: the run ids, start
-  times, batching settings and `resolved_config_sha` behind every row.
+The original document/corpus and requirement identifier establish the stable
+capability identity. The current benchmark resolves raw sources with different
+arm-local IDs by their exact source statement and modality; ambiguous or stale
+source mappings fail explicitly. Pairing keys include model, dataset, keyword
+variant, original requirement identity, and transformed modality. Raw retry
+attempts are first deduplicated by the existing completion-key rule. Multiple
+remaining observations with one pairing identity are excluded from both arms,
+never resolved by choosing an arbitrary row.
 
-Strata: `all`; `weak_intent` (source modality `nice_to_have`, the paper's
-headline condition); `marker_M` and `marker_O` (the author's marker on the
-seed requirement, 155 and 25 seeds).
+Eligibility is metric-specific: label accuracy requires a valid parsed response
+with a recognized declared modality in both arms. Strict and broad wording rates
+also require classifiable text in both arms. Thus different surviving conditions
+of one capability cannot form a pair. Each metric's `bare`, `document`, `delta`,
+and intervals use exactly that matched cohort. Empty cohorts produce blank
+estimates and an explicit reason.
+
+Outputs:
+
+- `context_ablation_summary.csv` / `.md`: **full-arm descriptive** estimates,
+  explicitly stamped `estimate_cohort=full_arm_descriptive`. `n` counts observed
+  deterministic answers, including failed answers; `n_failed_items` counts
+  failed answers and `n_unclassified_items` counts valid answers whose wording
+  is unclassified. `n_text_readable` is the wording denominator.
+- `context_ablation_summary_deltas.csv`: matched estimates and differences;
+  `full_arm_bare_descriptive` / `full_arm_document_descriptive` are separate
+  descriptions of all eligible arm observations. `n_bare` / `n_document` count
+  observed answers. `n_matched_items` counts exact source-condition pairs;
+  `n_matched_capabilities` counts distinct original requirements represented.
+  `n_unmatched_items` counts identities observed in only one arm;
+  `n_excluded_ineligible_items` counts unique identities present in both arms
+  but failing either arm's metric eligibility. Duplicate identities and their
+  observation-row counts, missing-identity rows, per-arm failed/unclassified
+  answers and eligible answers are separate columns. Legacy `n_complete_pairs`
+  and `n_excluded_single_arm` now explicitly count **items**, not capabilities.
+  Duplicate, unmatched, and ineligible identity exclusions are disjoint.
+- `context_ablation_summary_provenance.json`: selected runs and their registry
+  metadata, including resolved configuration references in `notes`.
+
+Bootstrap draws always retain both members of each exact pair. The primary
+request clusters are connected components of the request memberships in **both**
+arms. Identical partitions reduce to ordinary paired request resampling; crossing
+partitions merge requests until every dependent pair is kept together. They are
+not assumed to match merely because nominal batch sizes match. If any matched
+answer lacks a request ID, the entire primary interval falls back to capability
+clustering, with the reason recorded in `cluster_note`. The companion
+`delta_seed_ci_*` always resamples capabilities. `delta_cluster_field` and
+`n_delta_clusters` identify the actual primary resampling unit and count.
+Intervals with fewer than two clusters are unavailable. These percentile
+intervals describe the observed matched cohort, not failures excluded from it.
+
+Breakdowns include `all`, `weak_intent`, each transformed modality, each original
+marker (`M`, `O`), and marker × transformed-modality intersections, separately
+for every model. Context results remain separate from the headline benchmark.
+
+Synthetic regression fixtures verify these contracts; existing experimental
+outputs are stale and were not regenerated. Rerun measurements and interpretation
+remain pending.
 
 ## 6. Reading it
 
@@ -220,8 +242,8 @@ seed requirement, 155 and 25 seeds).
 - One domain (railway signalling and radio), two documents, one variant
   (MUST), Task 2 only, deterministic pass only.
 - The capability texts of the 180 seeds come from the automatic extraction
-  without a separate human pass yet, the same caveat the weak-intent
-  construct review carries.
+  with human validation completed by the author. This does not establish
+  stakeholder intent outside the controlled transformation.
 - Naturally occurring stakeholder statements (for example Apache Jira "Wish"
   issues with a declared priority) are a separate track; candidates are in
   [`docs/external_validity_datasets.md`](external_validity_datasets.md).

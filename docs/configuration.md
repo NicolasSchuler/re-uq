@@ -96,7 +96,7 @@ carries the key, never a key. The name itself is indirected through
 a different variable without editing the file:
 
 ```bash
-RE_UQ_ZAI_API_KEY_ENV=MY_TEAM_ZAI_KEY .venv/bin/python scripts/run.py profile=zai model=glm-5.1
+RE_UQ_ZAI_API_KEY_ENV=MY_TEAM_ZAI_KEY .venv/bin/python scripts/run.py profile=zai model=glm-5.3
 ```
 
 ## 3. Override syntax
