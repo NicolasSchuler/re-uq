@@ -126,6 +126,7 @@ def load_embeddings_and_rows(
             sample_rows.append(
                 {
                     "global_embedding_index": offset + local_index,
+                    "source_artifact_dir": str(artifact_dir),
                     "local_embedding_index": sample.get("embedding_index", local_index),
                     "dataset_id": dataset_id,
                     "benchmark_variant": variant,
@@ -139,6 +140,11 @@ def load_embeddings_and_rows(
                     "pred_modality": sample.get("pred_modality", ""),
                     "source_modality": source_modality,
                     "drift_status": status,
+                    "source_statement": item.get("source_statement", ""),
+                    "task2_requirement": item.get("task2_requirement", ""),
+                    "deterministic_text_modality_parse_status": item.get(
+                        "text_modality_parse_status", ""
+                    ),
                     "strict_text_overcommit": item.get("strict_text_overcommit", ""),
                     "text_overcommit": item.get("text_overcommit", ""),
                     "acse_uncertainty_score": item.get("acse_uncertainty_score", ""),

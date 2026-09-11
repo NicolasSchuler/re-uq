@@ -1,27 +1,9 @@
-"""Diagnostic probe: does embedding *geometry* encode modal-force drift, or only
-the input commitment level and corpus identity it is confounded with?
+"""Evaluate matched input conditions on grouped held-out predictions.
 
-This extends ``probe_acse_embedding_separability`` along three axes the paper
-under-reports:
-
-1. text variant -- ``prefixed`` (the cached ``modality: <label> requirement: ...``
-   string, which leaks the predicted label) vs ``reqonly`` (the generated
-   requirement text alone, the honest substrate for "what the wording reveals").
-2. backend -- ``mlx`` (neural meaning embedding) vs ``tfidf`` (char n-gram, a
-   near-oracle for the lexical modal keyword that *defines* strict overcommit).
-3. grouping -- ``seed`` (an item's text straddles folds) vs ``item`` (a held-out
-   item is genuinely unseen; the conservative test).
-
-For every cell it reports AUROC *and* AUPRC against the prevalence baseline, so
-the rare-positive collapse is visible as lift-over-chance rather than hidden
-behind an AUROC near 0.5.
-
-Nothing is fitted before the fold split. Dimensionality reduction and the TF-IDF
-vocabulary are pipeline steps, so both are fitted on the training rows of each
-fold; fitting either once over all observations would let a held-out fold help
-choose the axes and the vocabulary it is later scored in, which inflates every
-number in ``probe_grid_summary.csv`` -- the file the paper figure and
-``export_paper_numbers.py`` read.
+Sampled text predicts strict strengthening in the corresponding separate
+single-pass output. The sampled declared label is additional input. Auxiliary
+source-modality and dataset-by-keyword targets are kept separate. Learned
+preprocessing is fitted only within training folds.
 """
 
 from __future__ import annotations
@@ -46,9 +28,11 @@ try:
     )
     from probe_acse_embedding_separability import (
         add_probe_labels,
+        eligible_observations,
         embed_requirement_only,
         fold_metrics,
         group_values,
+        prediction_summary,
         summarize,
         target_values,
     )
@@ -59,9 +43,11 @@ except ModuleNotFoundError:  # pragma: no cover
     )
     from scripts.probe_acse_embedding_separability import (
         add_probe_labels,
+        eligible_observations,
         embed_requirement_only,
         fold_metrics,
         group_values,
+        prediction_summary,
         summarize,
         target_values,
     )
@@ -100,7 +86,7 @@ def build_feature_sets(
     requirements = [str(row.get("requirement", "")) for row in sample_rows]
     features: dict[str, dict[str, Any]] = {}
 
-    # --- MLX prefixed: cached embeddings (label leaks into the string) ---
+    # --- Cached embeddings of text plus sampled declared label ---
     features["mlx::prefixed"] = {
         "X": np.asarray(cached_mlx_prefixed, dtype=np.float32),
         "text_vectorizer": None,
@@ -149,12 +135,18 @@ def run_grid(
     n_splits: int,
     random_state: int,
     pca_components: int,
+    prediction_rows: list[dict[str, Any]] | None = None,
+    cell_callback=None,
 ) -> list[dict[str, Any]]:
     """Score every feature set, with reduction and vectorization inside the fold."""
     source_modalities = np.asarray(
         [str(row.get("source_modality", "")) for row in sample_rows], dtype=object
     )
     fold_rows: list[dict[str, Any]] = []
+    common_features = np.ones(len(sample_rows), dtype=bool)
+    for payload in features.values():
+        if np.asarray(payload["X"]).dtype != object:
+            common_features &= np.isfinite(payload["X"]).all(axis=1)
     for feature_key, payload in features.items():
         X_full = payload["X"]
         for group_mode in ("seed", "item"):
@@ -174,14 +166,20 @@ def run_grid(
                 ]
                 groups_scope = groups_full[mask]
                 for target in targets:
-                    y = target_values(rows_scope, target)
-                    if len(np.unique(y)) < 2:
-                        continue
+                    eligible = (
+                        eligible_observations(rows_scope, target)
+                        & common_features[mask]
+                    )
+                    eligible_rows = [
+                        r for r, keep in zip(rows_scope, eligible, strict=True) if keep
+                    ]
+                    y = target_values(eligible_rows, target)
                     for model_name in models:
-                        for row in fold_metrics(
-                            X=X_scope,
+                        predictions = []
+                        results = fold_metrics(
+                            X=X_scope[eligible],
                             y_raw=y,
-                            groups=groups_scope,
+                            groups=groups_scope[eligible],
                             target=target,
                             model_name=model_name,
                             scope=scope_name,
@@ -189,7 +187,31 @@ def run_grid(
                             random_state=random_state,
                             pca_components=pca_components,
                             text_vectorizer=payload["text_vectorizer"],
-                        ):
+                            sample_rows=eligible_rows,
+                            prediction_rows=predictions,
+                            expected_classes=sorted(
+                                {
+                                    str(r[target])
+                                    for r in rows_scope
+                                    if r.get(target, "") != ""
+                                }
+                            )
+                            if target in ("source_modality", "dataset_variant")
+                            else None,
+                        )
+                        metadata = {
+                            "feature_backend": payload["backend"],
+                            "text_variant": payload["text"],
+                            "feature_key": feature_key,
+                            "group_mode": group_mode,
+                        }
+                        predictions = [{**r, **metadata} for r in predictions]
+                        if prediction_rows is not None:
+                            prediction_rows.extend(predictions)
+                        for row in results:
+                            row["n_excluded_samples"] = len(rows_scope) - len(
+                                eligible_rows
+                            )
                             row.update(
                                 {
                                     "feature_backend": payload["backend"],
@@ -199,13 +221,21 @@ def run_grid(
                                 }
                             )
                             fold_rows.append(row)
+                        if cell_callback is not None:
+                            cell_callback(results, predictions)
             print(
                 f"[grid] {feature_key} group={group_mode}: cumulative fold rows={len(fold_rows)}"
             )
     return fold_rows
 
 
-def summarize_grid(fold_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def summarize_grid(
+    fold_rows: list[dict[str, Any]],
+    prediction_rows=None,
+    *,
+    iterations=1000,
+    seed=20260527,
+) -> list[dict[str, Any]]:
     by_cell: dict[tuple, list[dict[str, Any]]] = {}
     for row in fold_rows:
         key = (
@@ -224,9 +254,6 @@ def summarize_grid(fold_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         backend, text_variant = feature_key.split("::")
         auprc = base.get("average_precision_macro_mean", "")
         baseline = base.get("baseline_average_precision_mean", "")
-        lift = ""
-        if isinstance(auprc, float) and isinstance(baseline, float) and baseline > 0:
-            lift = round(auprc / baseline, 3)
         summary.append(
             {
                 "feature_backend": backend,
@@ -240,11 +267,44 @@ def summarize_grid(fold_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "auroc_std": base.get("auroc_macro_std", ""),
                 "auprc_mean": auprc,
                 "baseline_auprc": baseline,
-                "auprc_lift_over_baseline": lift,
+                # Filled below, once prediction_summary has had its say on
+                # auprc_mean and baseline_auprc.
+                "auprc_lift_over_baseline": "",
                 "balanced_accuracy_mean": base.get("balanced_accuracy_mean", ""),
                 "positive_rate": base.get("positive_rate_test_mean", ""),
+                "n_excluded_samples": rows[0].get("n_excluded_samples", 0),
+                **(
+                    prediction_summary(
+                        [
+                            r
+                            for r in prediction_rows
+                            if (
+                                r["feature_key"],
+                                r["group_mode"],
+                                r["scope"],
+                                r["target"],
+                                r["classifier"],
+                            )
+                            == (feature_key, group_mode, scope, target, model)
+                        ],
+                        rows,
+                        iterations=iterations,
+                        seed=seed,
+                    )
+                    if prediction_rows is not None
+                    else {}
+                ),
             }
         )
+    for row in summary:
+        ap, baseline = row.get("auprc_mean", ""), row.get("baseline_auprc", "")
+        row["auprc_lift_over_baseline"] = (
+            float(ap) / float(baseline)
+            if ap != "" and baseline != "" and float(baseline) > 0
+            else ""
+        )
+        if row["target"].endswith("text_overcommit"):
+            row["positive_rate"] = baseline
     return summary
 
 
@@ -263,6 +323,7 @@ def main() -> None:
     )
     parser.add_argument("--pca-components", type=int, default=128)
     parser.add_argument("--n-splits", type=int, default=3)
+    parser.add_argument("--bootstrap-samples", type=int, default=1000)
     parser.add_argument("--mlx-batch", type=int, default=256)
     parser.add_argument("--random-state", type=int, default=20260527)
     parser.add_argument(
@@ -297,15 +358,39 @@ def main() -> None:
     )
     del cached_mlx_prefixed
 
-    fold_rows = run_grid(
-        features,
-        sample_rows,
-        models=args.models,
-        n_splits=args.n_splits,
-        random_state=args.random_state,
-        pca_components=args.pca_components,
-    )
-    summary = summarize_grid(fold_rows)
+    summary = []
+    # Keep only one grid cell's held-out predictions in memory. The full cohort
+    # generates millions of records across representations, scopes and targets.
+    with (output_dir / "probe_grid_predictions.jsonl").open(
+        "w", encoding="utf-8"
+    ) as prediction_file:
+
+        def save_cell(folds, predictions):
+            for row in predictions:
+                prediction_file.write(json.dumps(row, sort_keys=True) + "\n")
+            prediction_file.flush()
+            summary.extend(
+                summarize_grid(
+                    folds,
+                    predictions,
+                    iterations=args.bootstrap_samples,
+                    seed=args.random_state,
+                )
+            )
+            print(
+                f"[summary] {folds[0]['feature_key']} {folds[0]['scope']} {folds[0]['target']}: {len(predictions)} predictions exported",
+                flush=True,
+            )
+
+        fold_rows = run_grid(
+            features,
+            sample_rows,
+            models=args.models,
+            n_splits=args.n_splits,
+            random_state=args.random_state,
+            pca_components=args.pca_components,
+            cell_callback=save_cell,
+        )
 
     eu.write_csv_rows(output_dir / "probe_grid_folds.csv", fold_rows)
     eu.write_csv_rows(output_dir / "probe_grid_summary.csv", summary)
@@ -318,6 +403,9 @@ def main() -> None:
         "models": args.models,
         "pca_components": args.pca_components,
         "n_splits": args.n_splits,
+        "bootstrap_samples": args.bootstrap_samples,
+        "held_out_predictions": "probe_grid_predictions.jsonl",
+        "uncertainty_scope": "capability bootstrap of fixed predictions; conditional on fitted models and splits",
         # Fitted per fold, so there is no single explained-variance figure to
         # report and no globally fitted vocabulary to size.
         "reduction": "fold-local",

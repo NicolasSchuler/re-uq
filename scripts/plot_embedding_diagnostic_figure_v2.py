@@ -1,42 +1,19 @@
-"""Paper figure (v2) for the embedding modal-force-drift diagnostic.
+"""Horizontal comparison of predictions from generated-requirement embeddings.
 
-A SINGLE horizontal bar chart, replacing the earlier three-panel (t-SNE a/b +
-bar c) figure. Every bar is a held-out **AUROC** (0.5 = chance, 1.0 = perfect),
-the one metric named on the x-axis. Multi-class probes (input level, dataset)
-use macro-averaged one-vs-rest AUROC; the strengthening probes are binary AUROC.
+The primary input is sampled requirement text; the primary target is strict
+strengthening of the separate single-pass output for the same source.
+Requirement text with the sampled declared modality prepended is an additional
+input comparison. It does not, by itself, establish target leakage.
 
-Three groups:
-  Context (not the target) -- what the embedding trivially encodes:
-    * Input commitment level   (source_modality, macro-OvR)
-    * Source dataset           (dataset_variant, macro-OvR)
-  Target: was the text strengthened? -- what we actually want to detect:
-    * Global classifier            (all inputs pooled)
-    * Within recommended-only inputs
-    * Within optional-only inputs
-    * Within weak-intent inputs
-  Positive control -- the same probe with the answer inside the input.
+Auxiliary probes predict source modality and dataset-by-keyword origin. All
+specifications below use capability grouping; different prediction targets
+remain separate diagnostics. Scores come from the current summary, never from
+historical constants. The manuscript figure stays pending until held-out
+predictions and 95% intervals are exported and incorporated (see
+``docs/figures/embedding_diagnostic.md``).
 
-Every bar in the first two groups reads the **requirement-only** substrate: the
-embedded string is the generated requirement alone. The alternative ``prefixed``
-substrate begins ``modality: <predicted label>``, and the strengthening label is
-derived partly from that predicted label, so a probe on it is measuring its own
-input. That configuration is kept as one explicitly labelled **leakage control**
-rather than as a result.
-
-Reading the plot: input commitment level and source dataset are easy to recover;
-strengthening is weak within a single input level, so the pooled strengthening
-number partly reflects the input condition (input-level leakage). The control bar
-shows how much higher the same probe scores once the predicted label is written
-into the text.
-
-Numbers are pulled from ``outputs/embedding_diagnostic/probe_grid_summary.csv``
-(written by ``diagnose_embedding_separability.py``) -- nothing is hardcoded. Every
-bar is pinned to the value in that file, so a regenerated grid cannot silently
-move the figure.
-
-The two t-SNE projections are no longer part of the paper figure; they are
-exported as a separate supplementary figure by
-``plot_embedding_diagnostic_tsne_supp.py`` for the replication package.
+The exploratory t-SNE projections are retained separately in the replication
+package by ``plot_embedding_diagnostic_tsne_supp.py``.
 """
 
 from __future__ import annotations
@@ -59,49 +36,32 @@ import numpy as np
 
 try:
     import eval_utils as eu
-    from plot_embedding_diagnostic_figure import auroc_cell, read_summary
+    from plot_embedding_diagnostic_figure import read_summary
 except ModuleNotFoundError:  # pragma: no cover
     from scripts import eval_utils as eu
     from scripts.plot_embedding_diagnostic_figure import (
-        auroc_cell,
         read_summary,
     )
 
-# --- Bar specification -------------------------------------------------------
-# Each bar names exactly one row of probe_grid_summary.csv, so provenance is
-# auditable and nothing is hardcoded. ``decimals`` controls the value label
-# (3 for the Table-1 numbers so they read as exact matches).
-#
-# The ``expect`` values below date from the grid that fitted PCA and the TF-IDF
-# vocabulary over all rows at once; that leak is fixed in
-# diagnose_embedding_separability.py, so they must be re-pinned from the rerun's
-# probe_grid_summary.csv and resolve_bars() fails loudly until they are. The
-# shift is small: measured on the archived prefixed embeddings (86,305 rows,
-# 1024 dims, 128 components, 3 folds), the control bar moves 0.822 -> 0.827,
-# because axes chosen from two thirds of that many rows barely differ from axes
-# chosen from all of them. The fix is about the claim the probe makes, not about
-# a number that was badly wrong.
-#
-# Context bars use the de-circularized requirement-text-only, item-grouped
-# substrate (the label is NOT baked into the embedded string). The prefixed
-# source_modality probe scores 0.96 only because the modality word is literally
-# prepended to the text, so we deliberately report the honest 0.84/0.73 instead.
+# Each specification selects one prediction target and input representation.
+# Capability grouping prevents variants of a held-out capability from entering
+# training. Comparable representations use the same target and grouping.
 CONTEXT_BARS = [
     {
-        "label": "Input commitment level",
+        "label": "Source modality",
         "decimals": 2,
         "backend": "mlx",
         "text": "reqonly",
-        "group": "item",
+        "group": "seed",
         "scope": "global",
         "target": "source_modality",
     },
     {
-        "label": "Source dataset",
+        "label": "Source dataset × keyword variant",
         "decimals": 2,
         "backend": "mlx",
         "text": "reqonly",
-        "group": "item",
+        "group": "seed",
         "scope": "global",
         "target": "dataset_variant",
     },
@@ -109,13 +69,11 @@ CONTEXT_BARS = [
 
 # Strengthening bars: neural embedding, requirement-only string, seed-grouped CV,
 # one-shot (deterministic) strengthening target. Requirement-only is the primary
-# substrate because the label-prefixed string encodes an ingredient of the target.
-# ``expect`` pins each bar to its row in probe_grid_summary.csv.
+# input, with the additional declared label evaluated separately.
 TARGET_BARS = [
     {
-        "label": "Global classifier\n(all inputs pooled)",
+        "label": "Global classifier\n(all sources)",
         "decimals": 3,
-        "expect": 0.707,
         "backend": "mlx",
         "text": "reqonly",
         "group": "seed",
@@ -125,7 +83,6 @@ TARGET_BARS = [
     {
         "label": "Within recommended-only inputs",
         "decimals": 3,
-        "expect": 0.613,
         "backend": "mlx",
         "text": "reqonly",
         "group": "seed",
@@ -135,7 +92,6 @@ TARGET_BARS = [
     {
         "label": "Within optional-only inputs",
         "decimals": 3,
-        "expect": 0.612,
         "backend": "mlx",
         "text": "reqonly",
         "group": "seed",
@@ -148,7 +104,6 @@ TARGET_BARS = [
     {
         "label": "Within weak-intent inputs",
         "decimals": 3,
-        "expect": 0.620,
         "backend": "mlx",
         "text": "reqonly",
         "group": "seed",
@@ -157,15 +112,11 @@ TARGET_BARS = [
     },
 ]
 
-# The one place the prefixed substrate appears. Its text literally starts
-# "modality: <predicted label>", and strengthening is derived partly from that
-# label, so this bar measures label leakage, not what the wording reveals. It is
-# drawn apart from the target group and says so in its own tick label.
+# Additional input comparison: the declared modality accompanies the wording.
 CONTROL_BARS = [
     {
-        "label": "Same probe on label-prefixed text\n(leakage control)",
+        "label": "Requirement text with declared modality\n(additional input)",
         "decimals": 3,
-        "expect": 0.822,
         "backend": "mlx",
         "text": "prefixed",
         "group": "seed",
@@ -176,7 +127,7 @@ CONTROL_BARS = [
 
 # Colour-blind-safe: neutral slate-blue for context, one orange accent for the
 # target group. Blue vs orange is the safest deutan/protan-distinguishable pair.
-# The control is deliberately drab and hatched so it never reads as a result.
+# Hatching distinguishes the additional-input comparison from text alone.
 CONTEXT_COLOR = "#5B7FA6"  # muted slate blue
 TARGET_COLOR = "#E69F00"  # Okabe-Ito orange
 CONTROL_COLOR = "#B8BEC7"  # desaturated grey
@@ -209,25 +160,53 @@ def resolve_bars(
 ) -> list[dict[str, Any]]:
     out = []
     for spec in specs:
-        value = auroc_cell(
-            summary,
-            backend=spec["backend"],
-            text=spec["text"],
-            group=spec["group"],
-            scope=spec["scope"],
-            target=spec["target"],
-            model="hgb",
-        )
-        if np.isnan(value):
-            raise ValueError(f"no probe_grid row for {spec['label']!r}: {spec}")
-        expect = spec.get("expect")
-        if expect is not None and round(value, 3) != round(expect, 3):
-            raise ValueError(
-                f"pinned-value mismatch for {spec['label']!r}: got {value:.4f}, "
-                f"expected {expect:.3f}. Update the pin (and the reported table) "
-                "deliberately; the figure must not drift on its own."
+        matches = [
+            row
+            for row in summary
+            if all(
+                str(row.get(field, "")) == spec[key]
+                for field, key in (
+                    ("feature_backend", "backend"),
+                    ("text_variant", "text"),
+                    ("group_mode", "group"),
+                    ("scope", "scope"),
+                    ("target", "target"),
+                )
             )
-        out.append({**spec, "value": float(value)})
+            and row.get("model", "hgb") == "hgb"
+        ]
+        if len(matches) > 1:
+            raise ValueError(f"ambiguous probe summary for {spec['label']}")
+        if not matches:
+            # A row the grid never produced is a drifted key (renamed backend,
+            # text variant, scope or target), not an unavailable score: the
+            # figure must not render a silent gap for a quantity the paper
+            # reports from the same artifact.
+            raise ValueError(
+                f"no probe_grid_summary.csv row for {spec['label']!r} "
+                f"({spec['backend']}/{spec['text']}/{spec['group']}"
+                f"/{spec['scope']}/{spec['target']}, model=hgb)"
+            )
+        row = matches[0]
+
+        def number(key, selected=row):
+            value = selected.get(key, "")
+            return float(value) if value not in ("", None) else float("nan")
+
+        out.append(
+            {
+                **spec,
+                "value": number("auroc_mean"),
+                "ci_low": number("auroc_ci_low"),
+                "ci_high": number("auroc_ci_high"),
+                "unavailable_reason": row.get("unavailable_reason", ""),
+                "ci_unavailable_reason": row.get(
+                    "ci_unavailable_reason", "interval not exported"
+                ),
+                "fit_review_required": str(row.get("fit_review_required", "")).lower()
+                == "true",
+            }
+        )
     return out
 
 
@@ -248,9 +227,9 @@ def draw(
     output_path: Path,
 ) -> None:
     set_style()
-    fig, ax = plt.subplots(figsize=(6.5, 3.45))
+    fig, ax = plt.subplots(figsize=(9.0, 4.7))
 
-    # y positions: context on top, then the target group, then the leakage control.
+    # y positions: context on top, then the target group, then the additional-input comparison.
     gap = 0.9
     y_ctx, y_tgt, y_ctl = stack_positions(
         [len(context), len(target), len(control)], gap
@@ -263,6 +242,16 @@ def draw(
 
     for bar, y, color in all_bars:
         val = bar["value"]
+        if not np.isfinite(val):
+            ax.text(
+                0.03,
+                y,
+                "×  unavailable: " + bar["unavailable_reason"],
+                va="center",
+                fontsize=8,
+                color=MUTED,
+            )
+            continue
         ax.barh(
             y,
             val - CHANCE,
@@ -274,10 +263,17 @@ def draw(
             linewidth=0.5,
             zorder=3,
         )
+        low, high = bar.get("ci_low", np.nan), bar.get("ci_high", np.nan)
+        if np.isfinite(low) and np.isfinite(high):
+            ax.plot([low, high], [y, y], color=INK, lw=1.2, zorder=5)
+            ax.plot([low, high], [y, y], "|", color=INK, ms=7, zorder=5)
+        suffix = " †" if bar.get("fit_review_required") else ""
+        if not np.isfinite(low):
+            suffix += " (CI unavailable)"
         ax.text(
-            val + 0.008,
+            max(val, high if np.isfinite(high) else val) + 0.015,
             y,
-            f"{val:.{bar['decimals']}f}",
+            f"{val:.{bar['decimals']}f}{suffix}",
             va="center",
             ha="left",
             fontsize=8.5,
@@ -293,11 +289,14 @@ def draw(
     # Dashed "chance" reference line at 0.5, doubling as the left boundary; the
     # 0.5 tick carries its "chance" label so nothing collides with the axis text.
     ax.axvline(CHANCE, ls=(0, (4, 3)), lw=1.0, color=INK, zorder=2)
-    ax.set_xlim(CHANCE, 1.0)
+    ax.set_xlim(0.0, 1.3)
     ax.set_ylim(min(ys) - 0.7, max(ys) + 1.05)
-    ax.set_xticks([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-    ax.set_xticklabels(["0.5\nchance", "0.6", "0.7", "0.8", "0.9", "1.0"])
-    ax.set_xlabel("AUROC  (0.5 = chance,  1.0 = perfect)", labelpad=4)
+    ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1.0])
+    ax.set_xticklabels(["0.0", "0.25", "0.5\nchance", "0.75", "1.0"])
+    ax.set_xlabel(
+        "AUROC with 95% capability-bootstrap intervals (fixed held-out predictions)",
+        labelpad=4,
+    )
     ax.spines["left"].set_visible(False)
     ax.tick_params(axis="y", length=0)
     ax.tick_params(axis="x", length=3)
@@ -306,7 +305,7 @@ def draw(
     ax.text(
         CHANCE,
         max(y_ctx) + 0.62,
-        "Context (not the target)",
+        "Auxiliary prediction targets",
         fontsize=9.0,
         fontweight="bold",
         color=MUTED,
@@ -316,7 +315,7 @@ def draw(
     ax.text(
         CHANCE,
         max(y_tgt) + 0.62,
-        "Target: was the text strengthened?  (requirement text only)",
+        "Strict strengthening in separate single-pass output",
         fontsize=9.0,
         fontweight="bold",
         color="#B26F00",
@@ -327,7 +326,7 @@ def draw(
         ax.text(
             CHANCE,
             max(y_ctl) + 0.62,
-            "Positive control: predicted label prepended to the text",
+            "Additional input: declared modality",
             fontsize=9.0,
             fontweight="bold",
             color=MUTED,
@@ -335,44 +334,15 @@ def draw(
             ha="left",
         )
 
-    # Annotation on the global-classifier bar: the pooled number is higher than any
-    # single-input-level number, so part of it is the input condition rather than
-    # strengthening. Placed right of the value label (no connector) so nothing
-    # overlaps the number.
-    g_bar, g_y, _ = next(t for t in all_bars if t[0] is target[0])
-    ax.text(
-        g_bar["value"] + 0.065,
-        g_y,
-        "part input-level\nleakage",
-        fontsize=7.8,
-        color="#B26F00",
-        fontstyle="italic",
-        va="center",
-        ha="left",
-        linespacing=1.1,
-        clip_on=False,
-    )
-
-    # Bracket spanning every within-level bar. Its x is derived from the bars it
-    # spans (plus room for their value labels) so it cannot collide with a number
-    # after the probe is regenerated.
-    y_hi, y_lo = y_tgt[1], y_tgt[-1]
-    xb = max(bar["value"] for bar in target[1:]) + 0.075
-    ax.plot([xb, xb], [y_lo, y_hi], color=MUTED, lw=0.9, zorder=4)
-    for yy in (y_lo, y_hi):
-        ax.plot([xb - 0.012, xb], [yy, yy], color=MUTED, lw=0.9, zorder=4)
-    ax.text(
-        xb + 0.02,
-        (y_hi + y_lo) / 2.0,
-        "weak within a\nsingle input level",
-        fontsize=7.8,
-        color=MUTED,
-        fontstyle="italic",
-        va="center",
-        ha="left",
-    )
-
-    fig.tight_layout(pad=0.4)
+    if any(b.get("fit_review_required") for b, _, _ in all_bars):
+        fig.text(
+            0.5,
+            0.005,
+            "† Fitting budget needs review; weak scores are not evidence against the method.",
+            ha="center",
+            fontsize=8,
+        )
+    fig.tight_layout(pad=0.6, rect=(0, 0.04, 1, 1))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, bbox_inches="tight", pad_inches=0.02)
     fig.savefig(
@@ -406,11 +376,10 @@ def main() -> None:
 
     print("Bars pulled from probe_grid_summary.csv (metric = AUROC):")
     for b in context + target + control:
-        note = f"  == pinned ({b['expect']:.3f})" if b.get("expect") else ""
         flat = b["label"].replace("\n", " ")
         print(
             f"  {flat:<44s} {b['value']:.3f}   [{b['backend']}/{b['text']}/{b['group']}"
-            f"/{b['scope']}/{b['target']}]{note}"
+            f"/{b['scope']}/{b['target']}]"
         )
 
     draw(context, target, control, output_path)

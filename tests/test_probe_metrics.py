@@ -472,7 +472,7 @@ class FoldLocalProjectionTest(unittest.TestCase):
 
 
 class TextConditionTest(unittest.TestCase):
-    """The prefixed substrate is only ever offered as a named leakage control."""
+    """The sampled declared label is explicitly named as additional input."""
 
     def test_requirement_only_is_the_primary_condition(self) -> None:
         self.assertEqual(
@@ -486,14 +486,14 @@ class TextConditionTest(unittest.TestCase):
             "primary",
         )
 
-    def test_the_prefixed_condition_is_named_and_roled_as_a_leakage_control(
+    def test_the_prefixed_condition_is_named_and_roled_as_additional_input(
         self,
     ) -> None:
         name = separability_probe.PREFIXED_CONTROL_CONDITION
-        self.assertIn("leakage_control", name)
+        self.assertEqual(name, "requirement_with_declared_label")
         self.assertEqual(
             separability_probe.TEXT_CONDITION_ROLES[name],
-            "positive_control_label_leakage",
+            "additional_input",
         )
 
     def test_fold_rows_carry_the_condition_and_its_role(self) -> None:
@@ -504,7 +504,7 @@ class TextConditionTest(unittest.TestCase):
         self.assertEqual(
             row["text_condition"], separability_probe.PREFIXED_CONTROL_CONDITION
         )
-        self.assertEqual(row["text_condition_role"], "positive_control_label_leakage")
+        self.assertEqual(row["text_condition_role"], "additional_input")
         self.assertEqual(row["scope"], "global")
 
 
@@ -522,14 +522,22 @@ class DiagnosticFigureConditionTest(unittest.TestCase):
             with self.subTest(bar=spec["label"]):
                 self.assertEqual(spec["text"], "reqonly")
 
-    def test_any_prefixed_bar_is_labelled_a_leakage_control(self) -> None:
+    def test_all_figure_conditions_hold_out_capabilities(self) -> None:
+        for spec in (
+            figure_v2.CONTEXT_BARS + figure_v2.TARGET_BARS + figure_v2.CONTROL_BARS
+        ):
+            with self.subTest(bar=spec["label"]):
+                self.assertEqual(spec["group"], "seed")
+
+    def test_prefixed_bar_identifies_its_additional_input(self) -> None:
         shown = figure_v2.CONTEXT_BARS + figure_v2.TARGET_BARS + figure_v2.CONTROL_BARS
         prefixed = [spec for spec in shown if spec["text"] == "prefixed"]
 
-        self.assertTrue(prefixed, "the positive control should stay visible")
+        self.assertTrue(prefixed, "the additional-input comparison should stay visible")
         for spec in prefixed:
             with self.subTest(bar=spec["label"]):
-                self.assertIn("leakage control", spec["label"].lower())
+                self.assertIn("declared modality", spec["label"].lower())
+                self.assertNotIn("leakage", spec["label"].lower())
 
 
 if __name__ == "__main__":

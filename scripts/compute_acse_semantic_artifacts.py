@@ -747,6 +747,11 @@ def main() -> None:
     )
     parser.add_argument("--output-root", type=Path, default=Path("outputs"))
     parser.add_argument(
+        "--selected-manifest",
+        type=Path,
+        help="Also write an inventory containing only this invocation's caches.",
+    )
+    parser.add_argument(
         "--analysis-dir",
         type=Path,
         action="append",
@@ -820,6 +825,20 @@ def main() -> None:
     manifest_rows = manifest_summary_rows(all_manifests, manifests)
     eu.write_csv_rows(output_root / eu.ACSE_SEMANTIC_MANIFEST_FILENAME, manifest_rows)
     eu.write_json(output_root / "acse_semantic_artifact_manifest.json", all_manifests)
+    if args.selected_manifest:
+        selected = {
+            (str(row["run_id"]), str(row["model"]), str(row["embedding_backend"]))
+            for row in manifests
+        }
+        scoped = [
+            row
+            for row in all_manifests
+            if (str(row["run_id"]), str(row["model"]), str(row["embedding_backend"]))
+            in selected
+        ]
+        eu.write_csv_rows(
+            args.selected_manifest, manifest_summary_rows(scoped, manifests)
+        )
 
 
 if __name__ == "__main__":

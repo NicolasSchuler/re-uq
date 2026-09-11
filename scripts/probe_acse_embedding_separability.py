@@ -1,21 +1,9 @@
-"""Probe whether ACSE embeddings separate dataset, modality, or drift labels.
+"""Grouped prediction from sampled requirement text.
 
-The probe runs one or more **text conditions**:
-
-* ``requirement_only`` (the primary diagnostic) embeds the generated requirement
-  wording alone. Nothing about the predicted modality is written into the string,
-  so a strengthening probe here measures what the wording itself reveals.
-* ``prefixed_leakage_control`` reuses the cached ACSE embeddings, whose text comes
-  from ``eval_utils.semantic_response_text()`` and literally begins
-  ``modality: <predicted label>``. Strengthening is derived partly from that same
-  predicted label, so this condition is a **positive control**: it shows what the
-  score looks like when the answer is inside the input. It is never the headline
-  number, and every artifact names it as a control.
-
-Dimensionality reduction is fitted **inside each cross-validation fold, on the
-training rows only** (PCA is the first step of the estimator pipeline). Fitting it
-once over all observations would let a held-out fold help choose the axes it is
-later scored in.
+The primary target is strict strengthening in the separate single-pass output.
+Adding the sampled declared label supplies additional input; it does not by
+itself establish target leakage. Source modality and benchmark origin are
+separate auxiliary targets. All learned preprocessing is fitted within folds.
 """
 
 from __future__ import annotations
@@ -24,6 +12,8 @@ import argparse
 import hashlib
 import json
 import math
+import time
+import warnings
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -32,17 +22,19 @@ import numpy as np
 from sklearn.base import clone
 from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
     balanced_accuracy_score,
     f1_score,
+    log_loss,
     roc_auc_score,
 )
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import LabelEncoder, StandardScaler, label_binarize
+from sklearn.preprocessing import StandardScaler, label_binarize
 
 try:
     import eval_utils as eu
@@ -89,17 +81,13 @@ DEFAULT_WITHIN_TARGETS = [
     "sample_strict_text_overcommit",
 ]
 
-# --- Text conditions ---------------------------------------------------------
-# The predicted modality is an ingredient of the strengthening label, so a
-# substrate that spells that modality out cannot answer "what does the wording
-# reveal?". Requirement-only text is therefore the primary condition and the
-# label-prefixed cache is demoted to a named positive control.
+# Requirement text is primary; the sampled declared label is additional input.
 REQUIREMENT_ONLY_CONDITION = "requirement_only"
-PREFIXED_CONTROL_CONDITION = "prefixed_leakage_control"
+PREFIXED_CONTROL_CONDITION = "requirement_with_declared_label"
 PRIMARY_TEXT_CONDITION = REQUIREMENT_ONLY_CONDITION
 TEXT_CONDITION_ROLES = {
     REQUIREMENT_ONLY_CONDITION: "primary",
-    PREFIXED_CONTROL_CONDITION: "positive_control_label_leakage",
+    PREFIXED_CONTROL_CONDITION: "additional_input",
 }
 DEFAULT_TEXT_CONDITIONS = [REQUIREMENT_ONLY_CONDITION, PREFIXED_CONTROL_CONDITION]
 
@@ -126,10 +114,14 @@ def add_probe_labels(rows: list[dict[str, Any]]) -> None:
     for row in rows:
         fields = sample_text_fields(row)
         row["deterministic_strict_text_overcommit"] = (
-            "1" if eu.is_truthy_strict(row.get("strict_text_overcommit", "")) else "0"
+            ("1" if eu.is_truthy_strict(row["strict_text_overcommit"]) else "0")
+            if row.get("strict_text_overcommit", "") != ""
+            else ""
         )
         row["deterministic_broad_text_overcommit"] = (
-            "1" if eu.is_truthy_strict(row.get("text_overcommit", "")) else "0"
+            ("1" if eu.is_truthy_strict(row["text_overcommit"]) else "0")
+            if row.get("text_overcommit", "") != ""
+            else ""
         )
         row["sample_strict_text_overcommit"] = (
             "1"
@@ -298,7 +290,10 @@ def model_steps(model_name: str, random_state: int) -> list[Any]:
         return [
             HistGradientBoostingClassifier(
                 learning_rate=0.08,
-                max_iter=100,
+                max_iter=300,
+                early_stopping=True,
+                validation_fraction=None,
+                n_iter_no_change=20,
                 max_leaf_nodes=31,
                 min_samples_leaf=30,
                 l2_regularization=0.05,
@@ -449,24 +444,69 @@ def fold_metrics(
     random_state: int,
     pca_components: int | None = None,
     text_vectorizer: Any | None = None,
+    sample_rows: list[dict[str, Any]] | None = None,
+    prediction_rows: list[dict[str, Any]] | None = None,
+    expected_classes: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    if len(np.unique(y_raw)) < 2:
-        return []
+    metadata = sample_rows if sample_rows is not None else [{} for _ in y_raw]
+    names = (
+        np.asarray(["0", "1"])
+        if target in BINARY_TARGETS
+        else np.asarray(sorted(expected_classes))
+        if expected_classes
+        else np.unique(y_raw.astype(str))
+    )
+    encoded = {str(value): i for i, value in enumerate(names)}
+    y = np.asarray([encoded[str(value)] for value in y_raw], dtype=int)
+    class_labels = np.arange(len(names))
     n_splits = min(n_splits, len(np.unique(groups)))
-    if target in BINARY_TARGETS:
-        y = y_raw.astype(int)
-        class_labels = np.asarray([0, 1])
-    else:
-        encoder = LabelEncoder()
-        y = encoder.fit_transform(y_raw)
-        class_labels = np.arange(len(encoder.classes_))
+    base = {
+        "scope": scope,
+        "target": target,
+        "model": model_name,
+        "class_order": json.dumps(names.tolist()),
+        "n_eligible": len(y),
+        "n_splits_requested": n_splits,
+        "class_distribution_eligible": json.dumps(
+            dict(Counter(str(v) for v in y_raw)), sort_keys=True
+        ),
+    }
+    reason = (
+        "missing target classes"
+        if len(np.unique(y)) < 2 or len(np.unique(y)) != len(names)
+        else "insufficient capability groups"
+        if n_splits < 2
+        else ""
+    )
+    if reason:
+        return [
+            {
+                **base,
+                "fold": -1,
+                "n_train": 0,
+                "n_test": 0,
+                "status": "unavailable",
+                "unavailable_reason": reason,
+            }
+        ]
     splitter = StratifiedGroupKFold(
         n_splits=n_splits, shuffle=True, random_state=random_state
     )
     rows: list[dict[str, Any]] = []
-    for fold_index, (train_index, test_index) in enumerate(
-        splitter.split(X, y, groups=groups)
-    ):
+    try:
+        splits = list(splitter.split(X, y, groups=groups))
+    except ValueError as error:
+        return [
+            {
+                **base,
+                "fold": -1,
+                "n_train": 0,
+                "n_test": 0,
+                "status": "unavailable",
+                "unavailable_reason": f"grouped split unavailable: {error}",
+            }
+        ]
+    for fold_index, (train_index, test_index) in enumerate(splits):
         # PCA cannot exceed the rank the training fold can support. With a
         # vectorizer in the pipeline the feature count is only known at fit time,
         # so FoldSafeSVD finishes the clamping there.
@@ -486,11 +526,143 @@ def fold_metrics(
             pca_components=fold_components,
             text_vectorizer=text_vectorizer,
         )
-        estimator.fit(X[train_index], y[train_index])
-        pred = estimator.predict(X[test_index])
-        probability_matrix = ordered_class_probabilities(
-            estimator.predict_proba(X[test_index]), estimator.classes_, class_labels
+        fold_base = {
+            **base,
+            "fold": fold_index,
+            "n_train": len(train_index),
+            "n_test": len(test_index),
+            "n_groups_train": len(np.unique(groups[train_index])),
+            "n_groups_test": len(np.unique(groups[test_index])),
+            "class_distribution_train": json.dumps(
+                dict(Counter(str(v) for v in y_raw[train_index])), sort_keys=True
+            ),
+            "class_distribution_test": json.dumps(
+                dict(Counter(str(v) for v in y_raw[test_index])), sort_keys=True
+            ),
+        }
+        if len(np.unique(y[train_index])) != len(class_labels):
+            rows.append(
+                {
+                    **fold_base,
+                    "status": "unavailable",
+                    "unavailable_reason": "training fold missing classes",
+                }
+            )
+            continue
+        started = time.monotonic()
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                estimator.fit(X[train_index], y[train_index])
+            pred = estimator.predict(X[test_index])
+            probability_matrix = ordered_class_probabilities(
+                estimator.predict_proba(X[test_index]), estimator.classes_, class_labels
+            )
+        except (ValueError, RuntimeError, FloatingPointError) as error:
+            rows.append(
+                {
+                    **fold_base,
+                    "status": "unavailable",
+                    "unavailable_reason": f"fit failed: {type(error).__name__}: {error}",
+                }
+            )
+            print(f"[fit] {model_name} {scope} {target} fold={fold_index}: {error}")
+            continue
+        fitted = estimator.steps[-1][1] if hasattr(estimator, "steps") else estimator
+        n_iter = int(np.max(np.asarray(getattr(fitted, "n_iter_", 0))))
+        limit = int(getattr(fitted, "max_iter", 0))
+        fit_warning = any(issubclass(w.category, ConvergenceWarning) for w in caught)
+        train_scores = np.asarray(getattr(fitted, "train_score_", []))
+        no_improvement = bool(len(train_scores) > 1 and np.ptp(train_scores) < 1e-10)
+        insufficient_split_samples = bool(
+            model_name == "hgb" and len(train_index) < 2 * fitted.min_samples_leaf
         )
+        training_probabilities = ordered_class_probabilities(
+            estimator.predict_proba(X[train_index]), estimator.classes_, class_labels
+        )
+        diagnostics = {
+            "fit_seconds": time.monotonic() - started,
+            "estimator_parameters": json.dumps(
+                fitted.get_params(), sort_keys=True, default=str
+            ),
+            "training_accuracy": float(
+                accuracy_score(
+                    y[train_index], np.argmax(training_probabilities, axis=1)
+                )
+            ),
+            "training_log_loss": float(
+                log_loss(y[train_index], training_probabilities, labels=class_labels)
+            ),
+            "no_training_loss_improvement": no_improvement,
+            "insufficient_split_samples": insufficient_split_samples,
+            "n_iter": n_iter,
+            "max_iter": limit,
+            "iteration_limit_reached": n_iter >= limit if limit else False,
+            "convergence_warning": fit_warning,
+            "fit_warnings": json.dumps([str(w.message) for w in caught]),
+            "training_scores": json.dumps(
+                np.asarray(getattr(fitted, "train_score_", [])).tolist()
+            ),
+            "validation_scores": json.dumps(
+                np.asarray(getattr(fitted, "validation_score_", [])).tolist()
+            ),
+            "fit_assessment": "review fitting budget"
+            if fit_warning
+            or (limit and n_iter >= limit)
+            or no_improvement
+            or insufficient_split_samples
+            else "no stopping warning; inspect training diagnostics",
+        }
+        print(
+            f"[fit] {model_name} {scope} {target} fold={fold_index} train={len(train_index)} test={len(test_index)} iterations={n_iter}/{limit}: {diagnostics['fit_assessment']}"
+        )
+        if prediction_rows is not None:
+            for index, probability in zip(test_index, probability_matrix, strict=True):
+                source = metadata[index]
+                prediction_rows.append(
+                    {
+                        **{
+                            key: source.get(key, "")
+                            for key in (
+                                "dataset_id",
+                                "benchmark_variant",
+                                "run_id",
+                                "model",
+                                "profile_id",
+                                "item_id",
+                                "seed_id",
+                                "source_modality",
+                                "sample_index",
+                                "global_embedding_index",
+                                "pred_modality",
+                                "source_artifact_dir",
+                            )
+                        },
+                        "source_identity": json.dumps(
+                            [
+                                source.get(k, "")
+                                for k in (
+                                    "dataset_id",
+                                    "benchmark_variant",
+                                    "seed_id",
+                                    "source_modality",
+                                )
+                            ]
+                        ),
+                        "source_model": source.get("model", ""),
+                        "classifier": model_name,
+                        "scope": scope,
+                        "target": target,
+                        "fold": fold_index,
+                        "capability_id": str(group_values([source], "seed")[0])
+                        if source
+                        else str(groups[index]),
+                        "split_group": str(groups[index]),
+                        "class_order": json.dumps(names.tolist()),
+                        "target_value": str(y_raw[index]),
+                        "probabilities": json.dumps(probability.tolist()),
+                    }
+                )
         y_test = y[test_index]
         if target in BINARY_TARGETS:
             # Binary targets keep positive-class average precision (not the macro
@@ -513,6 +685,14 @@ def fold_metrics(
             macro_auroc = probe_auroc(y_test, probability_matrix, class_labels)
             prevalence = math.nan
         fold_row: dict[str, Any] = {
+            **fold_base,
+            **diagnostics,
+            "status": "ok"
+            if ranking_metric_is_defined(y_test, class_labels)
+            else "unavailable",
+            "unavailable_reason": ""
+            if ranking_metric_is_defined(y_test, class_labels)
+            else "test fold missing classes",
             "scope": scope,
             "target": target,
             "model": model_name,
@@ -532,7 +712,7 @@ def fold_metrics(
             "auroc_macro": finite_metric(macro_auroc),
             "average_precision_macro": finite_metric(auprc),
             "baseline_average_precision": finite_metric(
-                prevalence if target in BINARY_TARGETS else math.nan
+                prevalence if target in BINARY_TARGETS else 1.0 / len(class_labels)
             ),
         }
         if fold_components is not None:
@@ -541,6 +721,154 @@ def fold_metrics(
             fold_row["pca_components_fold"] = int(fold_components)
         rows.append(fold_row)
     return rows
+
+
+def eligible_observations(rows, target):
+    """Common input cohort for text alone and text plus sampled declared label."""
+
+    def eligible(row):
+        if not str(row.get("requirement", "")).strip() or row.get(
+            "pred_modality"
+        ) not in ("mandatory", "recommended", "optional", "nice_to_have"):
+            return False
+        if not row.get("seed_id") or not row.get("dataset_id"):
+            return False
+        if target.startswith("deterministic_"):
+            return row.get("deterministic_text_modality_parse_status") == "ok" and str(
+                row.get(target, "")
+            ) in {"0", "1"}
+        if target.startswith("sample_"):
+            return sample_text_fields(row).get("text_modality_parse_status") == "ok"
+        return str(row.get(target, "")) not in {"", "unknown", "None"}
+
+    return np.asarray([eligible(row) for row in rows], dtype=bool)
+
+
+def prediction_summary(predictions, folds, *, iterations=1000, seed=20260527):
+    """Equal mean over evaluable held-out folds; capability percentile bootstrap.
+
+    Fixed OOF predictions/splits are resampled, not refitted. Each draw uses the
+    same capability multiplicity across all samples, models and cells. A draw
+    missing any class in an evaluated fold is undefined, counted, and omitted.
+    This quantifies held-out cohort uncertainty conditional on training/splits;
+    it excludes retraining, split-selection and model-generation uncertainty.
+    """
+    evaluated = {
+        int(r["fold"])
+        for r in folds
+        if r.get("status", "ok") == "ok" and r.get("auroc_macro", "") != ""
+    }
+    rows = [r for r in predictions if int(r["fold"]) in evaluated]
+    result = {
+        "folds": len(evaluated),
+        "folds_requested": max(
+            (int(r.get("n_splits_requested", len(folds))) for r in folds), default=0
+        ),
+        "partial_evaluation": any(r.get("status", "ok") != "ok" for r in folds),
+        "evaluated_fold_ids": json.dumps(sorted(evaluated)),
+        "n_eligible": max((int(r.get("n_eligible", 0)) for r in folds), default=0),
+        "class_counts_eligible": next(
+            (r.get("class_distribution_eligible", "{}") for r in folds), "{}"
+        ),
+        "class_order": next((r.get("class_order", "[]") for r in folds), "[]"),
+        "n_evaluated_samples": len(rows),
+        "n_evaluated_capabilities": len({r["capability_id"] for r in rows}),
+        "class_counts": json.dumps(
+            dict(Counter(str(r["target_value"]) for r in rows)), sort_keys=True
+        ),
+        "averaging": "equal mean of evaluable folds; binary positive-class AP; multiclass macro OVR AUROC/AP",
+        "resampling_unit": "capability across samples, models and keyword cells",
+        "uncertainty_scope": "fixed held-out predictions and folds; no refitting or generation uncertainty",
+        "bootstrap_samples": iterations,
+        "bootstrap_seed": seed,
+        "fit_review_required": any(
+            str(r.get("iteration_limit_reached", "")).lower() == "true"
+            or str(r.get("convergence_warning", "")).lower() == "true"
+            or str(r.get("no_training_loss_improvement", "")).lower() == "true"
+            or str(r.get("insufficient_split_samples", "")).lower() == "true"
+            for r in folds
+        ),
+        "unavailable_reason": "; ".join(
+            sorted({r.get("unavailable_reason", "") for r in folds} - {""})
+        ),
+    }
+    metrics = ("auroc", "auprc")
+    for metric in metrics:
+        result[f"{metric}_mean"] = result[f"{metric}_ci_low"] = result[
+            f"{metric}_ci_high"
+        ] = ""
+    result.update(baseline_auprc="", bootstrap_valid=0, ci_unavailable_reason="")
+    if not rows:
+        result["unavailable_reason"] = (
+            result["unavailable_reason"] or "no evaluable held-out predictions"
+        )
+        result["ci_unavailable_reason"] = "no evaluable held-out predictions"
+        return result
+    names = json.loads(rows[0]["class_order"])
+    classes = np.arange(len(names))
+    y = np.asarray([names.index(str(r["target_value"])) for r in rows])
+    probabilities = np.asarray([json.loads(r["probabilities"]) for r in rows])
+    fold_ids = np.asarray([int(r["fold"]) for r in rows])
+    capabilities, group_index = np.unique(
+        [r["capability_id"] for r in rows], return_inverse=True
+    )
+    binary = rows[0]["target"] in BINARY_TARGETS
+
+    def score(weights):
+        values, baselines = [], []
+        for fold in sorted(evaluated):
+            index = np.repeat(
+                np.flatnonzero(fold_ids == fold), weights[fold_ids == fold]
+            )
+            yt, pt = y[index], probabilities[index]
+            if not ranking_metric_is_defined(yt, classes):
+                return None
+            values.append(
+                (
+                    probe_auroc(yt, pt, classes),
+                    float(average_precision_score(yt, pt[:, 1]))
+                    if binary
+                    else probe_average_precision(yt, pt, classes),
+                )
+            )
+            baselines.append(float(np.mean(yt)) if binary else 1 / len(classes))
+        return np.mean(values, axis=0), float(np.mean(baselines))
+
+    point, baseline = score(np.ones(len(rows), dtype=int))
+    result.update(
+        auroc_mean=float(point[0]),
+        auprc_mean=float(point[1]),
+        baseline_auprc=baseline,
+        class_order=json.dumps(names),
+    )
+    if len(capabilities) < 2 or iterations <= 0:
+        result["ci_unavailable_reason"] = (
+            "insufficient capabilities"
+            if len(capabilities) < 2
+            else "bootstrap disabled"
+        )
+        return result
+    rng = np.random.default_rng(seed)
+    samples = []
+    for _ in range(iterations):
+        counts = rng.multinomial(
+            len(capabilities), np.full(len(capabilities), 1 / len(capabilities))
+        )
+        value = score(counts[group_index])
+        if value is not None:
+            samples.append(value[0])
+    result["bootstrap_valid"] = len(samples)
+    if len(samples) < max(2, math.ceil(iterations * 0.9)):
+        result["ci_unavailable_reason"] = (
+            "fewer than 90% defined bootstrap draws (missing fold classes)"
+        )
+        return result
+    bounds = np.quantile(samples, [0.025, 0.975], axis=0)
+    for i, metric in enumerate(metrics):
+        result[f"{metric}_ci_low"], result[f"{metric}_ci_high"] = map(
+            float, bounds[:, i]
+        )
+    return result
 
 
 def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -618,6 +946,7 @@ def main() -> None:
         "--models", nargs="+", default=["logreg", "hgb"], choices=["logreg", "hgb"]
     )
     parser.add_argument("--n-splits", type=int, default=3)
+    parser.add_argument("--bootstrap-samples", type=int, default=1000)
     parser.add_argument("--group-mode", choices=["seed", "item"], default="seed")
     parser.add_argument("--pca-components", type=int, default=128)
     parser.add_argument(
@@ -627,8 +956,7 @@ def main() -> None:
         choices=[REQUIREMENT_ONLY_CONDITION, PREFIXED_CONTROL_CONDITION],
         help=(
             f"{REQUIREMENT_ONLY_CONDITION} is the primary diagnostic; "
-            f"{PREFIXED_CONTROL_CONDITION} is a positive control whose text spells "
-            "out the predicted modality and must not be read as a headline result"
+            f"{PREFIXED_CONTROL_CONDITION} adds the sampled declared modality"
         ),
     )
     parser.add_argument(
@@ -685,38 +1013,80 @@ def main() -> None:
 
     fold_rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
-    for condition, features in condition_features.items():
-        condition_folds: list[dict[str, Any]] = []
-        for scope in scopes:
-            X_scope, rows_scope = filtered_scope(features, sample_rows, scope)
-            target_names = args.targets if scope == "global" else args.within_targets
-            if not rows_scope:
-                continue
-            groups = group_values(rows_scope, args.group_mode)
-            for target in target_names:
-                y = target_values(rows_scope, target)
-                if len(np.unique(y)) < 2:
+    with (output_dir / "held_out_predictions.jsonl").open(
+        "w", encoding="utf-8"
+    ) as prediction_file:
+        for condition, features in condition_features.items():
+            condition_folds: list[dict[str, Any]] = []
+            for scope in scopes:
+                X_scope, rows_scope = filtered_scope(features, sample_rows, scope)
+                target_names = (
+                    args.targets if scope == "global" else args.within_targets
+                )
+                if not rows_scope:
                     continue
-                for model_name in args.models:
-                    condition_folds.extend(
-                        fold_metrics(
-                            X=X_scope,
+                groups = group_values(rows_scope, args.group_mode)
+                for target in target_names:
+                    eligible = eligible_observations(rows_scope, target)
+                    for matrix in condition_features.values():
+                        matrix_scope, _ = filtered_scope(matrix, sample_rows, scope)
+                        eligible &= np.isfinite(matrix_scope).all(axis=1)
+                    target_rows = [
+                        r for r, keep in zip(rows_scope, eligible, strict=True) if keep
+                    ]
+                    y = target_values(target_rows, target)
+                    for model_name in args.models:
+                        predictions = []
+                        results = fold_metrics(
+                            X=X_scope[eligible],
                             y_raw=y,
-                            groups=groups,
+                            groups=groups[eligible],
                             target=target,
                             model_name=model_name,
                             scope=scope,
                             n_splits=args.n_splits,
                             random_state=args.random_state,
                             pca_components=args.pca_components,
+                            sample_rows=target_rows,
+                            prediction_rows=predictions,
+                            expected_classes=sorted(
+                                {
+                                    str(r[target])
+                                    for r in rows_scope
+                                    if r.get(target, "") != ""
+                                }
+                            )
+                            if target in MULTICLASS_TARGETS
+                            else None,
                         )
-                    )
-        fold_rows.extend(
-            stamp_text_condition(row, condition) for row in condition_folds
-        )
-        summary_rows.extend(
-            stamp_text_condition(row, condition) for row in summarize(condition_folds)
-        )
+                        condition_folds.extend(results)
+                        for row in predictions:
+                            prediction_file.write(
+                                json.dumps(
+                                    stamp_text_condition(row, condition), sort_keys=True
+                                )
+                                + "\n"
+                            )
+                        prediction_file.flush()
+                        summary_rows.append(
+                            stamp_text_condition(
+                                {
+                                    "scope": scope,
+                                    "target": target,
+                                    "model": model_name,
+                                    **prediction_summary(
+                                        predictions,
+                                        results,
+                                        iterations=args.bootstrap_samples,
+                                        seed=args.random_state,
+                                    ),
+                                },
+                                condition,
+                            )
+                        )
+            fold_rows.extend(
+                stamp_text_condition(row, condition) for row in condition_folds
+            )
 
     fold_path = output_dir / "fold_metrics.csv"
     summary_path = output_dir / "summary.csv"

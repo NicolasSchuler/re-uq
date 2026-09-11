@@ -569,6 +569,9 @@ class EmbeddingDiagnosticContractTest(unittest.TestCase):
                     "seed_id": f"S{index // 2:03d}",
                     "item_id": f"I{index:03d}",
                     "source_modality": "recommended",
+                    "pred_modality": "recommended",
+                    "dataset_variant": "nice/must",
+                    "deterministic_text_modality_parse_status": "ok",
                     "dataset_id": "nice",
                     "benchmark_variant": "must",
                     "requirement": f"the system {'shall' if index % 2 else 'may'} r{index}",
@@ -597,7 +600,11 @@ class EmbeddingDiagnosticContractTest(unittest.TestCase):
         )
 
         self.assertTrue(fold_rows)
-        for row in fold_rows:
+        fitted = [r for r in fold_rows if r.get("status") == "ok"]
+        unavailable = [r for r in fold_rows if r.get("status") == "unavailable"]
+        self.assertTrue(fitted)
+        self.assertTrue(all(r["unavailable_reason"] for r in unavailable))
+        for row in fitted:
             with self.subTest(target=row["target"], fold=row["fold"]):
                 # fold_metrics only records this key when reduction is fold-local.
                 self.assertIn("pca_components_fold", row)
