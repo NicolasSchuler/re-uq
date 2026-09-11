@@ -101,11 +101,11 @@ class HydraCompositionTest(unittest.TestCase):
                 self.assertEqual(composed["profiles"][0], expected)
 
     def test_model_override_selects_a_single_model(self):
-        cfg = compose_config(overrides=["profile=zai", "model=glm-4.5-air"])
+        cfg = compose_config(overrides=["profile=zai", "model=glm-5.3-flash"])
         run_config = eu.normalize_run_config(hb.hydra_config_to_run_config(cfg))
-        self.assertEqual(run_config["profiles"][0]["models"], ["glm-4.5-air"])
+        self.assertEqual(run_config["profiles"][0]["models"], ["glm-5.3-flash"])
         args = hb.run_args_namespace(cfg)
-        self.assertEqual(args.model, "glm-4.5-air")
+        self.assertEqual(args.model, "glm-5.3-flash")
         self.assertFalse(args.all_models)
 
     def test_model_override_rejects_a_model_the_profile_does_not_list(self):
@@ -205,7 +205,7 @@ class HydraCompositionTest(unittest.TestCase):
         self.assertEqual(run_config["benchmark_variants"], ["must"])
         self.assertEqual(run_config["tasks"], ["task2"])
         self.assertEqual(run_config["stochastic"]["samples"], 0)
-        self.assertEqual(run_config["profiles"][0]["models"], ["glm-5.1"])
+        self.assertEqual(run_config["profiles"][0]["models"], ["glm-5.3"])
         # The grouped baseline arm is the paper condition: 16 items per request.
         self.assertEqual(run_config["profiles"][0]["batch_size"], 16)
 
@@ -216,7 +216,7 @@ class HydraCompositionTest(unittest.TestCase):
         self.assertEqual(run_config["benchmark_variants"], ["must"])
         self.assertEqual(run_config["tasks"], ["task2"])
         self.assertEqual(run_config["stochastic"]["samples"], 0)
-        self.assertEqual(run_config["profiles"][0]["models"], ["glm-5.1"])
+        self.assertEqual(run_config["profiles"][0]["models"], ["glm-5.3"])
         self.assertEqual(run_config["profiles"][0]["batch_size"], 16)
         self.assertEqual(run_config["profiles"][0]["batch_order"], "grouped")
         self.assertEqual(run_config["run_group_id"], "context-ablation-2026-09")
@@ -238,21 +238,19 @@ class HydraCompositionTest(unittest.TestCase):
             "bare",
         )
 
-    def test_paper_cohort_preset_sweeps_the_five_glm_models_and_both_variants(self):
+    def test_paper_cohort_preset_sweeps_the_glm_models_and_both_variants(self):
         cfg = compose_config(overrides=["+experiment=paper_cohort"])
         run_config = eu.normalize_run_config(hb.hydra_config_to_run_config(cfg))
         self.assertEqual(
             run_config["profiles"][0]["models"],
-            ["glm-4.5-air", "glm-4.7", "glm-5", "glm-5-turbo", "glm-5.1"],
+            ["glm-5.3", "glm-5.3-flash"],
         )
         self.assertEqual(run_config["profiles"][0]["batch_size"], 16)
         # `compose()` strips the `hydra` node, so read the sweep off the preset.
         sweep = OmegaConf.load(
             CONF_DIR / "experiment/paper_cohort.yaml"
         ).hydra.sweeper.params
-        self.assertEqual(
-            str(sweep["model"]), "glm-4.5-air,glm-4.7,glm-5,glm-5-turbo,glm-5.1"
-        )
+        self.assertEqual(str(sweep["model"]), "glm-5.3,glm-5.3-flash")
         self.assertEqual(str(sweep["dataset"]), "nice,mlm_tapt")
         self.assertEqual(str(sweep["variant"]), "must,shall")
 

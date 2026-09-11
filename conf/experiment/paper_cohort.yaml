@@ -1,5 +1,5 @@
 # @package _global_
-# Official paper cohort: the five z.ai GLM models over both datasets, both
+# Official paper cohort: the z.ai GLM models over both datasets, both
 # benchmark variants, Task 1 + Task 2, full mode, deterministic + 5-sample
 # stochastic passes.
 #
@@ -18,12 +18,12 @@ defaults:
 
 task: both
 mode: full
-run_group_id: provider-matrix-v2-2026-05
+run_group_id: modality-rerun-2026-09
 
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      model: glm-4.5-air,glm-4.7,glm-5,glm-5-turbo,glm-5.1
+      model: glm-5.3,glm-5.3-flash
       dataset: nice,mlm_tapt
       variant: must,shall

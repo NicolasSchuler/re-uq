@@ -10,9 +10,11 @@ to describe an incomplete cohort.
 
 from __future__ import annotations
 
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from scripts import eval_utils as eu, rerun_all
 
@@ -74,9 +76,35 @@ class StateTest(unittest.TestCase):
         self.assertTrue(state.done("cohort:a"))
         self.assertFalse(self.path.exists())
 
+    def test_two_drivers_sharing_one_state_file_keep_each_others_cells(self):
+        """One driver per endpoint: a record merges its key, never the snapshot."""
+        hosted = rerun_all.RerunState.load(self.path)
+        local = rerun_all.RerunState.load(self.path)
+        hosted.record("cohort:zai:glm-5.3:nice:must", "complete", run_id="full-1")
+        local.record("cohort:local_llama_cpp:q:nice:must", "failed", run_id="full-2")
+        hosted.record("task3:zai:glm-5.3:nice:must", "complete", run_id="task3-1")
+
+        reloaded = rerun_all.RerunState.load(self.path)
+
+        self.assertEqual(reloaded.run_id("cohort:zai:glm-5.3:nice:must"), "full-1")
+        self.assertEqual(
+            reloaded.run_id("cohort:local_llama_cpp:q:nice:must"), "full-2"
+        )
+        self.assertEqual(reloaded.run_id("task3:zai:glm-5.3:nice:must"), "task3-1")
+        # Each driver reports only its own endpoint's failures, read from disk.
+        self.assertEqual(hosted.failures(["zai"]), [])
+        self.assertEqual(
+            hosted.failures(["local_llama_cpp"]), ["cohort:local_llama_cpp:q:nice:must"]
+        )
+        self.assertEqual(reloaded.failures(), ["cohort:local_llama_cpp:q:nice:must"])
+
 
 class RunCellTest(unittest.TestCase):
     def setUp(self):
+        # The synthetic run begins at the fixture timestamp, independent of wall time.
+        clock = patch.object(eu, "utc_now_iso", return_value="2026-09-05T00:00:00Z")
+        clock.start()
+        self.addCleanup(clock.stop)
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -169,6 +197,49 @@ class RunCellTest(unittest.TestCase):
 
         self.assertEqual(run_id, "full-cohort")
 
+    def test_an_arm_does_not_claim_a_sibling_arm_s_run(self):
+        # The batching arms share profile, model, dataset, variant and task
+        # set; only the batching columns tell them apart in the registry.
+        self._write_registry(
+            [
+                _registry_row(
+                    run_id="full-grouped",
+                    tasks="task2",
+                    batch_size="16",
+                    batch_order="grouped",
+                    item_context="bare",
+                    started_at_utc="2026-09-05T02:00:00Z",
+                )
+            ]
+        )
+        common = {
+            "profile_id": "zai",
+            "model": "glm-5.1",
+            "dataset_id": "nice",
+            "variant": "must",
+            "tasks": "task2",
+            "since_utc": "2026-09-05T00:00:00Z",
+            "registry_path": self.registry_path,
+        }
+
+        single = rerun_all.latest_run_id(
+            self.root,
+            **common,
+            arm=rerun_all.arm_columns(
+                ["profile.batch_size=1", "profile.batch_order=grouped"]
+            ),
+        )
+        grouped = rerun_all.latest_run_id(
+            self.root,
+            **common,
+            arm=rerun_all.arm_columns(
+                ["profile.batch_size=16", "profile.batch_order=grouped"]
+            ),
+        )
+
+        self.assertEqual(single, "")
+        self.assertEqual(grouped, "full-grouped")
+
     def test_runs_started_before_this_invocation_are_not_claimed(self):
         self._write_registry(
             [_registry_row(run_id="full-old", started_at_utc="2026-09-01T00:00:00Z")]
@@ -187,13 +258,52 @@ class RunCellTest(unittest.TestCase):
 
         self.assertEqual(run_id, "")
 
+    def test_failed_run_resumes_after_restarting_the_driver(self):
+        self._write_registry(
+            [_registry_row(run_id="full-prior", started_at_utc="2026-09-01T00:00:00Z")]
+        )
+        self.state.record("cohort:zai:glm-5.1:nice:must", "failed", run_id="full-prior")
+        self.state = rerun_all.RerunState.load(self.state.path)
+        runner = RecordingRunner(self.root)
+        self.assertTrue(self._run(runner))
+        self.assertIn("mode=resume", runner.commands[0][1])
+        self.assertIn("run_id=full-prior", runner.commands[0][1])
+        self.assertNotIn("mode=full", runner.commands[0][1])
+
+    def test_success_without_a_run_record_is_not_complete(self):
+        self.assertFalse(self._run(RecordingRunner(self.root)))
+        self.assertEqual(self.state.failures(), ["cohort:zai:glm-5.1:nice:must"])
+
+
+class ProfileSelectionTest(unittest.TestCase):
+    def _rerun(self):
+        return {"cohort_profiles": ["zai"], "local_profiles": ["local_llama_cpp"]}
+
+    def test_no_profile_flag_drives_every_profile_in_config_order(self):
+        self.assertEqual(
+            rerun_all.select_profiles([], self._rerun()), ["zai", "local_llama_cpp"]
+        )
+
+    def test_profile_flag_narrows_to_the_named_endpoints(self):
+        self.assertEqual(
+            rerun_all.select_profiles(["local_llama_cpp"], self._rerun()),
+            ["local_llama_cpp"],
+        )
+
+    def test_an_unknown_profile_is_an_operator_error(self):
+        with self.assertRaises(rerun_all.StageError) as caught:
+            rerun_all.select_profiles(["kit_toolbox"], self._rerun())
+        self.assertIn("kit_toolbox", str(caught.exception))
+
 
 class RunnerOverridesTest(unittest.TestCase):
     def test_a_real_run_is_full_and_a_fake_run_is_smoke(self):
         real = rerun_all.Runner(root=Path())
         fake = rerun_all.Runner(root=Path(), fake=True, smoke_items=4)
 
-        self.assertEqual(real.run_overrides(), ["mode=full"])
+        self.assertIn("mode=full", real.run_overrides())
+        self.assertIn("embedding=qwen3_06b", real.run_overrides())
+        self.assertIn("logging.write_request_transcripts=true", real.run_overrides())
         self.assertEqual(real.mode, "full")
         self.assertEqual(
             fake.run_overrides(),
@@ -202,6 +312,9 @@ class RunnerOverridesTest(unittest.TestCase):
                 "smoke_items=4",
                 "fake_completion=true",
                 "embedding=tfidf_proxy",
+                "logging.write_progress_csv=true",
+                "logging.write_event_jsonl=true",
+                "logging.write_request_transcripts=true",
             ],
         )
         self.assertEqual(fake.mode, "smoke")
@@ -262,18 +375,52 @@ class PreflightTest(unittest.TestCase):
             "acse_embedding_backend: mlx\n", encoding="utf-8"
         )
 
-        problems = rerun_all.embedding_backend_problems(self.root)
+        from subprocess import CompletedProcess
 
-        # This environment has no mlx-embeddings; the point is that the check
-        # happens up front rather than hours into the analysis stage.
-        try:
-            import mlx_embeddings  # noqa: F401
-        except ImportError:
-            self.assertEqual(len(problems), 1)
-            self.assertIn("mlx-embeddings", problems[0])
-        else:  # pragma: no cover - depends on the local environment
-            self.assertEqual(problems, [])
+        with patch.object(
+            rerun_all.subprocess,
+            "run",
+            return_value=CompletedProcess([], 1, "", "No module named mlx_embeddings"),
+        ):
+            problems = rerun_all.embedding_backend_problems(self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("mlx_embeddings", problems[0])
+        with patch.object(
+            rerun_all.subprocess, "run", return_value=CompletedProcess([], 0, "", "")
+        ):
+            self.assertEqual(rerun_all.embedding_backend_problems(self.root), [])
         self.assertEqual(rerun_all.embedding_backend_problems(self.root, fake=True), [])
+
+    def test_the_mlx_check_is_skipped_when_the_analysis_stage_is_not_requested(self):
+        """Generation runs on any host; only the analysis stage needs Metal."""
+        (self.root / "conf/config.yaml").write_text(
+            "acse_embedding_backend: mlx\n", encoding="utf-8"
+        )
+        (self.root / "data/processed").mkdir(parents=True)
+        (self.root / "data/processed/benchmark_items.csv").write_text(
+            "item_id\n", encoding="utf-8"
+        )
+        profile = {"profile_id": "zai", "api_key_env": "", "models": ["glm-5.3"]}
+        from subprocess import CompletedProcess
+
+        with patch.object(
+            rerun_all.subprocess,
+            "run",
+            return_value=CompletedProcess([], 1, "", "No module named mlx_embeddings"),
+        ):
+            rerun_all.stage_preflight(
+                self.root,
+                self._rerun(),
+                [profile],
+                [("zai", "glm-5.3")],
+                [],
+                analysis=False,
+            )
+            with self.assertRaises(rerun_all.StageError) as caught:
+                rerun_all.stage_preflight(
+                    self.root, self._rerun(), [profile], [("zai", "glm-5.3")], []
+                )
+        self.assertIn("MLX embedding backend is unavailable", str(caught.exception))
 
 
 class AnalysisGateTest(unittest.TestCase):
@@ -303,6 +450,7 @@ class AnalysisGateTest(unittest.TestCase):
             runner = RecordingRunner(root)
             state = rerun_all.RerunState.load(root / "state.json")
             state.record("cohort:zai:glm-5.1:nice:must", "complete", run_id="full-1")
+            state.record("task3:zai:glm-5.1:nice:must", "complete", run_id="task3-1")
             rerun = {
                 "run_group_id": "provider-matrix-v2-2026-05",
                 "datasets": ["nice"],
@@ -311,6 +459,12 @@ class AnalysisGateTest(unittest.TestCase):
                 "ablations": {"batching": {"dataset": "nice", "variant": "must"}},
             }
 
+            state.record(
+                "cohort:local:qwen/q:nice:must", "complete", run_id="full-local"
+            )
+            state.record(
+                "task3:local:qwen/q:nice:must", "complete", run_id="task3-local"
+            )
             rerun_all.stage_analysis(
                 runner, state, rerun, [("zai", "glm-5.1")], [("local", "qwen/q")]
             )
@@ -327,6 +481,26 @@ class AnalysisGateTest(unittest.TestCase):
             )
             self.assertEqual(export[export.index("--cell") + 1], "nice/must")
             self.assertIn("--local-model", export)
+            self.assertIn("--run-id", export)
+            self.assertIn("full-local", export)
+            self.assertIn("task3-local", export)
+            probe = next(
+                argv
+                for key, argv in runner.commands
+                if key == "analysis:embedding-probe"
+            )
+            self.assertIn("outputs/rerun/acse_selected_manifest.csv", probe)
+            self.assertIn("hgb", probe)
+            self.assertEqual(probe[probe.index("--bootstrap-samples") + 1], "10")
+            labels = [label for label, _ in runner.commands]
+            self.assertLess(
+                labels.index("analysis:embedding-probe"),
+                labels.index("analysis:figure2"),
+            )
+            self.assertLess(
+                labels.index("analysis:embedding-probe"),
+                labels.index("analysis:numbers"),
+            )
             # The aggregator must not be asked to regenerate snapshots: that
             # path cannot retarget the run group and would undo the export.
             aggregate = next(
@@ -342,6 +516,7 @@ class AnalysisGateTest(unittest.TestCase):
             runner = RecordingRunner(root, exit_codes={"analysis:acse": [1]})
             state = rerun_all.RerunState.load(root / "state.json")
             state.record("cohort:zai:glm-5.1:nice:must", "complete", run_id="full-1")
+            state.record("task3:zai:glm-5.1:nice:must", "complete", run_id="task3-1")
             rerun = {
                 "run_group_id": "g",
                 "datasets": ["nice"],
@@ -387,6 +562,113 @@ class GeneratedRunConfigTest(unittest.TestCase):
         # Every provider run of the rerun is batched the paper way.
         for profile in config["profiles"]:
             self.assertEqual(int(profile["batch_size"]), 16, profile["profile_id"])
+
+
+class RerunSafetyTest(unittest.TestCase):
+    def test_changed_configuration_does_not_reuse_complete_cells(self):
+        with TemporaryDirectory() as tmp:
+            state = rerun_all.RerunState(Path(tmp) / "state.json")
+            state.bind_configuration({"model": "a", "seed": 1})
+            state.record("cohort:a", "complete", run_id="one")
+            state = rerun_all.RerunState.load(state.path)
+            state.bind_configuration({"model": "a", "seed": 1})
+            with self.assertRaises(rerun_all.StageError):
+                state.bind_configuration({"model": "a", "seed": 2})
+            self.assertEqual(state.run_id("cohort:a"), "one")
+
+    def test_child_stdout_and_stderr_are_saved(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".venv/bin").mkdir(parents=True)
+            (root / ".venv/bin/python").symlink_to(sys.executable)
+            runner = rerun_all.Runner(root)
+            code = runner.run(
+                [
+                    "-c",
+                    "import sys; print('request saved'); print('response saved', file=sys.stderr)",
+                ],
+                label="test",
+            )
+            self.assertEqual(code, 0)
+            text = (root / "outputs/rerun/logs/test.log").read_text()
+            self.assertIn("request saved", text)
+            self.assertIn("response saved", text)
+            self.assertIn("exit=0", text)
+
+    def test_one_model_finishes_all_provider_stages_before_the_next(self):
+        rerun = {
+            "run_group_id": "order-test",
+            "datasets": ["nice"],
+            "variants": ["must"],
+            "cohort_profiles": ["zai"],
+            "local_profiles": ["local"],
+            "ablations": {"batching": {"profiles": ["zai", "local"]}},
+        }
+        profiles = {
+            "zai": {"profile_id": "zai", "models": ["hosted"]},
+            "local": {"profile_id": "local", "models": ["local-a", "local-b"]},
+        }
+        observed = []
+
+        def cohort(runner, state, rerun, models):
+            observed.append((models[0][1], "cohort"))
+
+        def audit(runner, state, rerun, config):
+            observed.append((config["profiles"][0]["models"][0], "audit"))
+
+        def ablation(runner, state, rerun, path):
+            for entry in rerun["ablations"]["batching"]["models"]:
+                observed.append((entry["model"], "ablation"))
+
+        with (
+            TemporaryDirectory() as tmp,
+            patch.object(eu, "project_root", return_value=Path(tmp)),
+            patch.object(rerun_all, "load_rerun_config", return_value=rerun),
+            patch.object(
+                rerun_all, "load_profile", side_effect=lambda root, key: profiles[key]
+            ),
+            patch.object(
+                rerun_all,
+                "generated_run_config",
+                return_value={"profiles": list(profiles.values())},
+            ),
+            patch.object(rerun_all, "stage_preflight"),
+            patch.object(rerun_all, "stage_cohort", side_effect=cohort),
+            patch.object(rerun_all, "stage_task3", side_effect=audit),
+            patch.object(rerun_all, "stage_ablations", side_effect=ablation),
+            patch.object(rerun_all, "stage_analysis"),
+        ):
+            self.assertEqual(rerun_all.main(["--dry-run"]), 0)
+        self.assertEqual(
+            observed,
+            [
+                ("hosted", "cohort"),
+                ("hosted", "audit"),
+                ("hosted", "ablation"),
+                ("local-a", "cohort"),
+                ("local-a", "audit"),
+                ("local-a", "ablation"),
+                ("local-b", "cohort"),
+                ("local-b", "audit"),
+            ],
+        )
+
+    def test_the_generated_config_covers_the_ablation_datasets(self):
+        # The weak probe on `nice` and the context arms on `pure` read the
+        # generated config's selector lists, so they must include those
+        # datasets even when the cohort only covers `mlm_tapt`.
+        root = eu.project_root()
+        rerun = rerun_all.load_rerun_config(root, root / "conf/rerun/ablations.yaml")
+        profiles = [
+            rerun_all.load_profile(root, profile_id)
+            for profile_id in list(rerun["cohort_profiles"])
+            + list(rerun.get("local_profiles", []))
+        ]
+
+        config = rerun_all.generated_run_config(root, rerun, profiles)
+
+        self.assertEqual(config["datasets"], ["mlm_tapt", "pure", "nice"])
+        self.assertEqual(config["benchmark_variants"], ["must"])
 
 
 if __name__ == "__main__":

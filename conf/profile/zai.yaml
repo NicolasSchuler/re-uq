@@ -6,12 +6,13 @@ profile_id: "zai"
 provider_id: "zai"
 base_url: "https://api.z.ai/api/coding/paas/v4"
 api_key_env: ${oc.env:RE_UQ_ZAI_API_KEY_ENV,ZAI_API_KEY}
+# Only ids the endpoint serves under their own name belong here. Checked
+# 2026-09-10: the coding endpoint lists glm-4.5 .. glm-5.3-flash but answers
+# glm-4.5-air/4.7/5-turbo requests with glm-5.3-flash and glm-5/5.1/5.2 with
+# glm-5.3 (see the response `model` field, recorded as `served_model`).
 models:
-  - "glm-4.5-air"
-  - "glm-4.7"
-  - "glm-5"
-  - "glm-5-turbo"
-  - "glm-5.1"
+  - "glm-5.3"
+  - "glm-5.3-flash"
 concurrency: 2
 batch_size: 16
 timeout_s: 180

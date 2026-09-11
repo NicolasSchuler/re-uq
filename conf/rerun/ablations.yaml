@@ -1,0 +1,39 @@
+# Ablation-only campaign: the three studies the reviewers asked for, on the
+# representative model of each endpoint (first configured model per profile),
+# without the cohort cells. Same run group as headline.yaml so the batching
+# grouped arm is comparable with the headline runs, and so a later full campaign
+# continues from the same runs. Keeps its own state file:
+#
+#   .venv/bin/python scripts/rerun_all.py --config conf/rerun/ablations.yaml \
+#     --state outputs/rerun/modality-rerun-2026-09/ablations_state.json \
+#     --profile <zai|local_llama_cpp> --only preflight --only ablations
+#
+# Started 2026-09-10 after the headline campaign.
+run_group_id: modality-rerun-2026-09
+embedding: qwen3_06b
+
+datasets: [mlm_tapt]
+variants: [must]
+
+cohort_profiles: [zai]
+local_profiles: [local_llama_cpp]
+
+ablations:
+  batching:
+    dataset: mlm_tapt
+    variant: must
+    profiles: [zai, local_llama_cpp]
+  context:
+    run_group_id: context-ablation-2026-09
+    profiles: [zai, local_llama_cpp]
+  weak_phrasing:
+    dataset: nice
+    variant: must
+    profiles: [zai, local_llama_cpp]
+
+task3:
+  audit_mode: blind
+
+analysis:
+  bootstrap_samples: 1000
+  numbers_output: outputs/paper_numbers.tex

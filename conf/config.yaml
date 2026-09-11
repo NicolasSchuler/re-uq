@@ -24,7 +24,7 @@ defaults:
 # ---------------------------------------------------------------------------
 # Run-level fields (mirror the top-level keys of run_configs/*.json)
 # ---------------------------------------------------------------------------
-run_group_id: provider-matrix-v2-2026-05
+run_group_id: modality-rerun-2026-09
 prompt_version: v2-conf01
 seed: 20260518
 batch_order: grouped

@@ -4,23 +4,47 @@
 # environment variable that carries the key.
 profile_id: "local_llama_cpp"
 provider_id: "llama_cpp"
-base_url: "http://127.0.0.1:1234/v1"
+base_url: "http://141.3.52.248:9292/v1"
 api_key_env: ${oc.env:RE_UQ_LOCAL_LLAMA_CPP_API_KEY_ENV,LLAMA_API_KEY}
 models:
-  - "qwen/qwen3.5-9b"
-concurrency: 2
+  - "qwen3.6-27b"
+  - "qwen3.8-27b"
+  - "qwen3.5-9b"
+  - "gemma4-31b-it"
+  - "gemma4-12b-it"
+  - "muse-glimmer-30b"
+  - "gpt-oss-20b"
+# Matches the llama-swap slot count (--parallel 8, set 2026-09-11). Keep the two
+# equal: fewer workers idle the GPU, more workers queue at the server and burn
+# the timeout. The headline cohort ran at 2 workers on 4 slots.
+concurrency: 8
 # The paper condition is 16 items per request. A 16-item answer needs more room
 # than a single one, and a local model without JSON mode needs the slack:
 # smoke-test one cell before the real runs and fall back to batch_size 4 with
 # max_tokens 256 if the answers truncate or stop parsing (docs/reproduction.md).
 batch_size: 16
 timeout_s: 300
-max_tokens: 512
+# 1024 rather than 512: Muse Glimmer and gpt-oss spend 100-500 tokens of
+# reasoning before the answer (separated into reasoning_content), and the
+# single-item ablation arm gives an item only this budget.
+max_tokens: 1024
 seed: 20260518
 send_seed: true
 max_retries: 3
 batch_order: "grouped"
 json_mode: false
 structured_output: "none"
-requires_manual_server: true
-notes: "Start llama.cpp with exactly this model and this base_url before running this profile; both are machine-specific and must be edited here."
+requires_manual_server: false
+# Qwen3.6 thinks by default and only writes the answer to `content` after the
+# reasoning, so a 16-item batch would spend its token budget on reasoning and
+# come back empty. The chat template's switch turns it off, the counterpart of
+# `thinking: disabled` in conf/profile/zai.yaml. (`reasoning_budget: 0` does
+# not stop it on this server build; checked 2026-09-10.)
+extra_body:
+  chat_template_kwargs:
+    enable_thinking: false
+  # Muse Glimmer and gpt-oss have no non-thinking mode; "low" is their minimum
+  # and keeps the reasoning in reasoning_content. Ignored by Qwen and Gemma
+  # once thinking is off.
+  reasoning_effort: low
+notes: "Router loads models by request model name. The rerun driver completes all requests for one model before starting the next."

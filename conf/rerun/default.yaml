@@ -1,4 +1,4 @@
-# The one file to edit before a full rerun.
+# Plan for the one-command rerun; edit endpoint and model lists in the profiles.
 #
 #   .venv/bin/python scripts/rerun_all.py
 #
@@ -15,17 +15,20 @@
 
 # Run group every rerun writes. Distinct from the archived `provider-matrix-2026-05`,
 # and the value scripts/export_paper_tables.py selects by default.
-run_group_id: provider-matrix-v2-2026-05
+run_group_id: modality-rerun-2026-09
+embedding: qwen3_06b
 
 # Cells of the official cohort: every profile below is run over every dataset
-# and benchmark variant.
-datasets: [nice, mlm_tapt]
+# and benchmark variant. The headline cell (mlm_tapt/must) comes first for each
+# model, so an interrupted campaign still leaves the most comparable data.
+datasets: [mlm_tapt, nice]
 variants: [must, shall]
 
 # Profiles whose models are the official cohort (headline tables).
 cohort_profiles: [zai]
 # Profiles reported separately as the local cohort. Their models are exported
-# into the same tables under their own group, never pooled into the headline.
+# into the same tables under their own group. Pooled rows include both cohorts;
+# the per-model rows retain the hosted/local distinction.
 local_profiles: [local_llama_cpp]
 
 ablations:
@@ -34,20 +37,20 @@ ablations:
     dataset: mlm_tapt
     variant: must
     # (profile, model) pairs. Keep this small: three arms per model.
-    models:
-      - {profile: zai, model: glm-5.1}
+    # First configured model from each profile; ordering defines the representatives.
+    profiles: [zai, local_llama_cpp]
   # Document context: bare / document on the PURE cell, its own run group so
   # these arms can never be selected into the paper tables.
   context:
     run_group_id: context-ablation-2026-09
-    models:
-      - {profile: zai, model: glm-5.1}
-  # Weak phrasing: the four weak templates over the pilot seeds.
+    # First configured model from each profile; ordering defines the representatives.
+    profiles: [zai, local_llama_cpp]
+  # Weak phrasing: the four weak templates over all benchmark capabilities.
   weak_phrasing:
     dataset: nice
     variant: must
-    models:
-      - {profile: zai, model: glm-5.1}
+    # First configured model from each profile; ordering defines the representatives.
+    profiles: [zai, local_llama_cpp]
 
 task3:
   audit_mode: blind

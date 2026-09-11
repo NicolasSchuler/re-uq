@@ -1,5 +1,5 @@
 {
-  "run_group_id": "provider-matrix-v2-2026-05",
+  "run_group_id": "modality-rerun-2026-09",
   "datasets": [
     "nice",
     "mlm_tapt"
@@ -39,23 +39,35 @@
     {
       "profile_id": "local_llama_cpp",
       "provider_id": "llama_cpp",
-      "base_url": "http://127.0.0.1:1234/v1",
+      "base_url": "http://141.3.52.248:9292/v1",
       "api_key_env": "LLAMA_API_KEY",
       "models": [
-        "qwen/qwen3.5-9b"
+        "qwen3.6-27b",
+        "qwen3.8-27b",
+        "qwen3.5-9b",
+        "gemma4-31b-it",
+        "gemma4-12b-it",
+        "muse-glimmer-30b",
+        "gpt-oss-20b"
       ],
-      "concurrency": 2,
+      "concurrency": 8,
       "batch_size": 16,
       "timeout_s": 300,
-      "max_tokens": 512,
+      "max_tokens": 1024,
       "seed": 20260518,
       "send_seed": true,
       "max_retries": 3,
       "batch_order": "grouped",
       "json_mode": false,
       "structured_output": "none",
-      "requires_manual_server": true,
-      "notes": "Start llama.cpp with exactly this model and this base_url before running this profile; both are machine-specific and must be edited here."
+      "requires_manual_server": false,
+      "notes": "Router loads models by request model name. The rerun driver completes all requests for one model before starting the next.",
+      "extra_body": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "reasoning_effort": "low"
+      }
     },
     {
       "profile_id": "institutional_llm",
@@ -110,11 +122,8 @@
       "base_url": "https://api.z.ai/api/coding/paas/v4",
       "api_key_env": "ZAI_API_KEY",
       "models": [
-        "glm-4.5-air",
-        "glm-4.7",
-        "glm-5",
-        "glm-5-turbo",
-        "glm-5.1"
+        "glm-5.3",
+        "glm-5.3-flash"
       ],
       "concurrency": 2,
       "batch_size": 16,

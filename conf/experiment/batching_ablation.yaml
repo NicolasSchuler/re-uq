@@ -23,7 +23,7 @@ defaults:
 
 task: task2
 mode: full
-model: glm-5.1
+model: glm-5.3
 
 # The grouped arm must be the paper condition: every official run delivered the
 # 16 items of a batch (the 4 variants of 4 seeds) in one request.

@@ -16,7 +16,7 @@ It adds no execution logic: every step shells out to the CLI that already owns
 it (`scripts/run.py` for provider runs, the analysis scripts for everything
 after), so a stage can always be re-run by hand exactly as printed.
 
-**Resumable.** `outputs/rerun_state.json` records each cell's status and run id.
+**Resumable.** `outputs/rerun/<run_group_id>/state.json` records status, configuration and run IDs.
 Re-invoking the command skips what is done and continues. A cell that fails is
 retried once as `mode=resume` on the same run id -- never as a fresh `mode=full`,
 which would re-request everything it already paid for -- and then left failed
@@ -33,8 +33,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,9 +45,8 @@ from omegaconf import OmegaConf
 
 try:
     import eval_utils as eu
-    import task3_sources as ts
 except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
-    from scripts import eval_utils as eu, task3_sources as ts
+    from scripts import eval_utils as eu
 
 
 DEFAULT_RERUN_CONFIG = Path("conf/rerun/default.yaml")
@@ -72,21 +73,47 @@ class RerunState:
     #: A dry run keeps its bookkeeping in memory -- printing a plan must never
     #: mark cells complete, or the next real invocation would skip them.
     dry_run: bool = False
+    configuration: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path, *, dry_run: bool = False) -> RerunState:
+        payload = cls._read_payload(path)
+        return cls(
+            path=path,
+            cells=dict(payload.get("cells", {})),
+            dry_run=dry_run,
+            configuration=dict(payload.get("configuration", {})),
+        )
+
+    @staticmethod
+    def _read_payload(path: Path) -> dict[str, Any]:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return cls(path=path, dry_run=dry_run)
-        return cls(path=path, cells=dict(payload.get("cells", {})), dry_run=dry_run)
+            return json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as error:
+            raise StageError(f"Cannot read rerun state {path}: {error}") from error
+
+    def bind_configuration(self, configuration: dict[str, Any]) -> None:
+        if self.cells and self.configuration != configuration:
+            raise StageError(
+                f"{self.path} belongs to a different or unrecorded configuration. "
+                "Use a new run_group_id for a new experiment (or --state with a new path). "
+                "Existing runs have been preserved."
+            )
+        self.configuration = configuration
 
     def save(self) -> None:
         if self.dry_run:
             return
-        eu.write_json(
+        payload = {
+            "updated_at_utc": eu.utc_now_iso(),
+            "configuration": self.configuration,
+            "cells": self.cells,
+        }
+        eu.atomic_write_text(
             self.path,
-            {"updated_at_utc": eu.utc_now_iso(), "cells": self.cells},
+            json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         )
 
     def status(self, key: str) -> str:
@@ -100,14 +127,36 @@ class RerunState:
         entry.update(fields)
         entry["status"] = status
         entry["updated_at_utc"] = eu.utc_now_iso()
-        self.cells[key] = entry
-        self.save()
+        if self.dry_run:
+            self.cells[key] = entry
+            return
+        # Two drivers may share this file, one per endpoint (`--profile`), so a
+        # record merges its one key into what is on disk under a lock. Writing
+        # this process's whole snapshot would overwrite the other driver's
+        # entries with the stale copies this process loaded at startup.
+        with eu.file_lock(self.path):
+            cells = dict(self._read_payload(self.path).get("cells", {}))
+            cells[key] = entry
+            self.cells = cells
+            self.save()
 
     def done(self, key: str) -> bool:
         return self.status(key) == "complete"
 
-    def failures(self) -> list[str]:
-        return sorted(key for key in self.cells if self.status(key) == "failed")
+    def failures(self, profile_ids: Iterable[str] = ()) -> list[str]:
+        """Failed cells, on disk now; narrowed to `profile_ids` when given."""
+        cells = (
+            self.cells
+            if self.dry_run
+            else {**self.cells, **self._read_payload(self.path).get("cells", {})}
+        )
+        selected = set(profile_ids)
+        return sorted(
+            key
+            for key, entry in cells.items()
+            if str(entry.get("status", "")) == "failed"
+            and (not selected or selected & set(key.split(":")))
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -142,18 +191,42 @@ def generated_run_config(
     sampling = OmegaConf.to_container(
         OmegaConf.load(root / "conf/sampling/default.yaml"), resolve=True
     )
+    base = OmegaConf.load(root / "conf/config.yaml")
+    embedding = OmegaConf.to_container(
+        OmegaConf.load(
+            root / "conf/embedding" / f"{rerun.get('embedding', 'qwen3_06b')}.yaml"
+        ),
+        resolve=True,
+    )
+    logging = OmegaConf.to_container(
+        OmegaConf.load(root / "conf/logging/default.yaml"), resolve=True
+    )
+    logging.update(
+        write_progress_csv=True, write_event_jsonl=True, write_request_transcripts=True
+    )
+    # The ablations read this config too, and their cells may lie outside the
+    # cohort's datasets (the weak probe runs on `nice`, the context arms on
+    # `pure`), so the selector lists must cover them as well.
+    ablations = rerun.get("ablations", {})
+    datasets = list(rerun["datasets"])
+    variants = list(rerun["variants"])
+    for name, ablation in ablations.items():
+        dataset_id = "pure" if name == "context" else ablation.get("dataset")
+        variant = "must" if name == "context" else ablation.get("variant")
+        if dataset_id and dataset_id not in datasets:
+            datasets.append(str(dataset_id))
+        if variant and variant not in variants:
+            variants.append(str(variant))
     config = {
         "run_group_id": str(rerun["run_group_id"]),
-        "datasets": list(rerun["datasets"]),
-        "benchmark_variants": list(rerun["variants"]),
+        "datasets": datasets,
+        "benchmark_variants": variants,
         "tasks": ["task1", "task2"],
-        "prompt_version": str(
-            OmegaConf.load(root / "conf/config.yaml").get("prompt_version", "v2-conf01")
-        ),
-        "seed": int(OmegaConf.load(root / "conf/config.yaml").get("seed", 20260518)),
-        "batch_order": str(
-            OmegaConf.load(root / "conf/config.yaml").get("batch_order", "grouped")
-        ),
+        "prompt_version": str(base.get("prompt_version", "v2-conf01")),
+        "seed": int(base.get("seed", 20260518)),
+        "batch_order": str(base.get("batch_order", "grouped")),
+        **embedding,
+        "logging": logging,
         "deterministic": sampling["deterministic"],
         "stochastic": sampling["stochastic"],
         "profiles": profiles,
@@ -184,6 +257,56 @@ def cohort_models(
     )
 
 
+def resolve_ablation_models(
+    rerun: dict[str, Any], profiles: list[dict[str, Any]]
+) -> None:
+    """Resolve representative models from the same lists used for the cohort."""
+    configured = {str(p["profile_id"]): list(p["models"]) for p in profiles}
+    for name, ablation in rerun.get("ablations", {}).items():
+        if "models" not in ablation:
+            ablation["models"] = []
+            for profile in ablation.get("profiles", configured):
+                if profile not in configured:
+                    raise StageError(
+                        f"{name}: profile {profile!r} is not a cohort or local "
+                        f"profile of this rerun config (known: "
+                        f"{', '.join(configured)})"
+                    )
+                if not configured[profile]:
+                    raise StageError(
+                        f"{name}: conf/profile/{profile}.yaml lists no models, "
+                        "so it has no representative for this ablation"
+                    )
+                ablation["models"].append(
+                    {"profile": profile, "model": configured[profile][0]}
+                )
+        for entry in ablation["models"]:
+            if entry["model"] not in configured.get(entry["profile"], []):
+                raise StageError(
+                    f"{name}: ablation model is not in the configured cohort: {entry}"
+                )
+
+
+def select_profiles(requested: list[str], rerun: dict[str, Any]) -> list[str]:
+    """The profiles this invocation drives: `--profile` values, or all of them.
+
+    The hosted and the local endpoint are independent, so one driver per
+    profile can run at the same time against the same state file; each only
+    touches its own cells (the state merges per key).
+    """
+    known = [
+        str(profile_id)
+        for profile_id in [*rerun["cohort_profiles"], *rerun.get("local_profiles", [])]
+    ]
+    unknown = [profile_id for profile_id in requested if profile_id not in known]
+    if unknown:
+        raise StageError(
+            f"--profile {', '.join(unknown)}: not a cohort or local profile of this "
+            f"rerun config (known: {', '.join(known)})"
+        )
+    return [profile_id for profile_id in known if profile_id in requested] or known
+
+
 # ---------------------------------------------------------------------------
 # Command execution
 # ---------------------------------------------------------------------------
@@ -199,6 +322,8 @@ class Runner:
     #: tree. This is how the whole chain is verified before any budget is spent.
     fake: bool = False
     smoke_items: int = 8
+    embedding: str = "qwen3_06b"
+    environment: dict[str, str] = field(default_factory=dict)
 
     @property
     def mode(self) -> str:
@@ -206,8 +331,13 @@ class Runner:
 
     def run_overrides(self) -> list[str]:
         """Overrides every provider run of this invocation carries."""
+        common = [
+            "logging.write_progress_csv=true",
+            "logging.write_event_jsonl=true",
+            "logging.write_request_transcripts=true",
+        ]
         if not self.fake:
-            return ["mode=full"]
+            return ["mode=full", f"embedding={self.embedding}", *common]
         return [
             "mode=smoke",
             f"smoke_items={self.smoke_items}",
@@ -215,6 +345,7 @@ class Runner:
             # The verification must not depend on the optional MLX package;
             # the TF-IDF reference backend exercises the same code path.
             "embedding=tfidf_proxy",
+            *common,
         ]
 
     @property
@@ -222,13 +353,44 @@ class Runner:
         return str(self.root / ".venv/bin/python")
 
     def run(self, argv: list[str], *, label: str) -> int:
-        command = [self.python, *argv]
-        printable = " ".join(command)
+        command = [self.python, "-u", *argv]
+        printable = shlex.join(command)
         if self.dry_run:
             print(f"[dry-run] {printable}")
             return 0
         print(f"[{label}] {printable}", flush=True)
-        return subprocess.run(command, cwd=self.root, check=False).returncode
+        log_dir = self.root / (
+            "outputs/smoke/rerun/logs" if self.fake else "outputs/rerun/logs"
+        )
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with (log_dir / f"{eu.safe_identifier(label)}.log").open(
+            "a", encoding="utf-8"
+        ) as log:
+            log.write(f"\n[{eu.utc_now_iso()}] {printable}\n")
+            log.flush()
+            with subprocess.Popen(
+                command,
+                cwd=self.root,
+                env={**os.environ, **self.environment},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            ) as process:
+                assert process.stdout is not None
+                try:
+                    for line in process.stdout:
+                        print(line, end="", flush=True)
+                        log.write(line)
+                        log.flush()
+                    code = process.wait()
+                except KeyboardInterrupt:
+                    process.terminate()
+                    process.wait()
+                    log.write("Interrupted; rerun this command to resume.\n")
+                    raise
+                log.write(f"[{eu.utc_now_iso()}] exit={code}\n")
+                return code
 
 
 def hydra_run(overrides: list[str]) -> list[str]:
@@ -245,6 +407,7 @@ def latest_run_id(
     tasks: str,
     since_utc: str,
     registry_path: Path,
+    arm: Mapping[str, str] | None = None,
 ) -> str:
     """The run this invocation just wrote for this cell, whatever its status.
 
@@ -254,9 +417,16 @@ def latest_run_id(
     in a registry: the cohort's Task 1+2 run and the batching arms' Task 2 runs
     all share (profile, model, dataset, variant), and "newest" alone would
     hand back whichever ran last.
+
+    `arm` pins the registry columns that tell the ablation arms of one cell
+    apart (`batch_size`, `batch_order`, `item_context`): the three batching
+    arms and the two context arms share everything above, and a driver that
+    resumed after an early failure would otherwise hand one arm's run to the
+    next, which would resume it, find nothing pending, and report a null effect.
     """
     if not registry_path.exists():
         return ""
+    expected = {key: str(value) for key, value in (arm or {}).items()}
     candidates = [
         row
         for row in eu.read_csv_rows(registry_path)
@@ -266,11 +436,31 @@ def latest_run_id(
         and str(row.get("benchmark_variant", "")) == variant
         and str(row.get("tasks", "")) == tasks
         and str(row.get("started_at_utc", "")) >= since_utc
+        and all(str(row.get(key, "")) == value for key, value in expected.items())
     ]
     if not candidates:
         return ""
     newest = max(candidates, key=lambda row: str(row.get("started_at_utc", "")))
     return str(newest.get("run_id", ""))
+
+
+#: Hydra overrides that distinguish the ablation arms of one cell, and the
+#: registry column each one lands in.
+ARM_OVERRIDE_COLUMNS = {
+    "profile.batch_size": "batch_size",
+    "profile.batch_order": "batch_order",
+    "item_context": "item_context",
+}
+
+
+def arm_columns(overrides: list[str]) -> dict[str, str]:
+    """The registry values an arm's overrides pin, for `latest_run_id`."""
+    columns: dict[str, str] = {}
+    for override in overrides:
+        name, _, value = override.partition("=")
+        if name in ARM_OVERRIDE_COLUMNS:
+            columns[ARM_OVERRIDE_COLUMNS[name]] = value
+    return columns
 
 
 def run_cell_with_retry(
@@ -290,20 +480,34 @@ def run_cell_with_retry(
     if state.done(key):
         print(f"[skip] {key} already complete ({state.run_id(key)})")
         return True
-    since_utc = eu.utc_now_iso()
-    state.record(key, "running")
+    previous = state.cells.get(key, {})
+    since_utc = str(previous.get("started_at_utc") or eu.utc_now_iso())
+
+    def discover_run() -> str:
+        return latest_run_id(
+            runner.root,
+            profile_id=profile_id,
+            model=model,
+            dataset_id=dataset_id,
+            variant=variant,
+            tasks=tasks,
+            since_utc=since_utc,
+            registry_path=registry_path,
+            arm=arm_columns(overrides),
+        )
+
+    run_id = state.run_id(key) or (discover_run() if previous else "")
+    if run_id:
+        overrides = [
+            value for value in overrides if not value.startswith(("mode=", "run_id="))
+        ]
+        overrides += ["mode=resume", f"run_id={run_id}"]
+    state.record(key, "running", started_at_utc=since_utc, run_id=run_id)
     code = runner.run(hydra_run(overrides), label=key)
-    run_id = latest_run_id(
-        runner.root,
-        profile_id=profile_id,
-        model=model,
-        dataset_id=dataset_id,
-        variant=variant,
-        tasks=tasks,
-        since_utc=since_utc,
-        registry_path=registry_path,
-    )
-    if code == 0:
+    run_id = run_id or discover_run()
+    if runner.dry_run:
+        run_id = run_id or f"planned-{eu.safe_identifier(key)}"
+    if code == 0 and run_id:
         state.record(key, "complete", run_id=run_id, attempts=1)
         return True
 
@@ -344,17 +548,23 @@ def embedding_backend_problems(root: Path, *, fake: bool = False) -> list[str]:
     ).strip()
     if backend != "mlx":
         return []
-    try:
-        import mlx_embeddings  # noqa: F401
-    except ImportError:
+    # Native Metal initialization can abort or leave a partially imported module
+    # after failure. Probe in a child so preflight remains a readable error.
+    result = subprocess.run(
+        [sys.executable, "-c", "import mlx_embeddings"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip().splitlines()
         return [
-            (
-                "conf/config.yaml sets acse_embedding_backend: mlx, but the "
-                "optional `mlx-embeddings` package is not installed in .venv. "
-                "Install it, or compose with `embedding=tfidf_proxy` and say so "
-                "in the paper."
-            )
+            "The configured MLX embedding backend is unavailable: "
+            + (detail[-1] if detail else f"import exited {result.returncode}")
+            + ". Run uv sync --group dev --locked, and run from a session with Metal GPU access."
         ]
+
     return []
 
 
@@ -366,15 +576,25 @@ def stage_preflight(
     local: list[tuple[str, str]],
     *,
     fake: bool = False,
+    dry_run: bool = False,
+    analysis: bool = True,
 ) -> None:
-    """Every problem that would stop the rerun, reported at once."""
+    """Every problem that would stop the rerun, reported at once.
+
+    The MLX check only applies when this invocation will reach the analysis
+    stage: generation runs on any host that can reach the endpoints, and the
+    analysis is run separately on a Mac with Metal (docs/experiment_runbook.md).
+    """
     problems: list[str] = []
     for profile in profiles:
         key_env = str(profile.get("api_key_env", ""))
         if not fake and key_env and not os.getenv(key_env):
-            problems.append(
-                f"{profile['profile_id']}: ${key_env} is not set in this shell"
-            )
+            message = f"{profile['profile_id']}: ${key_env} is not set in this shell"
+            # A plan may be printed without keys; the real run may not start.
+            if dry_run:
+                print(f"[preflight] warning: {message}", file=sys.stderr)
+            else:
+                problems.append(message)
         if profile.get("requires_manual_server") and len(profile.get("models", [])) > 1:
             problems.append(
                 f"{profile['profile_id']}: serves one model at a time but "
@@ -388,7 +608,16 @@ def stage_preflight(
             )
             if not path.exists():
                 problems.append(f"benchmark missing: {path}")
-    problems.extend(embedding_backend_problems(root, fake=fake))
+    context = rerun.get("ablations", {}).get("context", {})
+    if context.get("models"):
+        path = eu.artifact_path(
+            root / "data/processed/benchmark_items.csv", "pure", "must"
+        )
+        if not path.exists():
+            problems.append(f"context benchmark missing: {path}")
+    problems.extend(
+        embedding_backend_problems(root, fake=fake or dry_run or not analysis)
+    )
     if not cohort:
         problems.append("no cohort models: conf/rerun/default.yaml lists no profiles")
     if problems:
@@ -441,44 +670,42 @@ def stage_task3(
     run_config: dict[str, Any],
 ) -> None:
     """Blind audits, each pinned to the Task 2 run it reads."""
-    sources, gaps = ts.resolve_task3_sources(run_config, runner.root, mode=runner.mode)
-    for gap in gaps:
-        print(f"[task3] {gap.as_line()}", file=sys.stderr)
     audit_mode = str(rerun.get("task3", {}).get("audit_mode", "blind"))
-    for source in sources:
-        run_cell_with_retry(
-            runner,
-            state,
-            key=(
-                f"task3:{source.profile_id}:{source.model}:"
-                f"{source.dataset_id}:{source.variant}"
-            ),
-            overrides=[
-                f"profile={source.profile_id}",
-                # Task 3 does not honour "all models": it would audit every
-                # model of the profile against this one source run.
-                f"model={source.model}",
-                f"dataset={source.dataset_id}",
-                f"variant={source.variant}",
-                "task=task3",
-                *runner.run_overrides(),
-                f"source_run_id={source.source_run_id}",
-                f"audit_mode={audit_mode}",
-                # A fake cohort run answers a truncated benchmark on purpose,
-                # so its audit has to accept a partial source. A real run never
-                # does: an incomplete Task 2 run is a run to finish, not audit.
-                *(["allow_partial_source=true"] if runner.fake else []),
-                f"run_group_id={rerun['run_group_id']}",
-            ],
-            registry_path=eu.task3_registry_path(
-                runner.root, source.dataset_id, source.variant, smoke=runner.fake
-            ),
-            profile_id=source.profile_id,
-            model=source.model,
-            dataset_id=source.dataset_id,
-            variant=source.variant,
-            tasks="task3",
-        )
+    for profile in run_config["profiles"]:
+        profile_id = str(profile["profile_id"])
+        for model in profile["models"]:
+            for dataset_id in rerun["datasets"]:
+                for variant in rerun["variants"]:
+                    suffix = f"{profile_id}:{model}:{dataset_id}:{variant}"
+                    source_key = f"cohort:{suffix}"
+                    if not state.done(source_key) or not state.run_id(source_key):
+                        print(f"[task3] waiting for {source_key}", file=sys.stderr)
+                        continue
+                    run_cell_with_retry(
+                        runner,
+                        state,
+                        key=f"task3:{suffix}",
+                        overrides=[
+                            f"profile={profile_id}",
+                            f"model={model}",
+                            f"dataset={dataset_id}",
+                            f"variant={variant}",
+                            "task=task3",
+                            *runner.run_overrides(),
+                            f"source_run_id={state.run_id(source_key)}",
+                            f"audit_mode={audit_mode}",
+                            *(["allow_partial_source=true"] if runner.fake else []),
+                            f"run_group_id={rerun['run_group_id']}",
+                        ],
+                        registry_path=eu.task3_registry_path(
+                            runner.root, dataset_id, variant, smoke=runner.fake
+                        ),
+                        profile_id=profile_id,
+                        model=model,
+                        dataset_id=dataset_id,
+                        variant=variant,
+                        tasks="task3",
+                    )
 
 
 def stage_ablations(
@@ -569,6 +796,20 @@ def stage_ablations(
         if state.done(key):
             print(f"[skip] {key} already complete")
             continue
+        run_id = state.run_id(key) or eu.new_run_id(
+            ("smoke-" if runner.fake else "") + f"weak-probe-{probe_variant}"
+        )
+        try:
+            from scripts.run_weak_modality_probe import probe_registry_path
+        except ModuleNotFoundError:
+            from run_weak_modality_probe import probe_registry_path
+        registry = probe_registry_path(
+            runner.root, probe_dataset, probe_variant, run_id=run_id
+        )
+        resume = registry.exists() and any(
+            row.get("run_id") == run_id for row in eu.read_csv_rows(registry)
+        )
+        state.record(key, "running", run_id=run_id)
         code = runner.run(
             [
                 "scripts/run_weak_modality_probe.py",
@@ -583,7 +824,11 @@ def stage_ablations(
                 "--variant",
                 probe_variant,
                 "--mode",
-                runner.mode,
+                "resume" if resume else runner.mode,
+                "--run-id",
+                run_id,
+                "--bootstrap-samples",
+                str(rerun.get("analysis", {}).get("bootstrap_samples", 1000)),
                 *(["--fake-completion"] if runner.fake else []),
                 *(["--smoke-items", str(runner.smoke_items)] if runner.fake else []),
             ],
@@ -605,11 +850,42 @@ def stage_analysis(
     ]
     missing = [
         f"cohort:{profile_id}:{model}:{dataset_id}:{variant}"
-        for profile_id, model in cohort
+        for profile_id, model in cohort + local
         for dataset_id in rerun["datasets"]
         for variant in rerun["variants"]
         if not state.done(f"cohort:{profile_id}:{model}:{dataset_id}:{variant}")
+        or not state.run_id(f"cohort:{profile_id}:{model}:{dataset_id}:{variant}")
     ]
+    missing += [
+        f"task3:{profile_id}:{model}:{dataset_id}:{variant}"
+        for profile_id, model in cohort + local
+        for dataset_id in rerun["datasets"]
+        for variant in rerun["variants"]
+        if not state.done(f"task3:{profile_id}:{model}:{dataset_id}:{variant}")
+        or not state.run_id(f"task3:{profile_id}:{model}:{dataset_id}:{variant}")
+    ]
+    incomplete += [
+        key
+        for key in state.cells
+        if key.startswith(("batching:", "context:", "weak_phrasing:"))
+        and not state.done(key)
+    ]
+    for name, ablation in rerun.get("ablations", {}).items():
+        for entry in ablation.get("models", []):
+            profile_id, model = entry["profile"], entry["model"]
+            if name == "batching":
+                keys = [
+                    f"batching:{arm}:{profile_id}:{model}:{ablation.get('dataset', 'mlm_tapt')}:{ablation.get('variant', 'must')}"
+                    for arm in ("grouped", "shuffled", "single")
+                ]
+            elif name == "context":
+                keys = [
+                    f"context:{arm}:{profile_id}:{model}"
+                    for arm in ("bare", "document")
+                ]
+            else:
+                keys = [f"weak_phrasing:{profile_id}:{model}"]
+            missing += [key for key in keys if not state.done(key)]
     if incomplete or missing:
         raise StageError(
             "the cohort is incomplete, so the paper tables would describe a "
@@ -670,7 +946,12 @@ def stage_analysis(
     # Named directories, not "everything under outputs/": without them the
     # cache pass walks the archived evaluation dirs too and fails on runs this
     # rerun never touched.
-    acse_argv = ["scripts/compute_acse_semantic_artifacts.py"]
+    selected_manifest = f"{outputs_dir}/rerun/acse_selected_manifest.csv"
+    acse_argv = [
+        "scripts/compute_acse_semantic_artifacts.py",
+        "--selected-manifest",
+        selected_manifest,
+    ]
     if runner.fake:
         acse_argv += ["--output-root", outputs_dir]
     for analysis_dir in analysis_dirs:
@@ -685,6 +966,12 @@ def stage_analysis(
             "analysis:embedding-probe",
             [
                 "scripts/diagnose_embedding_separability.py",
+                "--bootstrap-samples",
+                bootstrap,
+                "--manifest",
+                selected_manifest,
+                "--models",
+                "hgb",
                 "--output-dir",
                 f"{outputs_dir}/embedding_diagnostic",
             ],
@@ -693,11 +980,27 @@ def stage_analysis(
             "analysis:figure2",
             [
                 "scripts/plot_embedding_diagnostic_figure_v2.py",
+                "--output",
+                f"{outputs_dir}/rerun/figures/embedding_diagnostic.pdf",
                 "--diagnostic-dir",
                 f"{outputs_dir}/embedding_diagnostic",
             ],
         ),
     ]
+    mlx_steps.append(
+        (
+            "analysis:figure3",
+            [
+                "scripts/plot_embedding_diagnostic_tsne_supp.py",
+                "--manifest",
+                selected_manifest,
+                "--diagnostic-dir",
+                f"{outputs_dir}/embedding_diagnostic",
+                "--output",
+                f"{outputs_dir}/rerun/figures/embedding_diagnostic_tsne.pdf",
+            ],
+        )
+    )
     if not runner.fake:
         steps.extend(mlx_steps)
     export_argv = [
@@ -722,6 +1025,11 @@ def stage_analysis(
         *models,
         *local_models,
     ]
+    for key, entry in state.cells.items():
+        if key.startswith("cohort:"):
+            export_argv += ["--run-id", str(entry["run_id"])]
+        elif key.startswith("task3:"):
+            export_argv += ["--task3-run-id", str(entry["run_id"])]
     for model in local_models:
         export_argv += ["--local-model", model]
     steps.append(("analysis:paper-tables", export_argv))
@@ -750,6 +1058,9 @@ def stage_analysis(
                 "analysis:numbers",
                 [
                     "scripts/export_paper_numbers.py",
+                    "--outputs-dir",
+                    outputs_dir,
+                    "--strict",
                     "--output",
                     str(analysis.get("numbers_output", "outputs/paper_numbers.tex")),
                 ],
@@ -760,6 +1071,20 @@ def stage_analysis(
             "analysis:context-ablation",
             [
                 "scripts/compare_context_ablation.py",
+                "--run-group-id",
+                str(
+                    rerun.get("ablations", {})
+                    .get("context", {})
+                    .get("run_group_id", "context-ablation-2026-09")
+                ),
+                "--bootstrap-samples",
+                bootstrap,
+                *[
+                    arg
+                    for key in state.cells
+                    if key.startswith("context:")
+                    for arg in ("--run-id", state.run_id(key))
+                ],
                 *smoke_flags,
                 "--output-prefix",
                 f"{outputs_dir}/context_ablation_summary",
@@ -772,6 +1097,14 @@ def stage_analysis(
             "analysis:batching-ablation",
             [
                 "scripts/compare_batching_ablation.py",
+                "--bootstrap-samples",
+                bootstrap,
+                *[
+                    arg
+                    for key in state.cells
+                    if key.startswith("batching:")
+                    for arg in ("--run-id", state.run_id(key))
+                ],
                 # The comparison defaults to the paper's cell; the arms were run
                 # on whichever cell the rerun config names.
                 "--dataset",
@@ -801,6 +1134,14 @@ def stage_analysis(
             )
         )
     for key, argv in steps:
+        if key == "analysis:context-ablation" and not rerun.get("ablations", {}).get(
+            "context", {}
+        ).get("models"):
+            continue
+        if key == "analysis:batching-ablation" and not rerun.get("ablations", {}).get(
+            "batching", {}
+        ).get("models"):
+            continue
         if state.done(key):
             print(f"[skip] {key} already complete")
             continue
@@ -857,7 +1198,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--state",
         type=Path,
         default=None,
-        help=f"State file (default: outputs/{STATE_NAME}).",
+        help="State file (default: outputs/rerun/<run_group_id>/state.json).",
+    )
+    parser.add_argument(
+        "--profile",
+        action="append",
+        default=[],
+        help=(
+            "Drive only this profile's models (repeatable). The hosted and the "
+            "local endpoint are independent, so one driver per profile can run "
+            "concurrently against the same state file. Not combined with the "
+            "analysis stage, which covers every profile."
+        ),
     )
     return parser
 
@@ -883,38 +1235,103 @@ def _main(argv: list[str] | None = None) -> int:
         for profile_id in list(rerun["cohort_profiles"])
         + list(rerun.get("local_profiles", []))
     ]
+    resolve_ablation_models(rerun, profiles)
     run_config = generated_run_config(root, rerun, profiles)
     run_config_path = root / GENERATED_RUN_CONFIG
-    if not args.dry_run:
-        eu.write_json(run_config_path, run_config)
+    selected = select_profiles(list(args.profile), rerun)
+    if args.profile and "analysis" in stages:
+        raise StageError(
+            "--profile drives one endpoint's generation; the analysis stage covers "
+            "every profile, so run it without --profile once all drivers are done."
+        )
+    if args.fake_completion:
+        run_config_path = root / "outputs/smoke/rerun/run_config.json"
+        run_config["acse_embedding_backend"] = eu.ACSE_PROXY_EMBEDDING_BACKEND
+        run_config["acse_embedding_mlx_model"] = ""
 
     if args.fake_completion:
         # The runners route by run id, but this process and the analysis
         # scripts also need to look in the same tree.
         os.environ[eu.SMOKE_TREE_ENV_VAR] = "1"
-    state_name = "rerun_state_smoke.json" if args.fake_completion else STATE_NAME
-    state = RerunState.load(
-        args.state or root / "outputs" / state_name, dry_run=args.dry_run
+    state_root = root / (
+        "outputs/smoke/rerun" if args.fake_completion else "outputs/rerun"
     )
+    state = RerunState.load(
+        args.state or state_root / str(rerun["run_group_id"]) / "state.json",
+        dry_run=args.dry_run,
+    )
+    state.bind_configuration(
+        {
+            "rerun": rerun,
+            "run_config": run_config,
+            "fake_completion": args.fake_completion,
+            "smoke_items": args.smoke_items,
+        }
+    )
+    if not args.dry_run:
+        eu.write_json(run_config_path, run_config)
     runner = Runner(
         root=root,
         dry_run=args.dry_run,
         fake=args.fake_completion,
         smoke_items=args.smoke_items,
+        embedding=str(rerun.get("embedding", "qwen3_06b")),
+        environment={
+            eu.ACSE_EMBEDDING_BACKEND_ENV: str(
+                run_config.get("acse_embedding_backend", "")
+            ),
+            eu.ACSE_MLX_MODEL_ENV: str(run_config.get("acse_embedding_mlx_model", "")),
+            eu.SMOKE_TREE_ENV_VAR: "1" if args.fake_completion else "0",
+        },
     )
 
     if "preflight" in stages:
-        stage_preflight(root, rerun, profiles, cohort, local, fake=args.fake_completion)
-    if "cohort" in stages:
-        stage_cohort(runner, state, rerun, cohort + local)
-    if "task3" in stages:
-        stage_task3(runner, state, rerun, run_config)
-    if "ablations" in stages:
-        stage_ablations(runner, state, rerun, run_config_path)
+        stage_preflight(
+            root,
+            rerun,
+            [profile for profile in profiles if profile["profile_id"] in selected],
+            cohort,
+            local,
+            fake=args.fake_completion,
+            dry_run=args.dry_run,
+            analysis="analysis" in stages,
+        )
+    # Finish all requests for one model before letting the router load the next.
+    for profile_id, model in cohort + local:
+        if profile_id not in selected:
+            continue
+        model_config = {
+            **run_config,
+            "profiles": [
+                {**profile, "models": [model]}
+                for profile in profiles
+                if str(profile["profile_id"]) == profile_id
+            ],
+        }
+        model_rerun = {
+            **rerun,
+            "ablations": {
+                name: {
+                    **ablation,
+                    "models": [
+                        entry
+                        for entry in ablation.get("models", [])
+                        if (entry["profile"], entry["model"]) == (profile_id, model)
+                    ],
+                }
+                for name, ablation in rerun.get("ablations", {}).items()
+            },
+        }
+        if "cohort" in stages:
+            stage_cohort(runner, state, rerun, [(profile_id, model)])
+        if "task3" in stages:
+            stage_task3(runner, state, rerun, model_config)
+        if "ablations" in stages:
+            stage_ablations(runner, state, model_rerun, run_config_path)
     if "analysis" in stages:
         stage_analysis(runner, state, rerun, cohort, local)
 
-    failures = state.failures()
+    failures = state.failures(selected)
     if failures:
         print(
             "\nFailed, re-run this command to retry:\n  - " + "\n  - ".join(failures),

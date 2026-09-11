@@ -15,6 +15,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 from scripts import (
     compare_batching_ablation as batching,
@@ -214,11 +215,15 @@ class WeakModalityProbeTest(unittest.TestCase):
         )
         self.assertEqual(
             probe.probe_summary_dir(self.root, smoke_id),
-            self.root / "outputs" / "smoke",
+            self.root
+            / "outputs"
+            / "smoke"
+            / "weak_modality_probe"
+            / eu.safe_identifier(smoke_id),
         )
         self.assertEqual(
             probe.probe_summary_dir(self.root, "weak-modality-probe-1"),
-            self.root / "outputs",
+            self.root / "outputs" / "weak_modality_probe" / "weak_modality_probe_1",
         )
         self.assertNotIn(
             "smoke",
@@ -310,6 +315,70 @@ class WeakModalityProbeTest(unittest.TestCase):
             len(eu.build_weak_modality_probe_items(_probe_seeds())),
             len(_probe_seeds()) * len(eu.WEAK_MODALITY_PROBE_TEMPLATES),
         )
+
+
+class WeakTextSummaryTest(unittest.TestCase):
+    def test_text_strengthening_is_reported_when_the_label_stays_correct(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            items = eu.build_weak_modality_probe_items(_probe_seeds())
+            raw = [
+                {
+                    "run_id": "smoke-probe",
+                    "model": "m1",
+                    "task": "task2",
+                    "item_id": item["item_id"],
+                    "sample_kind": "deterministic",
+                    "template_id": item["template_id"],
+                    "batch_id": "request-1",
+                    "parse_status": "ok",
+                    "parsed_json": {
+                        "requirement": item["source_statement"]
+                        if item["template_id"] == "useful_if"
+                        else "The system must export reports.",
+                        "modality": "nice_to_have",
+                        "confidence": 0.9,
+                    },
+                    "confidence_scale": "0_1",
+                }
+                for item in items
+            ]
+            raw_path = root / "raw.jsonl"
+            for row in raw:
+                eu.append_jsonl(raw_path, row)
+            paths = probe.write_summary(
+                root,
+                "nice",
+                SimpleNamespace(
+                    run_id="smoke-probe", model="m1", output_path=raw_path, items=items
+                ),
+            )
+            summaries = eu.read_csv_rows(paths["csv"])
+            strengthened = next(
+                row for row in summaries if row["template_id"] == "nice_if"
+            )
+            self.assertEqual(float(strengthened["accuracy"]), 1)
+            self.assertEqual(
+                int(strengthened["strict_text_over_commitment_n_numerator"]), 1
+            )
+            self.assertEqual(
+                int(strengthened["strict_text_over_commitment_n_denominator"]), 1
+            )
+            deltas = eu.read_csv_rows(paths["deltas"])
+            self.assertEqual(len(deltas), 6)
+            self.assertTrue(all(float(row["delta"]) == 1 for row in deltas))
+            self.assertTrue(all(int(row["n_complete_pairs"]) == 1 for row in deltas))
+
+    def test_zero_seed_limit_selects_the_full_benchmark(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seeds = [{**_probe_seeds()[0], "seed_id": f"S{i:04d}"} for i in range(30)]
+            eu.write_csv_rows(root / "data/processed/seeds_selected.csv", seeds)
+            eu.write_csv_rows(
+                root / "data/processed/benchmark_items.csv",
+                eu.build_benchmark_items(seeds),
+            )
+            self.assertEqual(len(probe.pilot_seeds(root, "nice", "must", 0)), 30)
 
 
 def _probe_seeds():

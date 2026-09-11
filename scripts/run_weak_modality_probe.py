@@ -1,4 +1,4 @@
-"""Run the weak-phrasing probe: four weak templates over the pilot seeds.
+"""Run the weak-phrasing probe: four weak templates over the benchmark seeds.
 
 The benchmark renders weak stakeholder intent with one fixed template ("It
 would be useful if the system could ..."), so a strengthening rate measured on
@@ -26,6 +26,7 @@ does not measure weak intent at all.
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,7 @@ except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
 
 
 PROBE_RUN_PREFIX = "weak-modality-probe"
+DEFAULT_BOOTSTRAP_SAMPLES = 1000
 PROBE_TASKS = ("task2",)
 
 
@@ -69,14 +71,11 @@ def probe_items_path(root: Path, dataset_id: str, variant: str, *, run_id: str) 
 
 
 def probe_summary_dir(root: Path, run_id: str) -> Path:
-    """`outputs/` for a real run, `outputs/smoke/` for a smoke or fake one.
-
-    Same split the per-cell analysis makes: a smoke run must never overwrite a
-    paper-facing summary.
-    """
-    return (
+    """Per-run summaries, keeping every model and separating smoke results."""
+    output_root = (
         root / "outputs" / "smoke" if eu.is_smoke_run_id(run_id) else root / "outputs"
     )
+    return output_root / "weak_modality_probe" / eu.safe_identifier(run_id)
 
 
 def probe_raw_path(root: Path, dataset_id: str, variant: str, *, run_id: str) -> Path:
@@ -115,7 +114,9 @@ def pilot_seeds(root: Path, dataset_id: str, variant: str, count: int) -> list[d
     seed_rows = eu.read_csv_rows(
         eu.artifact_path(root / "data/processed/seeds_selected.csv", dataset_id)
     )
-    wanted = sorted({row["seed_id"] for row in benchmark})[:count]
+    wanted = sorted({row["seed_id"] for row in benchmark})
+    if count > 0:
+        wanted = wanted[:count]
     order = {seed_id: index for index, seed_id in enumerate(wanted)}
     seeds = sorted(
         (row for row in seed_rows if row["seed_id"] in order),
@@ -206,10 +207,19 @@ def plan_cell(
     resume: rl.ResumeState | None,
 ) -> ProbeCell:
     """Build the probe items and the requests that answer them."""
-    seed_count = int(eu.DEFAULT_CONFIG["project"]["pilot_seed_count"])
+    # `--mode smoke` must never grow into the full paid probe because someone
+    # named its run id by hand, and a resumed smoke run (a smoke-shaped id)
+    # must keep its truncated scope: either signal makes the cell a smoke cell.
+    if args.mode == "smoke" and not eu.is_smoke_run_id(run_id):
+        raise ValueError(
+            f"--mode smoke needs a smoke run id (got {run_id!r}); the artifacts "
+            "would otherwise be written into the paper-facing tree."
+        )
+    smoke = args.mode == "smoke" or eu.is_smoke_run_id(run_id)
+    seed_count = int(eu.DEFAULT_CONFIG["project"]["pilot_seed_count"]) if smoke else 0
     seeds = pilot_seeds(root, dataset_id, variant, seed_count)
     items = eu.build_weak_modality_probe_items(seeds)
-    if args.mode == "smoke":
+    if smoke:
         items = items[: max(1, int(args.smoke_items))]
     items_path = probe_items_path(root, dataset_id, variant, run_id=run_id)
     if not args.dry_run:
@@ -331,16 +341,115 @@ def registry_row(
     )
 
 
-def write_summary(root: Path, dataset_id: str, cell: ProbeCell) -> dict[str, Path]:
-    """Per-template summary of what each weak phrasing was read as."""
+def text_score_rows(items: list[dict], raw_rows: list[dict]) -> list[dict]:
+    """Read generated text independently of whether its declared label is correct."""
+    by_id = {row["item_id"]: row for row in items}
+    scores = []
+    for raw in raw_rows:
+        item = by_id.get(str(raw.get("item_id", "")))
+        parsed = raw.get("parsed_json")
+        if not item or raw.get("parse_status") != "ok" or not isinstance(parsed, dict):
+            continue
+        fields = eu.text_modality_fields(
+            str(parsed.get("requirement", "")),
+            str(item["task2_gold_modality"]),
+            eu.normalize_modality(parsed.get("modality")) or "unknown",
+            eu.confidence_probability(raw, parsed),
+        )
+        scores.append(
+            {
+                **raw,
+                **fields,
+                "task": "task2",
+                "seed_id": item["seed_id"],
+                "source_modality": item["task2_gold_modality"],
+                "template_id": item["template_id"],
+            }
+        )
+    return scores
+
+
+def write_summary(
+    root: Path,
+    dataset_id: str,
+    cell: ProbeCell,
+    *,
+    bootstrap_samples: int | None = None,
+) -> dict[str, Path]:
+    """Label and text diagnostics, plus paired deterministic phrasing differences."""
     rows = eu.read_jsonl(cell.output_path) if cell.output_path.exists() else []
     rows = [row for row in rows if str(row.get("run_id", "")) == cell.run_id]
     summary = eu.weak_modality_probe_summary(cell.items, rows)
-    return eu.write_weak_modality_probe_summary(
-        summary,
-        probe_summary_dir(root, cell.run_id),
-        suffix=eu.dataset_suffix(dataset_id),
+    scores = text_score_rows(cell.items, rows)
+    iterations = (
+        20
+        if eu.is_smoke_run_id(cell.run_id)
+        else int(bootstrap_samples or DEFAULT_BOOTSTRAP_SAMPLES)
     )
+    for row in summary:
+        selected = [
+            score
+            for score in scores
+            if score["template_id"] == row["template_id"]
+            and score["sample_kind"] == row["sample_kind"]
+        ]
+        row.update(eu.text_over_commitment_ci_fields(selected, iterations=iterations))
+        row["unresolved_n"] = int(row["n"]) - len(selected)
+        row["no_readable_cue_n"] = sum(
+            score["text_modality_parse_status"] != "ok" for score in selected
+        )
+    output_dir = probe_summary_dir(root, cell.run_id)
+    paths = eu.write_weak_modality_probe_summary(
+        summary, output_dir, suffix=eu.dataset_suffix(dataset_id)
+    )
+    baseline = [
+        row
+        for row in scores
+        if row["template_id"] == "useful_if" and row["sample_kind"] == "deterministic"
+    ]
+    deltas = []
+    # One request per capability per template, so the expected count of an
+    # arm is the number of distinct capabilities (a smoke run truncates the
+    # item list, so dividing by the template count would go negative).
+    per_template = len({item["seed_id"] for item in cell.items})
+    for template in eu.WEAK_MODALITY_PROBE_TEMPLATES:
+        template_id = template["template_id"]
+        if template_id == "useful_if":
+            continue
+        other = [
+            row
+            for row in scores
+            if row["template_id"] == template_id
+            and row["sample_kind"] == "deterministic"
+        ]
+        # Report missing/unreadable pairs explicitly; only readable matched
+        # capabilities contribute to the paired change in strengthening.
+        a = [row for row in baseline if row["text_modality_parse_status"] == "ok"]
+        b = [row for row in other if row["text_modality_parse_status"] == "ok"]
+        for metric, strict in (("strict", True), ("broad", False)):
+            delta = eu.bootstrap_seed_metric_delta(
+                a,
+                b,
+                lambda rs, strict=strict: eu.text_strengthening_rate(rs, strict=strict),
+                cluster_field="batch_id",
+                pair_field="seed_id",
+                iterations=iterations,
+            )
+            deltas.append(
+                {
+                    "model": cell.model,
+                    "run_id": cell.run_id,
+                    "template_id": template_id,
+                    "baseline": "useful_if",
+                    "metric": metric,
+                    "baseline_unreadable_or_missing_n": per_template - len(a),
+                    "other_unreadable_or_missing_n": per_template - len(b),
+                    **delta._asdict(),
+                }
+            )
+    paths["deltas"] = output_dir / "weak_modality_text_deltas.csv"
+    eu.write_csv_rows(paths["deltas"], deltas)
+    return paths
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -354,6 +463,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Build the probe items and print the request plan without sending it.",
+    )
+    parser.add_argument(
+        "--bootstrap-samples",
+        type=int,
+        default=DEFAULT_BOOTSTRAP_SAMPLES,
+        help="Bootstrap resamples for the summary intervals (smoke runs use 20).",
     )
     return parser
 
@@ -474,14 +589,21 @@ def run_from_config(run_config: dict[str, Any], args: RunnerArgs) -> None:
             ),
         )
     )
-    paths = write_summary(root, dataset_id, cell)
+    paths = write_summary(
+        root,
+        dataset_id,
+        cell,
+        bootstrap_samples=int(getattr(args, "bootstrap_samples", 0) or 0) or None,
+    )
     eu.logger.info("Probe summary: %s", paths["csv"])
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     eu.configure_run_logging(args.log_level)
-    run_from_config(eu.load_run_config(args.config), args)
+    config = eu.load_run_config(args.config)
+    args.resolved_config_yaml = json.dumps(config, indent=2)
+    run_from_config(config, args)
     return 0
 
 

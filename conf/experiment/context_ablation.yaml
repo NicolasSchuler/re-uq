@@ -26,7 +26,7 @@ defaults:
 run_group_id: context-ablation-2026-09
 task: task2
 mode: full
-model: glm-5.1
+model: glm-5.3
 
 profile:
   batch_size: 16
