@@ -770,8 +770,9 @@ class ContextAblationTableTest(unittest.TestCase):
         deltas = {(r["stratum"], r["metric"]): r for r in tables["deltas"]}
         overall = deltas[("all", "label_accuracy")]
         seeds = {row["seed_id"] for row in benchmark}
-        self.assertEqual(overall["n_complete_pairs"], len(seeds) - 1)
-        self.assertEqual(overall["n_excluded_single_arm"], 1)
+        self.assertEqual(overall["n_complete_pairs"], 4 * (len(seeds) - 1))
+        self.assertEqual(overall["n_matched_capabilities"], len(seeds) - 1)
+        self.assertEqual(overall["n_excluded_single_arm"], 4)
         self.assertIn("n_complete_pairs", context_ablation.DELTA_FIELDS)
 
     def test_ablation_rows_report_request_and_seed_clustered_intervals(self):
@@ -811,10 +812,11 @@ class ContextAblationTableTest(unittest.TestCase):
             arm["strict_text_strengthening_seed_ci_high"]
             - arm["strict_text_strengthening_seed_ci_low"],
         )
-        # Pairing stays by seed; only the resampling unit is the request.
-        self.assertEqual(delta["delta_cluster_field"], "batch_id")
+        # Pair exact items; resample connected requests or capabilities.
+        self.assertEqual(delta["delta_cluster_field"], "paired_request_cluster")
         self.assertEqual(delta["n_delta_clusters"], 2)
-        self.assertEqual(delta["n_complete_pairs"], 6)
+        self.assertEqual(delta["n_complete_pairs"], 24)
+        self.assertEqual(delta["n_matched_capabilities"], 6)
         self.assertGreaterEqual(
             delta["delta_ci_high"] - delta["delta_ci_low"],
             delta["delta_seed_ci_high"] - delta["delta_seed_ci_low"],
@@ -1342,6 +1344,111 @@ class CellFixture:
 
 
 class ExportPaperTablesTest(CellFixture, unittest.TestCase):
+    def test_pooled_modality_intervals_resample_answers_across_cells(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._write_cell(root, "mlm_tapt", "must")
+            benchmark = self._write_cell(root, "nice", "must")
+            source_texts = {
+                row["item_id"]: row["source_statement"] for row in benchmark
+            }
+            for dataset in ("mlm_tapt", "nice"):
+                raw_path = eu.model_outputs_raw_path(root, dataset, "must")
+                records = eu.read_jsonl(raw_path)
+                for row in records:
+                    # Distinct delivered requests across cells, with each
+                    # capability's four modalities grouped within a request.
+                    row["batch_id"] = (
+                        f"{dataset}-{row['run_id']}-{row['task']}-{row['seed_id']}"
+                        f"-{row['sample_kind']}-{row['sample_index']}"
+                    )
+                    if (
+                        dataset == "nice"
+                        and row["model"] == "m1"
+                        and row["run_id"] == "full-new"
+                        and row["task"] == "task2"
+                    ):
+                        row["parsed_json"]["requirement"] = source_texts[row["item_id"]]
+                raw_path.write_text(
+                    "\n".join(json.dumps(row) for row in records) + "\n"
+                )
+
+            result = export.export_tables(
+                root,
+                [("mlm_tapt", "must"), ("nice", "must")],
+                ["m1", "m2"],
+                [],
+                root / "outputs",
+                bootstrap_samples=200,
+                include_task3=False,
+            )
+            pooled = next(
+                row
+                for row in result["pooled_modality_rows"]
+                if row["model"] == "m1" and row["source_modality"] == "recommended"
+            )
+
+            self.assertEqual(pooled["strict_strengthening_n"], len(benchmark) // 4)
+            self.assertEqual(
+                pooled["strict_strengthening_denominator"], len(benchmark) // 2
+            )
+            self.assertEqual(pooled["strict_strengthening_rate"], 0.5)
+            self.assertEqual(pooled["strengthening_ci_cluster_field"], "batch_id")
+            # Cell estimates are constantly one and zero. Averaging their
+            # bounds would incorrectly give [0.5, 0.5].
+            self.assertLess(pooled["strict_strengthening_ci_low"], 0.5)
+            self.assertGreater(pooled["strict_strengthening_ci_high"], 0.5)
+            self.assertTrue(result["paths"]["per_model_modality_pooled"].exists())
+
+    def test_all_failed_model_keeps_planned_counts_for_every_modality(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            benchmark = self._write_cell(root, "mlm_tapt", "must")
+            raw_path = eu.model_outputs_raw_path(root, "mlm_tapt", "must")
+            records = eu.read_jsonl(raw_path)
+            for row in records:
+                if row["model"] == "m2" and row["task"] == "task2":
+                    row["parse_status"] = "parse_error"
+                    row["parsed_json"] = None
+            raw_path.write_text("\n".join(json.dumps(row) for row in records) + "\n")
+
+            result = export.export_tables(
+                root,
+                [("mlm_tapt", "must")],
+                ["m1", "m2"],
+                [],
+                root / "outputs",
+                bootstrap_samples=0,
+                include_task3=False,
+            )
+            failed = [row for row in result["per_model_rows"] if row["model"] == "m2"]
+            self.assertEqual(len(failed), 4)
+            for row in failed:
+                self.assertEqual(row["n_valid"], 0)
+                self.assertEqual(row["n_parse_failures"], len(benchmark) // 4)
+                self.assertEqual(row["n_text_unclassified"], 0)
+                self.assertEqual(row["requirement_word_count_n"], 0)
+                self.assertEqual(row["mean_requirement_word_count"], "")
+
+    def test_length_and_coverage_use_separate_eligible_counts(self):
+        rows = [
+            {
+                "task": "task2",
+                "text_modality_parse_status": status,
+                "requirement_word_count": words,
+                "strict_text_overcommit": False,
+                "text_overcommit": False,
+                "confidence": 0.8,
+            }
+            for status, words in (("ok", 10), ("unknown", ""), ("ok", 20))
+        ]
+        row = export.per_model_row("m1", "nice", "must", "nice_to_have", rows, {}, 6, 0)
+        self.assertEqual(row["n_valid"], 3)
+        self.assertEqual(row["n_parse_failures"], 3)
+        self.assertEqual(row["n_text_unclassified"], 1)
+        self.assertEqual(row["requirement_word_count_n"], 2)
+        self.assertEqual(row["mean_requirement_word_count"], 15)
+
     def test_select_cell_runs_prefers_latest_and_drops_smoke_azure_incomplete(self):
         rows = [
             {
@@ -2053,6 +2160,52 @@ class PerModelRqTableTest(CellFixture, unittest.TestCase):
             for row in result["rq_rows"]
         }
 
+    def test_task1_counts_and_intervals_require_high_confidence_yes(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_cell(root, "mlm_tapt", "must")
+            raw_path = eu.model_outputs_raw_path(root, "mlm_tapt", "must")
+            raw_rows = eu.read_jsonl(raw_path)
+            decisions = {
+                "mandatory": ("yes", 0.99),
+                "recommended": ("no", 0.05),
+                "optional": ("yes", 0.90),
+                "nice_to_have": ("yes", 0.89),
+            }
+            for row in raw_rows:
+                if row["model"] == "m1" and row["task"] == "task1":
+                    decision, confidence = decisions[row["source_modality"]]
+                    row["parsed_json"].update(decision=decision, confidence=confidence)
+            raw_path.write_text("".join(json.dumps(row) + "\n" for row in raw_rows))
+
+            model = self._rows(self._export(root))[("m1", "all", "all")]
+            self.assertEqual(model["task1_unsupported_acceptance_90_n"], 6)
+            self.assertEqual(model["task1_unsupported_acceptance_90_denominator"], 18)
+            # Every capability contributes one eligible yes among three sources,
+            # so each resample must retain the same one-third rate.
+            for field in ("rate", "ci_low", "ci_high"):
+                self.assertAlmostEqual(
+                    model[f"task1_unsupported_acceptance_90_{field}"], 1 / 3
+                )
+
+    def test_exact_run_selection_rejects_a_newer_compatible_run(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_cell(root, "mlm_tapt", "must")
+            cell = export.score_cell(
+                root, "mlm_tapt", "must", ["m1"], [], selected_run_ids={"full-old"}
+            )
+            self.assertEqual(cell["run_ids"], {"m1": "full-old"})
+            with self.assertRaisesRegex(ValueError, "No compatible complete"):
+                export.score_cell(
+                    root,
+                    "mlm_tapt",
+                    "must",
+                    ["m1"],
+                    [],
+                    selected_run_ids={"nonexistent"},
+                )
+
     def test_row_set_is_one_per_model_plus_one_per_cell_plus_all(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -2118,7 +2271,7 @@ class PerModelRqTableTest(CellFixture, unittest.TestCase):
             self.assertEqual(m2["task2_strict_strengthening_rate"], 0.0)
 
     def test_weak_strict_and_weak_strict_high_conf_are_separate_columns(self):
-        """`tab:rq1` prints the ungated rate; `\\numWeakStrict` is the 0.90 one."""
+        """The ungated headline remains separate from the high-confidence diagnostic."""
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             benchmark = self._write_cell(root, "mlm_tapt", "must")
@@ -2420,7 +2573,7 @@ class RqSliceMetricsTest(unittest.TestCase):
         self.assertEqual(row["task2_meaning_variation_auroc_n"], 4)
         self.assertEqual(row["task2_meaning_variation_auroc_n_positive"], 4)
 
-    def test_task3_verdicts_cluster_on_the_audited_task2_request(self):
+    def test_task3_verdicts_cluster_on_the_audit_request(self):
         rows = [
             _rq_score_row("i0", strict=True, batch_id="r1"),
             _rq_score_row("i1", strict=True, batch_id="r1"),
@@ -2435,7 +2588,7 @@ class RqSliceMetricsTest(unittest.TestCase):
                 "source_item_id": "i0",
                 "gold_relation": "strengthens",
                 "pred_relation": "strengthens",
-                # The audit's own request must NOT become the cluster.
+                # The audit request determines dependence among audit verdicts.
                 "batch_id": "audit-request",
             },
             {
@@ -2453,7 +2606,8 @@ class RqSliceMetricsTest(unittest.TestCase):
         slices = self._slices(rows, task3=task3)
 
         self.assertEqual(
-            [row["batch_id"] for row in slices["task3_strict"]], ["r1", "r1"]
+            [row["batch_id"] for row in slices["task3_strict"]],
+            ["audit-request", "audit-request"],
         )
         row = export.per_model_rq_row(
             "m1",
@@ -2592,9 +2746,7 @@ class RunGroupDefaultTest(unittest.TestCase):
     def test_default_run_group_matches_what_the_configs_write(self):
         config = (eu.project_root() / "conf/config.yaml").read_text(encoding="utf-8")
 
-        self.assertEqual(
-            export.DEFAULT_PAPER_RUN_GROUP_ID, "provider-matrix-v2-2026-05"
-        )
+        self.assertEqual(export.DEFAULT_PAPER_RUN_GROUP_ID, "modality-rerun-2026-09")
         self.assertIn(
             f"run_group_id: {export.DEFAULT_PAPER_RUN_GROUP_ID}",
             config,

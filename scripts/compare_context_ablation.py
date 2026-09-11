@@ -1,26 +1,8 @@
-"""Compare the bare and document arms of the context ablation (TODO section B).
+"""Compare document context against bare input on exact, jointly eligible items.
 
-Reads the `pure` run registry and raw outputs, picks the latest complete run
-per (model, item_context), scores each arm exactly as the run-matrix
-comparison does (deterministic Task 2 rows), and writes one table:
-
-* one row per model x arm x stratum (`all`, `weak_intent`, `marker_M`,
-  `marker_O`) with n, declared-label accuracy, strict and broad text
-  strengthening with request-clustered CIs (the seed-clustered pair alongside
-  as `*_seed_ci_*`), and the README-style weak-intent rate where the stratum
-  is weak-intent;
-* one delta row per model x stratum (`document - bare`) with a *paired*
-  cluster bootstrap CI over the complete-pair cohort
-  (`eu.bootstrap_seed_metric_delta`), reporting how many seeds were paired and
-  how many were dropped for having answered in one arm only. Pairing is by
-  seed — the same capability seen bare and in its document — while resampling
-  is by request: a seed's four source conditions sit in one request, so the
-  pair is never split and the request is only the coarser unit. Both intervals
-  are written (`delta_ci_*` request-clustered, `delta_seed_ci_*` by seed).
-
-Outputs `outputs/context_ablation_summary.{csv,md}` and a provenance JSON
-listing the run ids and resolved-config digests behind every row. Nothing
-here touches the paper-facing exports; see docs/context_ablation.md.
+Full-arm descriptions and matched-cohort estimates are exported separately.
+Request connected components preserve dependence in both arms; capability
+intervals are retained as sensitivity estimates. See docs/context_ablation.md.
 """
 
 from __future__ import annotations
@@ -47,7 +29,15 @@ BOOTSTRAP_SEED = 20260518
 # deterministic Task 2 rows are compared here, but scoring still declares the
 # plan those runs were executed under rather than inferring it.
 DEFAULT_STOCHASTIC_SAMPLES = 5
-STRATA = ("all", "weak_intent", "marker_M", "marker_O")
+MODALITIES = tuple(eu.MODALITIES)
+STRATA = (
+    "all",
+    "weak_intent",
+    "marker_M",
+    "marker_O",
+    *(f"modality_{m}" for m in MODALITIES),
+    *(f"marker_{marker}/modality_{m}" for marker in ("M", "O") for m in MODALITIES),
+)
 METRICS: tuple[tuple[str, Callable[[list[dict[str, Any]]], float]], ...] = (
     ("label_accuracy", lambda rows: eu.task_accuracy(rows, "task2")),
     ("strict_text_strengthening", lambda rows: eu.text_strengthening_rate(rows, True)),
@@ -94,6 +84,32 @@ DELTA_FIELDS = [
 ]
 
 
+ARM_FIELDS += ["estimate_cohort", "n_failed_items", "n_unclassified_items"]
+DELTA_FIELDS += [
+    "full_arm_bare_descriptive",
+    "full_arm_document_descriptive",
+    "cluster_note",
+    "unavailable_reason",
+    "delta_ci_unavailable_reason",
+    "delta_seed_ci_unavailable_reason",
+    "n_matched_items",
+    "n_matched_capabilities",
+    "n_unmatched_items",
+    "n_duplicate_identities",
+    "n_excluded_ineligible_items",
+    "n_missing_identity_rows",
+] + [
+    f"n_{arm}_{kind}"
+    for arm in ("bare", "document")
+    for kind in (
+        "duplicate_rows",
+        "failed_items",
+        "unclassified_items",
+        "eligible_items",
+    )
+]
+
+
 def select_arm_runs(
     registry_rows: list[dict[str, Any]],
     *,
@@ -103,6 +119,11 @@ def select_arm_runs(
     """Latest complete, fully covered run per (model, item_context)."""
     selected: dict[tuple[str, str], dict[str, Any]] = {}
     for row in registry_rows:
+        if (
+            row.get("benchmark_variant", VARIANT) != VARIANT
+            or row.get("dataset_id", DATASET_ID) != DATASET_ID
+        ):
+            continue
         if str(row.get("run_group_id", "")) != run_group_id:
             continue
         if str(row.get("status", "")) != "complete":
@@ -136,20 +157,113 @@ def task2_scores(
     sampling_plan: eu.SamplingPlan,
 ) -> list[dict[str, Any]]:
     """Deterministic Task 2 score rows with the item's author marker joined on."""
-    marker_by_item = {
-        str(row["item_id"]): str(row.get("context_marker", "")) for row in benchmark
-    }
-    current = eu.benchmark_rows_with_current_raw_outputs(benchmark, raw_rows)
-    scores = eu.build_uq_scores(current, raw_rows, sampling_plan=sampling_plan)
-    return [
-        {**row, "context_marker": marker_by_item.get(str(row["item_id"]), "")}
-        for row in scores
-        if str(row.get("task", "")) == "task2"
-        and str(row.get("uq_method", "")) == "verbalized_confidence"
-    ]
+    by_id = {str(r["item_id"]): r for r in benchmark}
+    by_source = {}
+    for item in benchmark:
+        by_source.setdefault(
+            (item["source_statement"], item["source_modality"]), []
+        ).append(item)
+    # Resolve every raw row to its current benchmark item first, then score
+    # the arm in one pass: build_uq_scores resolves the sampling plan and
+    # dedupes per call, which is far too much to repeat per row.
+    resolved: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    for raw in eu.dedupe_raw_rows(raw_rows):
+        if raw.get("task") != "task2" or raw.get("sample_kind") != "deterministic":
+            continue
+        # Prefer the recorded source even when an arm-local ID happens to name
+        # a different current item (for example after arm-local renumbering).
+        if raw.get("source_statement"):
+            candidates = by_source.get(
+                (raw["source_statement"], raw.get("source_modality")), []
+            )
+            for field in (
+                "context_requirement_id",
+                "original_requirement",
+                "source_corpus",
+            ):
+                if raw.get(field):
+                    candidates = [
+                        item for item in candidates if item.get(field) == raw[field]
+                    ]
+            if len(candidates) != 1:
+                raise ValueError(
+                    "Unmatched or ambiguous raw source identity: "
+                    + str(raw.get("item_id"))
+                )
+            item = candidates[0]
+        else:
+            # Legacy fixtures/records without durable source fields still pass
+            # the current benchmark prompt check below.
+            item = by_id.get(str(raw.get("item_id", "")))
+            if item is None:
+                raise ValueError(
+                    "Missing raw source identity: " + str(raw.get("item_id"))
+                )
+        canonical = {**raw, "item_id": item["item_id"], "seed_id": item["seed_id"]}
+        if (
+            raw.get("source_statement")
+            and raw["source_statement"] != item["source_statement"]
+        ) or not eu.raw_record_matches_benchmark_item(canonical, item):
+            raise ValueError(
+                "Raw source differs from current benchmark: " + str(raw.get("item_id"))
+            )
+        resolved.append((raw, item, canonical))
+    # Score only the deterministic observations: no stochastic embedding work.
+    # Rows are keyed by the current item, and one raw row per item per arm is
+    # what dedupe_raw_rows leaves, so the score joins back one-to-one.
+    scored = eu.build_uq_scores(
+        [item for _, item, _ in resolved],
+        [canonical for _, _, canonical in resolved],
+        sampling_plan=sampling_plan,
+    )
+    score_by_item = {str(row["item_id"]): row for row in scored}
+    observations = []
+    for raw, item, _canonical in resolved:
+        score = score_by_item.get(str(item["item_id"]))
+        identity = (
+            str(
+                item.get("source_corpus")
+                or item.get("context_document")
+                or item.get("source_dataset", "")
+            )
+            + "::"
+            + str(item.get("context_requirement_id") or item["seed_id"])
+        )
+        observations.append(
+            {
+                **(score or {}),
+                "item_id": raw["item_id"],
+                "source_identity": identity,
+                "seed_id": identity,
+                "source_statement": item["source_statement"],
+                "model": raw.get("model", ""),
+                "run_id": raw.get("run_id", ""),
+                "dataset_id": DATASET_ID,
+                "benchmark_variant": raw.get("benchmark_variant", VARIANT),
+                "gold_modality": item["source_modality"],
+                "context_marker": item.get("context_marker", ""),
+                "response_status": "ok"
+                if score
+                else (
+                    raw.get("parse_status")
+                    if raw.get("parse_status") != "ok"
+                    else "missing_score"
+                ),
+            }
+        )
+    return observations
 
 
 def stratum_rows(rows: list[dict[str, Any]], stratum: str) -> list[dict[str, Any]]:
+    if "/" in stratum:
+        first, second = stratum.split("/", 1)
+        return stratum_rows(stratum_rows(rows, first), second)
+    if stratum.startswith("modality_"):
+        return [
+            r
+            for r in rows
+            if r.get("gold_modality") == stratum.removeprefix("modality_")
+        ]
     if stratum == "all":
         return rows
     if stratum == "weak_intent":
@@ -181,15 +295,32 @@ def arm_row(
     *,
     bootstrap_samples: int,
 ) -> dict[str, Any]:
+    observed = rows
+    rows = [r for r in rows if metric_eligible(r, "label_accuracy")]
     ci = eu.text_over_commitment_ci_fields(
         rows, iterations=bootstrap_samples, seed=BOOTSTRAP_SEED
     )
+    readable = [r for r in rows if r.get("text_modality_parse_status") == "ok"]
+    resolved = ci.get("bootstrap_ci_cluster_field", "seed_id")
+    n_clusters = len({r.get(resolved) for r in readable})
+    n_capabilities = len({r.get("seed_id") for r in readable})
+    for key in ci:
+        if key.endswith(("_ci_low", "_ci_high")) and (
+            ("_seed_ci_" in key and n_capabilities < 2)
+            or ("_seed_ci_" not in key and n_clusters < 2)
+        ):
+            ci[key] = ""
     return {
         "model": model,
         "item_context": arm,
         "stratum": stratum,
         "run_id": run_id,
-        "n": len(rows),
+        "estimate_cohort": "full_arm_descriptive",
+        "n": len(observed),
+        "n_failed_items": len(observed) - len(rows),
+        "n_unclassified_items": sum(
+            r.get("text_modality_parse_status") != "ok" for r in rows
+        ),
         "n_text_readable": ci["text_over_commitment_n_denominator"],
         "label_accuracy": eu.task_accuracy(rows, "task2") if rows else "",
         "strict_text_strengthening": ci["strict_text_over_commitment"],
@@ -219,6 +350,16 @@ def _finite(value: float) -> float | str:
     return "" if isinstance(value, float) and math.isnan(value) else value
 
 
+def metric_eligible(row, metric):
+    valid = (
+        row.get("response_status", "ok") == "ok"
+        and row.get("pred_modality") in MODALITIES
+    )
+    return valid and (
+        metric == "label_accuracy" or row.get("text_modality_parse_status") == "ok"
+    )
+
+
 def delta_rows(
     model: str,
     stratum: str,
@@ -229,23 +370,27 @@ def delta_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for metric_name, metric in METRICS:
-        # The CI describes the seeds both arms answered; a seed only one arm
-        # answered is excluded before resampling and counted on the row.
-        # Pairing stays by seed — the same capability under two contexts — and
-        # only the resampling unit moves to the request; a seed's four source
-        # conditions sit in one request, so the pair is never split.
+
+        def eligible(r, name=metric_name):
+            return metric_eligible(r, name)
+
+        a, b, counts = eu.exact_item_metric_pairs(bare, document, eligible)
+        a, b, cluster, cluster_note = eu.paired_request_clusters(a, b)
         paired = eu.bootstrap_seed_metric_delta(
-            bare,
-            document,
+            a,
+            b,
             metric,
+            pair_field="exact_pair_id",
+            cluster_field=cluster,
             iterations=bootstrap_samples,
             seed=BOOTSTRAP_SEED,
         )
         by_seed = eu.bootstrap_seed_metric_delta(
-            bare,
-            document,
+            a,
+            b,
             metric,
-            cluster_field=eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
+            pair_field="exact_pair_id",
+            cluster_field="seed_id",
             iterations=bootstrap_samples,
             seed=BOOTSTRAP_SEED,
         )
@@ -254,19 +399,46 @@ def delta_rows(
                 "model": model,
                 "stratum": stratum,
                 "metric": metric_name,
-                "bare": _finite(metric(bare)) if bare else "",
-                "document": _finite(metric(document)) if document else "",
+                "bare": _finite(metric(a)) if a else "",
+                "full_arm_bare_descriptive": _finite(
+                    metric([r for r in bare if eligible(r)])
+                ),
+                "document": _finite(metric(b)) if b else "",
+                "full_arm_document_descriptive": _finite(
+                    metric([r for r in document if eligible(r)])
+                ),
+                "cluster_note": cluster_note,
+                "unavailable_reason": "" if a else "no jointly eligible exact items",
+                "delta_ci_unavailable_reason": "fewer than two clusters"
+                if paired.n_clusters < 2
+                else "bootstrap disabled"
+                if bootstrap_samples <= 0
+                else "",
+                "delta_seed_ci_unavailable_reason": "fewer than two capabilities"
+                if by_seed.n_clusters < 2
+                else "bootstrap disabled"
+                if bootstrap_samples <= 0
+                else "",
+                **counts,
                 "delta": _finite(paired.delta),
-                "delta_ci_low": _finite(paired.ci_low),
-                "delta_ci_high": _finite(paired.ci_high),
-                "delta_seed_ci_low": _finite(by_seed.ci_low),
-                "delta_seed_ci_high": _finite(by_seed.ci_high),
+                "delta_ci_low": _finite(paired.ci_low)
+                if paired.n_clusters >= 2
+                else "",
+                "delta_ci_high": _finite(paired.ci_high)
+                if paired.n_clusters >= 2
+                else "",
+                "delta_seed_ci_low": _finite(by_seed.ci_low)
+                if by_seed.n_clusters >= 2
+                else "",
+                "delta_seed_ci_high": _finite(by_seed.ci_high)
+                if by_seed.n_clusters >= 2
+                else "",
                 "delta_cluster_field": paired.cluster_field,
                 "n_delta_clusters": paired.n_clusters,
                 "n_bare": len(bare),
                 "n_document": len(document),
-                "n_complete_pairs": paired.n_complete_pairs,
-                "n_excluded_single_arm": paired.n_excluded_single_arm,
+                "n_complete_pairs": counts["n_matched_items"],
+                "n_excluded_single_arm": counts["n_unmatched_items"],
             }
         )
     return rows
@@ -361,13 +533,11 @@ def write_outputs(tables: dict[str, Any], output_prefix: Path) -> dict[str, Path
         "# Context Ablation Summary",
         "",
         "Deterministic Task 2 rows of the `pure` cell, bare vs document context.",
-        "Strata: `all`, `weak_intent` (source modality nice_to_have), `marker_M` /",
-        "`marker_O` (the author's marker on the seed requirement). The reported",
-        "CIs are request-clustered bootstraps, with the seed-clustered pair",
-        "alongside as `*_seed_ci_*`; `bootstrap_ci_cluster_field` on each row",
-        "names the unit that row actually resolved to. Delta CIs pair by seed",
-        "over the seeds both arms answered (`n_complete_pairs`), excluding",
-        "single-arm seeds (`n_excluded_single_arm`), and resample by request.",
+        "Full-arm estimates are descriptive; deltas and both arm values use the same",
+        "jointly eligible exact source-item cohort. Counts are items except explicitly",
+        "named capability, row, or cluster counts. Legacy n_complete_pairs counts items.",
+        "Request intervals use connected components of both arms' request partitions;",
+        "missing IDs fall back to capabilities. Seed intervals are sensitivity estimates.",
         "",
         "## Arms",
         "",
@@ -401,6 +571,9 @@ def main(argv: list[str] | None = None) -> dict[str, Path]:
     parser.add_argument("--run-group-id", default=DEFAULT_RUN_GROUP_ID)
     parser.add_argument("--include-smoke", action="store_true")
     parser.add_argument(
+        "--run-id", action="append", help="Only compare these run IDs (repeatable)."
+    )
+    parser.add_argument(
         "--bootstrap-samples",
         type=int,
         default=DEFAULT_BOOTSTRAP_SAMPLES,
@@ -428,6 +601,10 @@ def main(argv: list[str] | None = None) -> dict[str, Path]:
         raw_path = eu.model_outputs_raw_path(root, DATASET_ID, VARIANT, smoke=smoke)
         if raw_path.exists():
             raw_rows.extend(eu.read_jsonl(raw_path))
+    if args.run_id:
+        selected = set(args.run_id)
+        registry_rows = [row for row in registry_rows if row.get("run_id") in selected]
+        raw_rows = [row for row in raw_rows if row.get("run_id") in selected]
     tables = build_tables(
         benchmark,
         registry_rows,

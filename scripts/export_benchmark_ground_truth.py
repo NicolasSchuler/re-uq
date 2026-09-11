@@ -309,9 +309,14 @@ def _validation_section(root: Path) -> str:
             "",
             f"3. **Weak-template construct review.** `docs/weak_modality_construct_review.csv` — "
             f"{len(construct_rows)} rows over the four weak templates; current reviewer roles: "
-            f"{', '.join(f'`{role}`' for role in reviewer_roles) or 'none'}. Until the pending "
-            "human sign-off ([`TODO.md`](../TODO.md) section D), weak-intent claims carry that "
-            "caveat.",
+            f"{', '.join(f'`{role}`' for role in reviewer_roles) or 'none'}. "
+            + (
+                "The author has confirmed completed human validation; the original "
+                "LLM-assisted reviews remain identified separately. See "
+                "[validation review](validation_review.md)."
+                if any("human author validation" in role for role in reviewer_roles)
+                else "Human confirmation is not recorded in this review table."
+            ),
             "",
             "4. **File integrity.** Each dataset manifest records sha256 digests and row "
             "counts for its seed and benchmark tables:",

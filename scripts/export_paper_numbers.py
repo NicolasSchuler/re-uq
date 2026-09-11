@@ -32,21 +32,16 @@ Aggregation
 its two published conventions each macro uses, and every choice is annotated in
 the emitted file:
 
-* **Pooled** (``sum(numerators) / sum(denominators)``) for every strengthening
-  rate, no-cue share, Task 1 control rate and per-model figure. This is the
-  primary convention of ``docs/aggregation.md`` section 5, and it is the only
-  one that keeps the per-model table's ``All`` column equal to the sum of its
-  parts.
-* **Unweighted macro over the four cells** for the three headline quantities
-  ``docs/aggregation.md`` section 5 publishes that way (the p>=0.90
-  high-confidence share and repeated-sample agreement), for the blind-audit
-  recall / false-preserve headlines, and for every AUROC -- an AUROC has no
-  numerator and denominator to pool, so a mean over cells is the only defined
-  aggregate. Ranges over cells and over models are always ranges of the
-  correspondingly pooled per-cell / per-model values.
-* The weak-intent headline is a single named cell (``mlm_tapt/must``), as
-  documented; ``numWeakStrictRange`` is the range of the same quantity over the
-  four cells.
+* **Pooled rates** use summed event counts divided by the eligible answer
+  counts. High-confidence and agreement shares use their specific subsets.
+  The weak-intent headline is strict strengthening across all cells and models,
+  without a confidence threshold, matching the RQ1 table.
+* **Ranking metrics** come from the recorded score/label cohorts. Meaning-
+  variation AUROC is recomputed over the pooled eligible observations; the
+  supervised classifier reports its mean over evaluable held-out folds.
+* **Coverage and length** keep planned answers, valid answers, classifiable
+  wording, and outputs with word counts separate. Missing responses are not
+  counted as unclassified wording or assigned a response length.
 
 Model macro keys
 ----------------
@@ -88,6 +83,7 @@ HEADLINE_METRICS = "paper_headline_metrics.csv"
 HEADLINE_BOOTSTRAP_CI = "paper_headline_bootstrap_ci.csv"
 PER_MODEL_HEADLINE = "paper_per_model_headline.csv"
 MODALITY_TABLE = "paper_per_model_modality_table.csv"
+POOLED_MODALITY = "paper_per_model_modality_pooled.csv"
 # Task 1, the detector AUROCs and the blind-audit rates used to come from
 # `paper_task1_control_metrics.csv`, `paper_task3_blind_audit_metrics.csv`,
 # `blind_task3_model_summary.csv`, `blind_task3_analysis_summary.csv`,
@@ -126,11 +122,24 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "variant",
         "source_modality",
         "n_items",
+        "n_valid",
         "broad_strengthening_n",
         "broad_strengthening_denominator",
         "strict_strengthening_n",
         "strict_strengthening_denominator",
+        "requirement_word_count_n",
         "mean_requirement_word_count",
+    ),
+    POOLED_MODALITY: (
+        "model",
+        "dataset",
+        "variant",
+        "source_modality",
+        *(
+            f"{rule}_strengthening_{field}"
+            for rule in ("strict", "broad")
+            for field in ("n", "denominator", "rate", "ci_low", "ci_high")
+        ),
     ),
     TASK2_TEXT_DRIFT: (
         "dataset",
@@ -159,13 +168,19 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "task2_strict_strengthening_rate",
         "task2_broad_strengthening_rate",
         "task2_weak_n_readable",
+        "task2_weak_strict_strengthening_n",
+        "task2_weak_strict_strengthening_denominator",
         "task2_weak_strict_strengthening_rate",
         "task2_weak_strict_high_conf_90_n",
         "task2_weak_strict_high_conf_90_denominator",
         "task2_weak_strict_high_conf_90_rate",
         "task2_strict_high_conf_90_rate",
+        "task2_strict_agreement_n",
+        "task2_strict_agreement_denominator",
         "task2_strict_agreement_rate",
         "task2_meaning_variation_auroc",
+        "task2_meaning_variation_auroc_n",
+        "task2_meaning_variation_auroc_n_positive",
         "task2_verbalized_confidence_auroc",
         "task3_strict_flagged_rate",
         "task3_strict_called_preserved_rate",
@@ -180,15 +195,6 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "auprc_mean",
     ),
 }
-
-# The weak-intent headline lives in the Task 2 snapshot once
-# scripts/export_paper_tables.py has recomputed it, and in the blind Task 3
-# summary otherwise. At least one of the two must carry it.
-WEAK_HEADLINE_COLUMN = "weak_strict_text_strengthening_90"
-
-# docs/aggregation.md section 5: the weak-intent headline is this single cell,
-# not an aggregate.
-WEAK_HEADLINE_CELL = ("mlm_tapt", "must")
 
 SOURCE_CONDITIONS = ("mandatory", "recommended", "optional", "nice_to_have")
 # Macro-name suffix per source condition; "nice_to_have" reads as "weak intent"
@@ -208,6 +214,15 @@ MODEL_KEYS = {
     "glm-5": "GlmFive",
     "glm-5-turbo": "GlmFiveTurbo",
     "glm-5.1": "GlmFiveOne",
+    "glm-5.3": "GlmFiveThree",
+    "glm-5.3-flash": "GlmFiveThreeFlash",
+    "qwen3.6-27b": "QwenThreeSixTwentySevenB",
+    "qwen3.8-27b": "QwenThreeEightTwentySevenB",
+    "qwen3.5-9b": "QwenThreeFiveNineB",
+    "gemma4-31b-it": "GemmaFourThirtyOneB",
+    "gemma4-12b-it": "GemmaFourTwelveB",
+    "muse-glimmer-30b": "MuseGlimmerThirtyB",
+    "gpt-oss-20b": "GptOssTwentyB",
     "kit.gemma4-31b-it": "Gemma",
 }
 MODEL_LABELS = {
@@ -216,6 +231,15 @@ MODEL_LABELS = {
     "glm-5": "GLM-5",
     "glm-5-turbo": "GLM-5-Turbo",
     "glm-5.1": "GLM-5.1",
+    "glm-5.3": "GLM-5.3",
+    "glm-5.3-flash": "GLM-5.3-Flash",
+    "qwen3.6-27b": "Qwen3.6-27B",
+    "qwen3.8-27b": "Qwen3.8-27B",
+    "qwen3.5-9b": "Qwen3.5-9B",
+    "gemma4-31b-it": "Gemma-4-31B",
+    "gemma4-12b-it": "Gemma-4-12B",
+    "muse-glimmer-30b": "Muse-Glimmer-30B",
+    "gpt-oss-20b": "gpt-oss-20B",
     "kit.gemma4-31b-it": "Gemma-4-31B",
 }
 DIGIT_WORDS = (
@@ -376,6 +400,11 @@ def order_models(models: Iterable[str], cohort: Sequence[str] = ()) -> list[str]
 def fmt_percent(value: float) -> str:
     """A rate in [0, 1] as a percentage with one decimal, no percent sign."""
     return f"{value * 100:.1f}"
+
+
+def fmt_available_percent(value: float) -> str:
+    """A percentage or a dash when a particular cohort has no eligible answers."""
+    return fmt_percent(value) if math.isfinite(value) else "---"
 
 
 def fmt_auroc(value: float) -> str:
@@ -614,6 +643,7 @@ def _probe_row(
         and str(row["text_variant"]) == text_variant
         and str(row["group_mode"]) == group_mode
         and str(row["scope"]) == scope
+        and str(row.get("model", "hgb")) == "hgb"
         and str(row["target"]) == target
     ]
     label = (
@@ -632,11 +662,25 @@ class Strengthening:
     def __init__(self, rows: Sequence[Mapping[str, Any]], label: str) -> None:
         self.label = label
         self.items = 0.0
+        self.valid = 0.0
         self.denominator = 0.0
         self.strict_n = 0.0
         self.broad_n = 0.0
         for row in rows:
+            for field in (
+                "n_items",
+                "n_valid",
+                "broad_strengthening_n",
+                "broad_strengthening_denominator",
+                "strict_strengthening_n",
+                "strict_strengthening_denominator",
+            ):
+                if not math.isfinite(_number(row, field, label)):
+                    raise PaperNumbersError(
+                        f"{label}: count {field} is missing or non-finite"
+                    )
             self.items += _number(row, "n_items", label)
+            self.valid += _number(row, "n_valid", label)
             self.denominator += _number(row, "broad_strengthening_denominator", label)
             self.strict_n += _number(row, "strict_strengthening_n", label)
             self.broad_n += _number(row, "broad_strengthening_n", label)
@@ -646,15 +690,19 @@ class Strengthening:
 
     @property
     def strict(self) -> float:
-        return _pooled([(self.strict_n, self.strict_denominator)], self.label)
+        return (
+            self.strict_n / self.strict_denominator
+            if self.strict_denominator
+            else math.nan
+        )
 
     @property
     def broad(self) -> float:
-        return _pooled([(self.broad_n, self.denominator)], self.label)
+        return self.broad_n / self.denominator if self.denominator else math.nan
 
     @property
     def no_cue(self) -> float:
-        return _pooled([(self.items - self.denominator, self.items)], self.label)
+        return (self.valid - self.denominator) / self.valid if self.valid else math.nan
 
 
 def _group(
@@ -849,13 +897,17 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
     }
 
     rq = RqTable(artifacts[PER_MODEL_RQ])
+    missing_cells = set(by_cell) - set(rq.by_cell)
+    if missing_cells:
+        raise PaperNumbersError(
+            f"{PER_MODEL_RQ}: missing pooled cell(s) "
+            + ", ".join(_cell_name(cell) for cell in sorted(missing_cells))
+        )
     upgrade_by_model = rq.over_models("task1_unsupported_acceptance_90_rate")
-    weak_models = rq.over_models("task2_weak_strict_high_conf_90_rate")
-    weak_rate = rq.cell(WEAK_HEADLINE_CELL, "task2_weak_strict_high_conf_90_rate")
-    weak_numerator = rq.cell(WEAK_HEADLINE_CELL, "task2_weak_strict_high_conf_90_n")
-    weak_denominator = rq.cell(
-        WEAK_HEADLINE_CELL, "task2_weak_strict_high_conf_90_denominator"
-    )
+    weak_models = rq.over_models("task2_weak_strict_strengthening_rate")
+    weak_rate = rq.pooled("task2_weak_strict_strengthening_rate")
+    weak_numerator = rq.pooled("task2_weak_strict_strengthening_n")
+    weak_denominator = rq.pooled("task2_weak_strict_strengthening_denominator")
 
     task2 = artifacts[TASK2_TEXT_DRIFT]
     label_pairs = [
@@ -921,8 +973,8 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         [
             (
                 _number(row, "mean_requirement_word_count", MODALITY_TABLE)
-                * _number(row, "n_items", MODALITY_TABLE),
-                _number(row, "n_items", MODALITY_TABLE),
+                * _number(row, "requirement_word_count_n", MODALITY_TABLE),
+                _number(row, "requirement_word_count_n", MODALITY_TABLE),
             )
             for row in modality
             if str(row["source_modality"]) == "nice_to_have"
@@ -933,8 +985,8 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         [
             (
                 _number(row, "mean_requirement_word_count", MODALITY_TABLE)
-                * _number(row, "n_items", MODALITY_TABLE),
-                _number(row, "n_items", MODALITY_TABLE),
+                * _number(row, "requirement_word_count_n", MODALITY_TABLE),
+                _number(row, "requirement_word_count_n", MODALITY_TABLE),
             )
             for row in modality
             if str(row["source_modality"]) != "nice_to_have"
@@ -944,7 +996,7 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
 
     no_cue_pooled = _pooled(
         [
-            (stats.items - stats.denominator, stats.items)
+            (stats.valid - stats.denominator, stats.valid)
             for stats in cell_stats.values()
         ],
         "pooled no-cue share",
@@ -1072,12 +1124,12 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         Macro(
             "numWeakStrict",
             fmt_percent(weak_rate),
-            f"{_cell_name(WEAK_HEADLINE_CELL)} cell, conf >= 0.90",
+            "strict strengthening of weak-intent sources, pooled over all cells and models",
         ),
         Macro(
             "numWeakStrictRange",
             fmt_range(
-                rq.over_cells("task2_weak_strict_high_conf_90_rate"),
+                rq.over_cells("task2_weak_strict_strengthening_rate"),
                 fmt_percent,
                 "weak strict over cells",
             ),
@@ -1093,9 +1145,9 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         Macro(
             "numNoCueShare",
             fmt_percent(no_cue_pooled),
-            f"{fmt_count(sum(stats.items - stats.denominator for stats in cell_stats.values()))}"
-            f" / {fmt_count(sum(stats.items for stats in cell_stats.values()))}"
-            " answers without a readable modal cue",
+            f"{fmt_count(sum(stats.valid - stats.denominator for stats in cell_stats.values()))}"
+            f" / {fmt_count(sum(stats.valid for stats in cell_stats.values()))}"
+            " valid answers with unclassified wording; response failures excluded",
         ),
         Macro(
             "numNoCueShareRange",
@@ -1308,7 +1360,7 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
         scope="global",
         target="sample_strict_text_overcommit",
     )
-    leak = _probe_row(
+    added_label = _probe_row(
         probe,
         text_variant="prefixed",
         group_mode="seed",
@@ -1318,14 +1370,14 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
     context_level = _probe_row(
         probe,
         text_variant="reqonly",
-        group_mode="item",
+        group_mode="seed",
         scope="global",
         target="source_modality",
     )
     context_dataset = _probe_row(
         probe,
         text_variant="reqonly",
-        group_mode="item",
+        group_mode="seed",
         scope="global",
         target="dataset_variant",
     )
@@ -1343,12 +1395,71 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
     rq = RqTable(artifacts[PER_MODEL_RQ])
 
     def auroc(row: Mapping[str, Any]) -> str:
+        if row.get("auroc_mean", "") == "" and row.get("unavailable_reason"):
+            return "N/A"
         return fmt_auroc(_number(row, "auroc_mean", PROBE_GRID))
 
     def auprc(row: Mapping[str, Any]) -> str:
+        if row.get("auprc_mean", "") == "" and row.get("unavailable_reason"):
+            return "N/A"
         return fmt_auroc(_number(row, "auprc_mean", PROBE_GRID))
 
+    interval_macros = []
+    for name, row in (
+        ("Global", target),
+        ("WithinRecommended", within["recommended"]),
+        ("WithinOptional", within["optional"]),
+        ("WithinWeak", within["nice_to_have"]),
+        ("AddedLabel", added_label),
+        ("ContextLevel", context_level),
+        ("ContextDataset", context_dataset),
+    ):
+        interval_macros.append(
+            Macro(
+                f"numEmb{name}FitReview",
+                "required"
+                if str(row.get("fit_review_required", "")).lower() == "true"
+                else "none flagged",
+                "consult fold training diagnostics before interpretation",
+            )
+        )
+        for metric in ("auroc", "auprc"):
+            low, high = (
+                row.get(f"{metric}_ci_low", ""),
+                row.get(f"{metric}_ci_high", ""),
+            )
+            value = (
+                f"{fmt_auroc(float(low))}--{fmt_auroc(float(high))}"
+                if low != "" and high != ""
+                else "N/A"
+            )
+            interval_macros.append(
+                Macro(
+                    f"numEmb{name}{'AUROC' if metric == 'auroc' else 'AP'}CI",
+                    value,
+                    str(
+                        row.get("uncertainty_scope", "interval unavailable in artifact")
+                    ),
+                )
+            )
+        for suffix, field in (
+            ("APBaseline", "baseline_auprc"),
+            ("Samples", "n_evaluated_samples"),
+            ("Capabilities", "n_evaluated_capabilities"),
+            ("Folds", "folds"),
+        ):
+            value = row.get(field, "")
+            interval_macros.append(
+                Macro(f"numEmb{name}{suffix}", str(value) if value != "" else "N/A")
+            )
+
     return [
+        *interval_macros,
+        Macro(
+            "numEmbAddedLabel",
+            auroc(added_label),
+            "requirement text plus sampled declared modality",
+        ),
         Macro(
             "numEmbGlobalAUROC", auroc(target), "reqonly / seed-grouped, all sources"
         ),
@@ -1358,7 +1469,11 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
         Macro("numEmbWithinRecommended", auroc(within["recommended"])),
         Macro("numEmbWithinOptional", auroc(within["optional"])),
         Macro("numEmbWithinWeak", auroc(within["nice_to_have"])),
-        Macro("numEmbLeakControl", auroc(leak), "same probe on label-prefixed text"),
+        Macro(
+            "numEmbLeakControl",
+            auroc(added_label),
+            "legacy macro name: additional sampled-label input; no leakage claim",
+        ),
         Macro("numEmbContextLevel", auroc(context_level), "source modal force"),
         Macro(
             "numEmbContextDataset", auroc(context_dataset), "source dataset x variant"
@@ -1409,34 +1524,31 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
 
 
 def fmt_pct_ci(rate: float, low: float, high: float) -> str:
-    """``8.6 [7.6, 9.6]``, or ``8.6 ---`` for a degenerate interval.
+    """``8.6 [7.6, 9.6]``, or ``8.6 ---`` for an unavailable interval.
 
-    The dash case is tested on the *formatted* bounds, not the raw floats: an
-    interval that collapses to within a rounding step would otherwise print as
-    ``[0.0, 0.0]``, which reads like a measured width rather than none. A rate
-    that does not exist at all (no rows) prints a bare dash.
+    A rate that does not exist at all (no rows) prints a bare dash. An
+    interval whose bounds coincide exactly is a percentile-bootstrap artifact
+    (one cluster, or a rate that is 0 or 1 in every cluster), not a measured
+    width, so it prints as unavailable too; bounds that merely coincide after
+    rounding are kept.
     """
     if not math.isfinite(rate):
         return "---"
     value = fmt_percent(rate)
-    if not (math.isfinite(low) and math.isfinite(high)):
+    if not (math.isfinite(low) and math.isfinite(high)) or low == high:
         return f"{value} ---"
     low_text, high_text = fmt_percent(low), fmt_percent(high)
-    if low_text == high_text:
-        return f"{value} ---"
     return f"{value} [{low_text}, {high_text}]"
 
 
 def fmt_auroc_ci(value: float, low: float, high: float) -> str:
-    """``0.768 [0.742, 0.791]``, with the same degenerate and absent cases."""
+    """``0.768 [0.742, 0.791]``; a zero-width interval prints as unavailable."""
     if not math.isfinite(value):
         return "---"
     text = fmt_auroc(value)
-    if not (math.isfinite(low) and math.isfinite(high)):
+    if not (math.isfinite(low) and math.isfinite(high)) or low == high:
         return f"{text} ---"
     low_text, high_text = fmt_auroc(low), fmt_auroc(high)
-    if low_text == high_text:
-        return f"{text} ---"
     return f"{text} [{low_text}, {high_text}]"
 
 
@@ -1445,6 +1557,8 @@ def render_grouped_table_body(
     local_rows: Sequence[str],
     all_row: str,
     n_columns: int,
+    *,
+    local_label: str = "Local (llama.cpp)",
 ) -> str:
     r"""Everything between a table's header rule and its bottom rule.
 
@@ -1459,7 +1573,7 @@ def render_grouped_table_body(
     lines = [f"{group}{{\\textit{{Hosted}}}} \\\\", *hosted_rows]
     lines += [
         r"\addlinespace[0.3em]",
-        f"{group}{{\\textit{{Local (llama.cpp)}}}} \\\\",
+        f"{group}{{\\textit{{{local_label}}}}} \\\\",
         *(local_rows or [placeholder + r" \\"]),
         r"\midrule",
         all_row,
@@ -1480,44 +1594,111 @@ def _rq_table_rows(rq: RqTable, models: Sequence[str]) -> tuple[list[str], list[
     return rq_one, rq_two_three
 
 
-def _rate_cell(row: Mapping[str, Any], name: str) -> str:
-    return fmt_pct_ci(
-        _number(row, f"{name}_rate", PER_MODEL_RQ),
-        _number(row, f"{name}_ci_low", PER_MODEL_RQ),
-        _number(row, f"{name}_ci_high", PER_MODEL_RQ),
+def _counted_estimate_cell(
+    count: str,
+    estimate: str,
+    *,
+    centered: bool = False,
+    separate_interval: bool = False,
+) -> str:
+    """Stack counts above an estimate, optionally putting its interval below."""
+    if separate_interval:
+        # A bare "---" is a missing estimate: one dash, not a dash per row.
+        point, _, interval = estimate.partition(" ")
+        if point == "---":
+            interval = ""
+        # An empty group keeps a leading '[' from becoming a row-spacing option.
+        estimate = point + r"\\{}" + interval
+    if centered:
+        return rf"\begin{{tabular}}[t]{{@{{}}c@{{}}}}{count}\\{estimate}\end{{tabular}}"
+    return rf"\shortstack[l]{{{count}\\{estimate}}}"
+
+
+def _rate_cell(
+    row: Mapping[str, Any],
+    name: str,
+    *,
+    denominator: bool = False,
+    centered: bool = False,
+    separate_interval: bool = False,
+    source: str = PER_MODEL_RQ,
+) -> str:
+    rate = fmt_pct_ci(
+        _number(row, f"{name}_rate", source),
+        _number(row, f"{name}_ci_low", source),
+        _number(row, f"{name}_ci_high", source),
+    )
+    count = fmt_count(_number(row, f"{name}_n", source))
+    if denominator:
+        count += "/" + fmt_count(_number(row, f"{name}_denominator", source))
+    return _counted_estimate_cell(
+        count, rate, centered=centered, separate_interval=separate_interval
     )
 
 
 def _rq_one_row(label: str, row: Mapping[str, Any]) -> str:
-    """Model | Task 1 N, rate | Task 2 N, strict, broad | weak N, strict."""
-    columns = [
-        label,
-        fmt_count(
-            _number(row, "task1_unsupported_acceptance_90_denominator", PER_MODEL_RQ)
-        ),
-        _rate_cell(row, "task1_unsupported_acceptance_90"),
-        fmt_count(_number(row, "task2_n_readable", PER_MODEL_RQ)),
-        _rate_cell(row, "task2_strict_strengthening"),
-        _rate_cell(row, "task2_broad_strengthening"),
-        fmt_count(_number(row, "task2_weak_n_readable", PER_MODEL_RQ)),
-        _rate_cell(row, "task2_weak_strict_strengthening"),
+    """Model and four outcomes, each showing n/N above its rate and interval."""
+    columns = [label] + [
+        _rate_cell(row, name, denominator=True, centered=True)
+        for name in (
+            "task1_unsupported_acceptance_90",
+            "task2_strict_strengthening",
+            "task2_broad_strengthening",
+            "task2_weak_strict_strengthening",
+        )
     ]
     return " & ".join(columns) + r" \\"
 
 
 def _rq_two_three_row(label: str, row: Mapping[str, Any]) -> str:
-    """Model | strengthened N | confidence | meaning variation | blind check."""
+    """Model, confidence, agreement, meaning-variation AUROC, and blind check."""
+    auroc_counts = (
+        fmt_count(
+            _number(row, "task2_meaning_variation_auroc_n_positive", PER_MODEL_RQ)
+        )
+        + "/"
+        + fmt_count(_number(row, "task2_meaning_variation_auroc_n", PER_MODEL_RQ))
+    )
     columns = [
         label,
-        fmt_count(_number(row, "task2_strict_strengthening_n", PER_MODEL_RQ)),
-        _rate_cell(row, "task2_strict_high_conf_90"),
-        fmt_auroc_ci(
-            _number(row, "task2_meaning_variation_auroc", PER_MODEL_RQ),
-            _number(row, "task2_meaning_variation_auroc_ci_low", PER_MODEL_RQ),
-            _number(row, "task2_meaning_variation_auroc_ci_high", PER_MODEL_RQ),
+        _rate_cell(
+            row,
+            "task2_strict_high_conf_90",
+            denominator=True,
+            centered=True,
+            separate_interval=True,
         ),
-        _rate_cell(row, "task3_strict_flagged"),
-        _rate_cell(row, "task3_strict_called_preserved"),
+        _rate_cell(
+            row,
+            "task2_strict_agreement",
+            denominator=True,
+            centered=True,
+            separate_interval=True,
+        ),
+        _counted_estimate_cell(
+            auroc_counts,
+            fmt_auroc_ci(
+                _number(row, "task2_meaning_variation_auroc", PER_MODEL_RQ),
+                _number(row, "task2_meaning_variation_auroc_ci_low", PER_MODEL_RQ),
+                _number(row, "task2_meaning_variation_auroc_ci_high", PER_MODEL_RQ),
+            ),
+            centered=True,
+            separate_interval=True,
+        ),
+        _rate_cell(
+            row,
+            "task3_strict_flagged",
+            denominator=True,
+            centered=True,
+            separate_interval=True,
+        ),
+        _rate_cell(
+            row,
+            "task3_strict_called_preserved",
+            denominator=True,
+            centered=True,
+            separate_interval=True,
+        ),
     ]
     return " & ".join(columns) + r" \\"
 
@@ -1540,7 +1721,11 @@ def _rq_table_blocks(artifacts: Artifacts) -> list[Macro]:
         Macro(
             "numTableRqOneRows",
             render_grouped_table_body(
-                hosted_one, local_one, _rq_one_row("All models", grand), 8
+                hosted_one,
+                local_one,
+                _rq_one_row("All models", grand),
+                5,
+                local_label="Local",
             ),
             "tab:rq1 body",
         ),
@@ -1551,6 +1736,7 @@ def _rq_table_blocks(artifacts: Artifacts) -> list[Macro]:
                 local_two_three,
                 _rq_two_three_row("All models", grand),
                 6,
+                local_label="Local",
             ),
             "tab:rq23 body",
         ),
@@ -1569,9 +1755,9 @@ def _per_model_blocks(artifacts: Artifacts) -> tuple[list[Macro], list[Macro], s
         key = model_key(model)
         stats = Strengthening(by_model[model], f"{MODALITY_TABLE} {model}")
         pooled += [
-            Macro(f"numStrict{key}", fmt_percent(stats.strict), model),
-            Macro(f"numBroad{key}", fmt_percent(stats.broad)),
-            Macro(f"numNoCue{key}", fmt_percent(stats.no_cue)),
+            Macro(f"numStrict{key}", fmt_available_percent(stats.strict), model),
+            Macro(f"numBroad{key}", fmt_available_percent(stats.broad)),
+            Macro(f"numNoCue{key}", fmt_available_percent(stats.no_cue)),
         ]
         cells: dict[str, tuple[str, str]] = {}
         for condition in SOURCE_CONDITIONS:
@@ -1588,20 +1774,91 @@ def _per_model_blocks(artifacts: Artifacts) -> tuple[list[Macro], list[Macro], s
                 rows, f"{MODALITY_TABLE} {model}/{condition}"
             )
             suffix = CONDITION_KEYS[condition]
-            strict = fmt_percent(condition_stats.strict)
-            broad = fmt_percent(condition_stats.broad)
+            strict = fmt_available_percent(condition_stats.strict)
+            broad = fmt_available_percent(condition_stats.broad)
             cells[condition] = (strict, broad)
             conditions += [
                 Macro(f"numStrict{key}{suffix}", strict),
                 Macro(f"numBroad{key}{suffix}", broad),
             ]
-        columns = [model_label(model), fmt_percent(stats.no_cue)]
+        columns = [model_label(model), fmt_available_percent(stats.no_cue)]
         # Mandatory sources cannot be strengthened, so the table omits them.
         for condition in ("recommended", "optional", "nice_to_have"):
             columns += list(cells[condition])
-        columns += [fmt_percent(stats.strict), fmt_percent(stats.broad)]
+        columns += [
+            fmt_available_percent(stats.strict),
+            fmt_available_percent(stats.broad),
+        ]
         table_rows.append(" & ".join(columns) + r" \\")
     return pooled, conditions, "\n".join(table_rows)
+
+
+def modality_table_body(artifacts: Artifacts) -> str:
+    """Model/check rows with pooled counts and intervals for each source modality."""
+    source_rows = artifacts[MODALITY_TABLE]
+    pooled_rows = artifacts[POOLED_MODALITY]
+    models = order_models(
+        {str(row["model"]) for row in source_rows},
+        artifacts.hosted_models + artifacts.local_models,
+    )
+    local_models = set(artifacts.local_models)
+
+    def model_rows(model: str, label: str) -> str:
+        rendered = []
+        for rule in ("strict", "broad"):
+            columns = [label if rule == "strict" else "", rule.title()]
+            for condition in ("recommended", "optional", "nice_to_have"):
+                row = _one(
+                    [
+                        candidate
+                        for candidate in pooled_rows
+                        if (
+                            str(candidate["model"]),
+                            str(candidate["source_modality"]),
+                            str(candidate["dataset"]),
+                            str(candidate["variant"]),
+                        )
+                        == (model, condition, "all", "all")
+                    ],
+                    f"{POOLED_MODALITY}: {model}/{condition}",
+                )
+                source = [
+                    candidate
+                    for candidate in source_rows
+                    if str(candidate["source_modality"]) == condition
+                    and (model == "all" or str(candidate["model"]) == model)
+                ]
+                for suffix in ("n", "denominator"):
+                    field = f"{rule}_strengthening_{suffix}"
+                    expected = sum(
+                        _number(candidate, field, MODALITY_TABLE)
+                        for candidate in source
+                    )
+                    if _number(row, field, POOLED_MODALITY) != expected:
+                        raise PaperNumbersError(
+                            f"{POOLED_MODALITY}: {model}/{condition} {field} "
+                            f"disagrees with {MODALITY_TABLE}; regenerate both tables"
+                        )
+                columns.append(
+                    _rate_cell(
+                        row,
+                        f"{rule}_strengthening",
+                        denominator=True,
+                        centered=True,
+                        source=POOLED_MODALITY,
+                    )
+                )
+            rendered.append(" & ".join(columns) + r" \\")
+        return "\n".join(rendered)
+
+    hosted, local = [], []
+    for model in models:
+        (local if model in local_models else hosted).append(
+            model_rows(model, model_label(model))
+        )
+    return render_grouped_table_body(
+        hosted, local, model_rows("all", "All models"), 5, local_label="Local"
+    )
 
 
 def build_blocks(
@@ -1619,7 +1876,16 @@ def build_blocks(
         ("Per-model x source condition (strict / broad)", conditions),
         (
             "Per-model table body (Table 3)",
-            [Macro("numTableThreeRows", table_body, "rows only, hosted cohort first")],
+            [
+                Macro(
+                    "numTableThreeRows", table_body, "rows only, hosted cohort first"
+                ),
+                Macro(
+                    "numTableModalityRows",
+                    modality_table_body(artifacts),
+                    "tab:per_model body",
+                ),
+            ],
         ),
         ("RQ table bodies (tab:rq1, tab:rq23)", _rq_table_blocks(artifacts)),
     ]

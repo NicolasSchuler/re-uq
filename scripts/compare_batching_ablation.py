@@ -431,6 +431,9 @@ def main(argv: list[str] | None = None) -> dict[str, Path]:
     parser.add_argument("--run-group-id", default=DEFAULT_RUN_GROUP_ID)
     parser.add_argument("--include-smoke", action="store_true")
     parser.add_argument(
+        "--run-id", action="append", help="Only compare these run IDs (repeatable)."
+    )
+    parser.add_argument(
         "--bootstrap-samples",
         type=int,
         default=DEFAULT_BOOTSTRAP_SAMPLES,
@@ -463,6 +466,10 @@ def main(argv: list[str] | None = None) -> dict[str, Path]:
         raw_path = eu.model_outputs_raw_path(root, dataset_id, variant, smoke=smoke)
         if raw_path.exists():
             raw_rows.extend(eu.read_jsonl(raw_path))
+    if args.run_id:
+        selected = set(args.run_id)
+        registry_rows = [row for row in registry_rows if row.get("run_id") in selected]
+        raw_rows = [row for row in raw_rows if row.get("run_id") in selected]
     tables = build_tables(
         benchmark,
         registry_rows,

@@ -71,7 +71,7 @@ DEFAULT_BOOTSTRAP_SAMPLES = 1000
 # The rerun group every current config writes (conf/config.yaml,
 # conf/experiment/paper_cohort.yaml, run_configs/*.json). The archived runs are
 # `provider-matrix-2026-05`; select them explicitly with --run-group-id.
-DEFAULT_PAPER_RUN_GROUP_ID = "provider-matrix-v2-2026-05"
+DEFAULT_PAPER_RUN_GROUP_ID = "modality-rerun-2026-09"
 ARCHIVED_RUN_GROUP_ID = "provider-matrix-2026-05"
 DEFAULT_PAPER_BATCH_ORDER = "grouped"
 DEFAULT_PAPER_BATCH_SIZE = 16
@@ -86,6 +86,7 @@ TASK2_SNAPSHOT_NAME = "paper_task2_text_drift_metrics.csv"
 CONFIDENCE_SNAPSHOT_NAME = "paper_text_drift_confidence_and_stability.csv"
 REGENERATED_SUFFIX = "_regenerated"
 PER_MODEL_MODALITY_NAME = "paper_per_model_modality_table.csv"
+POOLED_MODALITY_NAME = "paper_per_model_modality_pooled.csv"
 PER_MODEL_HEADLINE_NAME = "paper_per_model_headline.csv"
 HEADLINE_CI_NAME = "paper_headline_bootstrap_ci.csv"
 PROVENANCE_NAME = "paper_snapshot_provenance.json"
@@ -174,6 +175,7 @@ PER_MODEL_FIELDS = [
     "n_items",
     "n_valid",
     "n_parse_failures",
+    "n_text_unclassified",
     "broad_strengthening_n",
     "broad_strengthening_denominator",
     "broad_strengthening_rate",
@@ -192,6 +194,7 @@ PER_MODEL_FIELDS = [
     "strict_high_conf_share_90",
     "agreement_n_complete",
     "agreement_n_incomplete_excluded",
+    "requirement_word_count_n",
     "mean_requirement_word_count",
 ]
 
@@ -758,7 +761,11 @@ def per_model_row(
         seed=BOOTSTRAP_SEED,
     )
     agreement, _ = agreement_for_strict_rows(strict_rows, consistency)
-    word_counts = [_numeric(row.get("requirement_word_count")) for row in det_rows]
+    word_counts = [
+        value
+        for row in det_rows
+        if (value := _numeric(row.get("requirement_word_count"))) is not None
+    ]
     return {
         "model": model,
         "dataset": dataset,
@@ -767,6 +774,7 @@ def per_model_row(
         "n_items": n_items,
         "n_valid": len(det_rows),
         "n_parse_failures": max(0, n_items - len(det_rows)),
+        "n_text_unclassified": len(det_rows) - len(text_rows),
         "broad_strengthening_n": len(broad_rows),
         "broad_strengthening_denominator": len(text_rows),
         "broad_strengthening_rate": ci_fields.get("text_over_commitment", ""),
@@ -803,9 +811,8 @@ def per_model_row(
         ),
         "agreement_n_complete": agreement["agreement_n_complete"],
         "agreement_n_incomplete_excluded": agreement["agreement_n_incomplete_excluded"],
-        "mean_requirement_word_count": _mean(
-            [value for value in word_counts if value is not None]
-        ),
+        "requirement_word_count_n": len(word_counts),
+        "mean_requirement_word_count": _mean(word_counts),
     }
 
 
@@ -901,8 +908,8 @@ def rq_metric_slices(
             }
         )
 
-    # Task 3 verdicts, carried on the deterministic Task 2 row they audit, so a
-    # request that decided several strengthened answers stays one cluster.
+    # Audit outcomes share the dependence induced by the Task 3 request.
+    # Retain the source request separately for traceability.
     strict_by_source: dict[PaperJoinKey, dict[str, Any]] = {
         paper_join_key(row): row for row in strict_rows
     }
@@ -920,6 +927,9 @@ def rq_metric_slices(
         task3_slice.append(
             {
                 **source_row,
+                "source_batch_id": source_row.get("batch_id", ""),
+                "batch_id": row.get("batch_id", ""),
+                "run_id": row.get("run_id", ""),
                 "gold_relation": row.get("gold_relation", ""),
                 "pred_relation": row.get("pred_relation", ""),
             }
@@ -1277,15 +1287,8 @@ def _task1_accuracy(rows: list[dict[str, Any]]) -> float | str:
 
 
 def _unsupported_acceptance_counts(rows: list[dict[str, Any]]) -> tuple[int, int]:
-    """(accepted at >=0.90, weak-source Task 1 items) -- the RQ1 N column."""
-    weak = [row for row in rows if str(row.get("y_true", "")) == "0"]
-    accepted = sum(
-        1
-        for row in weak
-        if row.get("p_yes") not in {"", None}
-        and float(row["p_yes"]) >= HIGH_CONFIDENCE_THRESHOLD
-    )
-    return accepted, len(weak)
+    """Use the same decision-based count as the bootstrap metric."""
+    return eu.unsupported_mandatory_acceptance_counts(rows, HIGH_CONFIDENCE_THRESHOLD)
 
 
 # ---------------------------------------------------------------------------
@@ -1339,6 +1342,7 @@ def score_cell(
     run_group_id: str | None = DEFAULT_PAPER_RUN_GROUP_ID,
     expected_batch_order: str | None = DEFAULT_PAPER_BATCH_ORDER,
     expected_batch_size: int | None = DEFAULT_PAPER_BATCH_SIZE,
+    selected_run_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Load one (dataset, variant) cell and return its scores plus provenance."""
     benchmark_path = eu.artifact_path(
@@ -1359,6 +1363,7 @@ def score_cell(
         for path in registry_paths
         if path.exists()
         for row in eu.read_csv_rows(path)
+        if selected_run_ids is None or str(row.get("run_id", "")) in selected_run_ids
     ]
     full_prefix = "full" if variant == "must" else f"full-{variant}"
     smoke_prefix = "smoke" if variant == "must" else f"smoke-{variant}"
@@ -1458,6 +1463,7 @@ def score_task3_cell(
     expected_batch_size: int | None = DEFAULT_PAPER_BATCH_SIZE,
     audit_mode: str = DEFAULT_TASK3_AUDIT_MODE,
     allow_missing_task3: bool = False,
+    selected_run_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Score the blind audits of the Task 2 runs `score_cell` already chose.
 
@@ -1487,6 +1493,7 @@ def score_task3_cell(
         for path in registry_paths
         if path.exists()
         for row in eu.read_csv_rows(path)
+        if selected_run_ids is None or str(row.get("run_id", "")) in selected_run_ids
     ]
     audit_mode = eu.normalize_task3_audit_mode(audit_mode)
     audit_suffix = (
@@ -1606,6 +1613,8 @@ def export_tables(
     include_task3: bool = True,
     allow_missing_task3: bool = False,
     task3_audit_mode: str = DEFAULT_TASK3_AUDIT_MODE,
+    selected_run_ids: set[str] | None = None,
+    selected_task3_run_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Regenerate every paper-facing table for ``cells`` and write them out."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1636,6 +1645,7 @@ def export_tables(
             run_group_id=run_group_id,
             expected_batch_order=expected_batch_order,
             expected_batch_size=expected_batch_size,
+            selected_run_ids=selected_run_ids,
         )
         scores = cell.pop("scores")
         # Raw rows carry the parse failures that never became score rows.
@@ -1661,6 +1671,7 @@ def export_tables(
                 expected_batch_size=expected_batch_size,
                 audit_mode=task3_audit_mode,
                 allow_missing_task3=allow_missing_task3,
+                selected_run_ids=selected_task3_run_ids,
             )
             if include_task3
             else {"scores": []}
@@ -1679,7 +1690,8 @@ def export_tables(
             rows_by_model_modality[(model, str(row.get("source_modality", "")))].append(
                 row
             )
-        cell_models = sorted(rows_by_model)
+        # Retain selected models and modalities even when every answer failed.
+        cell_models = sorted(cell["run_ids"])
         task2_rows.append(
             task2_snapshot_row(dataset, variant, len(cell_models), det_rows, raw_rows)
         )
@@ -1695,8 +1707,6 @@ def export_tables(
             )
             for modality in eu.MODALITIES:
                 modality_rows = rows_by_model_modality.get((model, modality), [])
-                if not modality_rows:
-                    continue
                 per_model_rows.append(
                     per_model_row(
                         model,
@@ -1738,6 +1748,29 @@ def export_tables(
         )
         for model, rows in sorted(pooled_by_model.items())
     ]
+
+    # Table 5 needs intervals over the pooled observations, not averages of
+    # per-cell bounds. Keep these rows separate to avoid double-counting cells.
+    pooled_modality_rows = []
+    for model, rows in [*sorted(pooled_by_model.items()), ("all", pooled_det_rows)]:
+        planned = (
+            sum(pooled_items_by_model.values())
+            if model == "all"
+            else pooled_items_by_model[model]
+        )
+        for modality in eu.MODALITIES:
+            pooled_modality_rows.append(
+                per_model_row(
+                    model,
+                    "all",
+                    "all",
+                    modality,
+                    [row for row in rows if row.get("source_modality") == modality],
+                    pooled_consistency,
+                    n_items=_items_for_modality(planned),
+                    bootstrap_samples=bootstrap_samples,
+                )
+            )
 
     # One row per model (pooled over cells), one per cell (pooled over models),
     # and one grand row. The model x cell interior is deliberately not emitted:
@@ -1814,6 +1847,7 @@ def export_tables(
         ".csv", f"{suffix}.csv"
     )
     modality_path = output_dir / PER_MODEL_MODALITY_NAME
+    pooled_modality_path = output_dir / POOLED_MODALITY_NAME
     headline_path = output_dir / PER_MODEL_HEADLINE_NAME
     rq_path = output_dir / PER_MODEL_RQ_NAME
     headline_ci_path = output_dir / HEADLINE_CI_NAME
@@ -1824,11 +1858,22 @@ def export_tables(
         confidence_path, confidence_rows, fieldnames=CONFIDENCE_SNAPSHOT_FIELDS
     )
     eu.write_csv_rows(modality_path, per_model_rows, fieldnames=PER_MODEL_FIELDS)
+    eu.write_csv_rows(
+        pooled_modality_path, pooled_modality_rows, fieldnames=PER_MODEL_FIELDS
+    )
     eu.write_csv_rows(headline_path, headline_rows, fieldnames=PER_MODEL_FIELDS)
     eu.write_csv_rows(rq_path, rq_rows, fieldnames=PER_MODEL_RQ_FIELDS)
     eu.write_csv_rows(headline_ci_path, headline_ci_rows)
     modality_path.with_suffix(".md").write_text(
         markdown_for_rows("Per-Model Modality Table", per_model_rows, PER_MODEL_FIELDS),
+        encoding="utf-8",
+    )
+    pooled_modality_path.with_suffix(".md").write_text(
+        markdown_for_rows(
+            "Modality Results Pooled Across Cells",
+            pooled_modality_rows,
+            PER_MODEL_FIELDS,
+        ),
         encoding="utf-8",
     )
     headline_path.with_suffix(".md").write_text(
@@ -1863,6 +1908,7 @@ def export_tables(
             "task2_snapshot": str(task2_path),
             "confidence_snapshot": str(confidence_path),
             "per_model_modality_table": str(modality_path),
+            "per_model_modality_pooled": str(pooled_modality_path),
             "per_model_headline": str(headline_path),
             "per_model_rq_table": str(rq_path),
             "headline_bootstrap_ci": str(headline_ci_path),
@@ -1873,6 +1919,7 @@ def export_tables(
         "task2_rows": task2_rows,
         "confidence_rows": confidence_rows,
         "per_model_rows": per_model_rows,
+        "pooled_modality_rows": pooled_modality_rows,
         "headline_rows": headline_rows,
         "rq_rows": rq_rows,
         "headline_ci_rows": headline_ci_rows,
@@ -1880,6 +1927,7 @@ def export_tables(
             "task2": task2_path,
             "confidence": confidence_path,
             "per_model_modality": modality_path,
+            "per_model_modality_pooled": pooled_modality_path,
             "per_model_headline": headline_path,
             "per_model_rq_table": rq_path,
             "headline_ci": headline_ci_path,
@@ -1952,6 +2000,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the canonical snapshot names instead of the *_regenerated variants.",
     )
     parser.add_argument("--include-smoke", action="store_true")
+    parser.add_argument(
+        "--run-id",
+        action="append",
+        help="Restrict Task 1/2 selection to these run IDs.",
+    )
+    parser.add_argument(
+        "--task3-run-id", action="append", help="Restrict audits to these run IDs."
+    )
     parser.add_argument(
         "--expected-stochastic-samples",
         type=int,
@@ -2029,6 +2085,8 @@ def main(argv: list[str] | None = None) -> None:
         include_task3=not args.no_task3,
         allow_missing_task3=args.allow_missing_task3,
         task3_audit_mode=args.task3_audit_mode,
+        selected_run_ids=set(args.run_id) if args.run_id else None,
+        selected_task3_run_ids=set(args.task3_run_id) if args.task3_run_id else None,
     )
     for name, path in result["paths"].items():
         print(f"wrote {name}: {path}")
