@@ -4337,6 +4337,22 @@ def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, Any
     weak_patterns = [
         r"\bwould\s+be\s+nice\s+if\b",
         r"\bwould\s+be\s+useful\s+if\b",
+        # Paraphrases of the weak template that keep the hedge but drop the
+        # "if ... could" frame: "It would be useful for the system to ...",
+        # "It is desirable that the system ...", "... would be useful." (a
+        # trailing hedge on a gerund clause). Seen in glm-5.3, glm-5.3-flash,
+        # glm-5.1 and qwen3.8-27b outputs (2026-09-11); they preserve the
+        # nice-to-have intent and must not fall through to the unknown or
+        # system-verb branches.
+        (
+            r"^it\s+(?:would|will|could|might)\s+be\s+"
+            r"(?:useful|nice|desirable|beneficial|helpful)\s+(?:if|for|to)\b"
+        ),
+        (
+            r"^it\s+is\s+(?:desirable|useful|nice|beneficial|helpful)\s+"
+            r"(?:if|for|that|to)\b"
+        ),
+        r"\b(?:would\s+be|is)\s+(?:useful|nice|desirable|beneficial|helpful)\.?$",
         r"\blow[-\s]+priority\s+enhancement\b",
         r"\bfuture\s+enhancement\b",
         r"\bnice[-\s]+to[-\s]+have\b",

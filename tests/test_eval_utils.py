@@ -495,6 +495,14 @@ class EvalUtilsTest(unittest.TestCase):
             ("The system could export reports.", "optional"),
             ("The system can export reports.", "optional"),
             ("It would be nice if the system could export reports.", "nice_to_have"),
+            # Paraphrases of the weak template that drop the "if ... could" frame.
+            ("It would be useful for the system to export reports.", "nice_to_have"),
+            ("It is desirable for the system to export reports.", "nice_to_have"),
+            ("It is desirable that the system exports reports.", "nice_to_have"),
+            ("The system exporting reports would be useful.", "nice_to_have"),
+            ("The system exporting reports is useful.", "nice_to_have"),
+            # A hedge that is not a weak-intent frame stays what its modal says.
+            ("The system should ideally export reports.", "recommended"),
             ("The system exports reports.", "mandatory"),
             ("System provides export reports.", "mandatory"),
         ]

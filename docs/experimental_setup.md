@@ -343,8 +343,21 @@ extra streams cost almost nothing per step. Request content, batch membership
 and request seeds are planned before dispatch and do not depend on the worker
 count; only the order in which rows land in the raw file does, and every
 downstream step keys on identifiers rather than file position. Whether the
-seed-repeat identity survives a different number of concurrent streams was
-checked separately: CONCURRENCY_DETERMINISM_RESULT.
+seed-repeat identity survives concurrency was checked on 2026-09-11 by
+replaying recorded Qwen3.5-9B 16-item batches with their original seeds. It
+does not, and the loss is not specific to the slot change: on the original
+4-slot server, 8 stochastic batches replayed byte-identically 7/8 times at one
+worker, 6/8 at two and 4/8 at four; after the move to 8 slots the same batches
+matched 3/8 at one worker and 1/8 at eight. Temperature-0 batches matched 6/8
+at either worker count. The differences are wording changes inside the
+generated requirement text (a few dozen of 128 items per replay), never the
+modality label. This is the expected behaviour of continuous batching: the
+numerics of a decode step depend on which other requests share it, so a
+recorded seed reproduces a request only when the co-scheduled load is the
+same. The reproducibility claim for the local models is therefore at the level
+of the sampling configuration and the served model file, not byte identity of
+individual answers; the 2026-09-10 byte-identical repeats were obtained on an
+otherwise idle server.
 
 Temperature 0.0 is treated as deterministic. It is not guaranteed to be
 deterministic on a hosted endpoint, and without a request seed and a recorded
