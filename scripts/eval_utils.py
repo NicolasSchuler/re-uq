@@ -23,7 +23,7 @@ import tempfile
 import time
 import uuid
 import zipfile
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field as dataclass_field
@@ -241,6 +241,7 @@ TASK3_VERIFICATION_FIELDS = [
     "task2_confidence",
     "task3_declared_relation",
     "task3_gold_relation",
+    "task3_reference_status",
     "task3_audit_mode",
     "ordinal_strength",
     "numeric_strength",
@@ -1034,6 +1035,15 @@ BATCH_ORDER_GROUPED = "grouped"
 BATCH_ORDER_SHUFFLED = "shuffled"
 BATCH_ORDERS = (BATCH_ORDER_GROUPED, BATCH_ORDER_SHUFFLED)
 DEFAULT_BATCH_ORDER = BATCH_ORDER_GROUPED
+
+
+def batching_arm_name(batch_size: int, batch_order: str) -> str:
+    """Stable request-composition identity, retaining archived 16-item names."""
+    size = positive_int(batch_size, "batch_size")
+    order = normalize_batch_order(batch_order)
+    if size == 1:
+        return "single"
+    return order if size == 16 else f"{order}_{size}"
 
 
 def normalize_batch_order(value: Any, field: str = "batch_order") -> str:
@@ -2106,9 +2116,20 @@ GENERIC_MODAL_PREFIX_RE = re.compile(
 )
 
 
-def auto_capability_text(requirement: str) -> str:
+def auto_capability_text(requirement: str, *, preserve_subject: bool = False) -> str:
     text = strip_final_punctuation(requirement)
     text = re.sub(r"^[\-\*\d.)\s]+", "", text)
+    if preserve_subject:
+        # PURE has heterogeneous actors and leading conditions. The generic
+        # prefix stripper loses both. Preserve the sentence for manual review
+        # unless the actor is already the benchmark's generic system.
+        prefix = re.match(
+            r"^(?:the\s+)?system\s+(?:shall|must|should|may|will|can|could)\s+",
+            text,
+            flags=re.I,
+        )
+        if prefix is None:
+            return text
     stripped_leading_requirement = False
     for pattern in LEADING_REQUIREMENT_PATTERNS:
         stripped = pattern.sub("", text).strip()
@@ -2584,10 +2605,16 @@ def make_pure_seed_candidates(
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
-        capability = auto_capability_text(original)
+        capability = auto_capability_text(original, preserve_subject=True)
         marker = str(row.get("marker", ""))
         auto_include, reason = pure_filter(
-            original, capability, marker, int(row.get("marker_count", 0))
+            # Keep the sampling pool stable. This screen selects sources, not
+            # semantically approved clauses; subject-preserving suggestions
+            # can still contain a modal and require manual rewriting.
+            original,
+            auto_capability_text(original),
+            marker,
+            int(row.get("marker_count", 0)),
         )
         candidates.append(
             {
@@ -2646,7 +2673,8 @@ def make_pure_seed_candidates(
         if index in selected:
             candidate["include"] = "yes"
             candidate["exclusion_reason"] = ""
-            candidate["capability_text_final"] = candidate["capability_text_auto"]
+            # The PURE builder rejects residual modalities before publishing.
+            candidate["capability_text_final"] = ""
         elif is_truthy(candidate["auto_include"]):
             candidate["exclusion_reason"] = "not_sampled_mandatory_pool"
     return candidates
@@ -2832,6 +2860,12 @@ def build_task3_verification_items(
     task2_raw_rows: list[dict[str, Any]],
     audit_mode: str = OFFICIAL_TASK3_AUDIT_MODE,
 ) -> list[dict[str, Any]]:
+    """Audit nonempty valid extractions, even without an automatic reference.
+
+    Text-modality recognition determines scoring eligibility, not whether the
+    model can audit the output. Unknown and negated wording has no ordinal
+    reference relation; it remains available for review and coverage reporting.
+    """
     audit_mode = normalize_task3_audit_mode(audit_mode)
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
     # Append-only raw files can hold several rows per planned request; keep one.
@@ -2852,16 +2886,20 @@ def build_task3_verification_items(
         if not source_item:
             continue
         parsed = raw["parsed_json"]
+        requirement = str(parsed.get("requirement", "") or "").strip()
+        if not requirement:
+            continue
         extracted_modality = normalize_modality(parsed.get("modality"))
         if extracted_modality is None:
             continue
-        text_diagnostic = requirement_text_modality_diagnostic(
-            parsed.get("requirement", "")
-        )
+        text_diagnostic = requirement_text_modality_diagnostic(requirement)
         text_modality = normalize_modality(text_diagnostic["text_modality"])
-        if text_modality is None:
-            continue
-        text_parse_status = "ok"
+        reference_status = (
+            "available"
+            if text_modality is not None
+            else f"{text_diagnostic['text_modality']}_text_modality"
+        )
+        text_parse_status = "ok" if text_modality is not None else "unknown"
         model = str(raw.get("model", ""))
         source_item_id = str(source_item["item_id"])
         dedupe_key = (model, source_item_id)
@@ -2871,7 +2909,11 @@ def build_task3_verification_items(
         declared_relation = task3_gold_relation(
             source_item["source_modality"], extracted_modality
         )
-        relation = task3_gold_relation(source_item["source_modality"], text_modality)
+        relation = (
+            task3_gold_relation(source_item["source_modality"], text_modality)
+            if text_modality is not None
+            else ""
+        )
         confidence = confidence_probability(raw, parsed)
         items.append(
             {
@@ -2887,12 +2929,13 @@ def build_task3_verification_items(
                 "task2_model": model,
                 "task2_requirement": str(parsed.get("requirement", "")),
                 "task2_modality": extracted_modality,
-                "task2_text_modality": text_modality,
+                "task2_text_modality": text_diagnostic["text_modality"],
                 "task2_text_modality_basis": text_diagnostic["text_modality_basis"],
                 "task2_text_modality_parse_status": text_parse_status,
                 "task2_confidence": "" if confidence is None else confidence,
                 "task3_declared_relation": declared_relation,
                 "task3_gold_relation": relation,
+                "task3_reference_status": reference_status,
                 "task3_audit_mode": audit_mode,
                 "ordinal_strength": int(source_item["ordinal_strength"]),
                 "numeric_strength": float(source_item["numeric_strength"]),
@@ -2913,7 +2956,6 @@ def task3_items_from_raw_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, 
         "task2_run_id",
         "task2_model",
         "task2_requirement",
-        "task3_gold_relation",
         "task3_audit_mode",
         "ordinal_strength",
         "numeric_strength",
@@ -2925,6 +2967,11 @@ def task3_items_from_raw_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, 
         if not item_id or item_id in seen:
             continue
         if any(str(raw.get(field, "")).strip() == "" for field in required_fields):
+            continue
+        if raw.get("task3_gold_relation") not in TASK3_RELATIONS and raw.get(
+            "task3_reference_status"
+        ) not in {"unknown_text_modality", "negated_text_modality"}:
+            # A missing legacy reference is not an explicitly unscored item.
             continue
         seen.add(item_id)
         item = {field: raw.get(field, "") for field in TASK3_VERIFICATION_FIELDS}
@@ -4306,7 +4353,9 @@ def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, Any
 
     Precedence, applied in this order:
 
-    1. A weak phrase ("would be nice if", ...) wins outright (``nice_to_have``).
+    1. A weak phrase ("would be nice if", ...) takes precedence over optional
+       cues in its wish frame, but never hides a positive obligation or
+       recommendation. Mixed weak/strong wording is flagged for review.
     2. A POSITIVE modal cue wins over any negated cue, ranked by
        ``MODAL_CATEGORY_PRIORITY`` (mandatory > recommended > optional). Text
        such as "The system must ensure that users cannot delete records." states
@@ -4352,19 +4401,30 @@ def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, Any
             r"^it\s+is\s+(?:desirable|useful|nice|beneficial|helpful)\s+"
             r"(?:if|for|that|to)\b"
         ),
-        r"\b(?:would\s+be|is)\s+(?:useful|nice|desirable|beneficial|helpful)\.?$",
         r"\blow[-\s]+priority\s+enhancement\b",
         r"\bfuture\s+enhancement\b",
         r"\bnice[-\s]+to[-\s]+have\b",
         r"\bwishlist\b",
     ]
-    if any(re.search(pattern, text) for pattern in weak_patterns):
+    # A trailing utility remark is a weak frame only without an explicit
+    # modal: "exporting reports is useful", not "may export ... is useful".
+    trailing_weak = not cues and re.search(
+        r"\b(?:would\s+be|is)\s+(?:useful|nice|desirable|beneficial|helpful)\.?$",
+        text,
+    )
+    weak_phrase = bool(trailing_weak) or any(
+        re.search(pattern, text) for pattern in weak_patterns
+    )
+    positive_categories = {MODAL_CUE_CATEGORY[cue] for cue in positive_cues}
+    strong_categories = positive_categories & {"mandatory", "recommended"}
+    if weak_phrase and strong_categories:
+        result["text_modality_multi_modal"] = True
+    if weak_phrase and not strong_categories:
         return {
             "text_modality": "nice_to_have",
             "text_modality_basis": "weak_phrase",
             **result,
         }
-    positive_categories = {MODAL_CUE_CATEGORY[cue] for cue in positive_cues}
     for category in MODAL_CATEGORY_PRIORITY:
         if category in positive_categories:
             return {
@@ -4917,12 +4977,36 @@ def _openai_error_classes() -> tuple[type[BaseException], ...]:
     return (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)
 
 
+def is_model_output_format_error(exc: BaseException) -> bool:
+    """Recognize the server's explicit generated-output rejection, not HTTP alone.
+
+    Re-generating this answer would replace a failed sample with a new draw.
+    Match narrowly: other 5xx errors still use the ordinary transport policy.
+    Some validation clients wrap the original exception in their cause chain.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).lower()
+        body = str(getattr(current, "body", "") or "").lower()
+        if (
+            "model produced output that does not match the expected peg-native format"
+            in (message + " " + body)
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def is_transient_provider_error(exc: BaseException) -> bool:
-    """True for timeouts, connection resets, 408/429 and 5xx responses.
+    """True for transport/service failures, but not generated-output rejections.
 
     Deliberately excludes 400/401/403-class failures: a budget or auth rejection
     will never succeed on retry and must surface immediately.
     """
+    if is_model_output_format_error(exc):
+        return False
     status_code = getattr(exc, "status_code", None)
     if status_code is None:
         response = getattr(exc, "response", None)
@@ -4991,6 +5075,11 @@ def provider_error_record(error: BaseException) -> dict[str, Any]:
             pass
     return {
         "error": repr(error),
+        "error_kind": (
+            "model_output_format"
+            if is_model_output_format_error(error)
+            else "provider_error"
+        ),
         "status_code": getattr(
             error, "status_code", getattr(response, "status_code", None)
         ),
@@ -5192,7 +5281,7 @@ def instructor_completion(
     if cleaned_extra_body:
         request_kwargs["extra_body"] = cleaned_extra_body
     payload_sha = request_payload_sha(request_kwargs)
-    attempt_errors: list[str] = []
+    attempt_errors: list[dict[str, Any]] = []
     provenance = {
         "request_payload": transcript_request_payload(request_kwargs),
         "request_payload_sha": payload_sha,
@@ -5201,10 +5290,29 @@ def instructor_completion(
     }
 
     start = time.perf_counter()
+    # Instructor's default retry object retries all exceptions, not only schema
+    # validation failures. Exclude native generation rejections there as well.
+    from tenacity import Retrying, retry_if_exception, stop_after_attempt
+
+    def validated_attempt() -> Any:
+        return client.chat.completions.create(
+            **{
+                **request_kwargs,
+                "max_retries": Retrying(
+                    stop=stop_after_attempt(max(1, int(request_kwargs["max_retries"]))),
+                    retry=retry_if_exception(
+                        lambda exc: not is_model_output_format_error(exc)
+                    ),
+                ),
+            }
+        )
+
     parsed, retry_count, error = call_with_retries(
-        lambda: client.chat.completions.create(**request_kwargs),
+        validated_attempt,
         max_retries=max_retries,
-        on_attempt_error=lambda _attempt, exc: attempt_errors.append(repr(exc)),
+        on_attempt_error=lambda _attempt, exc: attempt_errors.append(
+            provider_error_record(exc)
+        ),
     )
     latency_s = time.perf_counter() - start
     if error is None:
@@ -5238,14 +5346,22 @@ def instructor_completion(
         or "Instructor" in error_name
         else ""
     )
-    raw_text = str(getattr(error, "last_completion", "") or "")
+    error_record = provider_error_record(error)
+    raw_text = (
+        error_record["raw_text"]
+        if is_model_output_format_error(error)
+        else str(getattr(error, "last_completion", "") or "")
+    )
     return {
         "ok": False,
+        **error_record,
         "raw_text": raw_text,
-        "response_json": None,
+        "response_json": error_record["response_json"],
         "latency_s": latency_s,
         "error": repr(error),
-        "parse_status_override": parse_status_override,
+        "parse_status_override": (
+            "" if is_model_output_format_error(error) else parse_status_override
+        ),
         "retry_count": retry_count,
         **provenance,
     }
@@ -5523,7 +5639,11 @@ def build_raw_record(
         parsed_json = None
         parse_status = parse_status_override
     elif not completion.get("ok"):
-        parse_status = "request_error"
+        parse_status = (
+            "model_output_error"
+            if completion.get("error_kind") == "model_output_format"
+            else "request_error"
+        )
 
     response_fields = extract_response_fields(completion.get("response_json"))
     # A response cut off at the token limit is a budget problem, not malformed
@@ -5532,6 +5652,7 @@ def build_raw_record(
     if response_fields["finish_reason"] == "length" and parse_status not in {
         "ok",
         "request_error",
+        "model_output_error",
     }:
         parse_status = "truncated"
 
@@ -5555,6 +5676,7 @@ def build_raw_record(
         "parse_status": parse_status,
         "latency_s": completion.get("latency_s", ""),
         "error": completion.get("error", ""),
+        "error_kind": completion.get("error_kind", ""),
         # Provider-response provenance (see extract_response_fields).
         **response_fields,
         "response_chars": len(raw_text or ""),
@@ -5659,6 +5781,7 @@ def build_raw_record(
         "task2_confidence",
         "task3_declared_relation",
         "task3_gold_relation",
+        "task3_reference_status",
         "task3_audit_mode",
         "ordinal_strength",
         "numeric_strength",
@@ -6167,6 +6290,24 @@ def run_instructor_completion_batch(
             request_indices=[int(job["request_index"]) for job in jobs],
         )
 
+    if completion.get("error_kind") == "model_output_format":
+        return [
+            _job_record(
+                job,
+                completion=completion,
+                request_index=int(job["request_index"]),
+                response_format=None,
+                request_extra_body=instructor_extra_body(job.get("extra_body")),
+                batch_id=batch_id,
+                batch_size=len(jobs),
+                batch_item_count=len(jobs),
+                batch_prompt_hash=batch_prompt_hash,
+                batch_jobs=jobs,
+                output_contract_version=output_contract_version_for_job(job),
+                confidence_scale=confidence_scale_for_job(job),
+            )
+            for job in jobs
+        ]
     records_by_request_index: dict[int, dict[str, Any]] = {}
     fallback_jobs = [dict(job) for job in jobs]
     if completion.get("ok"):
@@ -6287,6 +6428,22 @@ def run_completion_batch(
     for job in jobs:
         request_index = int(job["request_index"])
         result = parsed_results.get(request_index)
+        if completion.get("error_kind") == "model_output_format":
+            # A native generation rejection is already this sample's result.
+            # Do not replace it with a fresh single-item generation.
+            records_by_request_index[request_index] = _job_record(
+                job,
+                completion=completion,
+                request_index=request_index,
+                response_format=batch_response_format,
+                request_extra_body=batch_extra_body,
+                batch_id=batch_id,
+                batch_size=len(jobs),
+                batch_item_count=len(jobs),
+                batch_prompt_hash=batch_prompt_hash,
+                batch_jobs=jobs,
+            )
+            continue
         if not completion.get("ok"):
             fallback_jobs.append(
                 (job, str(completion.get("error", "")) or "batch_request_failed")
@@ -6996,6 +7153,7 @@ def task3_score_fields(
             "task2_text_modality_parse_status", ""
         ),
         "task3_declared_relation": item.get("task3_declared_relation", ""),
+        "task3_reference_status": item.get("task3_reference_status", "available"),
         "task3_audit_mode": item.get("task3_audit_mode", ""),
         "task2_requirement": item.get("task2_requirement", ""),
         "evidence_phrase": str(evidence_phrase or ""),
@@ -7859,7 +8017,14 @@ def build_task3_scores(
     task3_items: list[dict[str, Any]],
     raw_rows: list[dict[str, Any]],
     min_valid_samples: int = 1,
+    *,
+    sampling_plan: SamplingPlan | None = None,
 ) -> list[dict[str, Any]]:
+    """Score only audits with a reference; retain all others in audit review rows.
+
+    Production callers supply the recorded sampling plan. The optional plan
+    retains compatibility with older notebook calls that used observed counts.
+    """
     item_by_id = {row["item_id"]: row for row in task3_items}
     scores: list[dict[str, Any]] = []
 
@@ -7931,13 +8096,118 @@ def build_task3_scores(
                 item,
                 distribution,
                 len(valid),
-                len(group),
+                sampling_plan.total_samples(len(group))
+                if sampling_plan
+                else len(group),
                 "relation_consistency",
                 sample_rows=valid,
             )
         )
 
     return scores
+
+
+def task3_audit_review_rows(
+    task3_items: list[dict[str, Any]],
+    raw_rows: list[dict[str, Any]],
+    *,
+    expected_stochastic_samples: int = 5,
+) -> list[dict[str, Any]]:
+    """One row per auditable source, including missing and unscored judgments.
+
+    No correctness label is inferred from the auditor's answer. Reference-free
+    outputs remain reviewable, while the scored subset stays explicit.
+    """
+    by_item: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for raw in dedupe_raw_rows(raw_rows):
+        if raw.get("task") == "task3":
+            by_item[(str(raw.get("model", "")), str(raw.get("item_id", "")))].append(
+                raw
+            )
+    result: list[dict[str, Any]] = []
+    for item in task3_items:
+        rows = by_item.get((str(item["task2_model"]), str(item["item_id"])), [])
+        run_ids = {str(row.get("run_id", "")) for row in rows}
+        if len(run_ids) > 1:
+            raise ValueError(
+                "Audit review requires one selected run per source item/model."
+            )
+        deterministic = next(
+            (row for row in rows if row.get("sample_kind") == "deterministic"), {}
+        )
+        parsed = deterministic.get("parsed_json") or {}
+        available = item.get("task3_gold_relation") in TASK3_RELATIONS
+        valid_stochastic = {
+            int(row["sample_index"])
+            for row in rows
+            if row.get("sample_kind") == "stochastic"
+            and row.get("parse_status") == "ok"
+            and 0 <= int(row["sample_index"]) < expected_stochastic_samples
+        }
+        result.append(
+            {
+                "model": item["task2_model"],
+                "run_id": next(iter(run_ids), ""),
+                "source_run_id": item["task2_run_id"],
+                "item_id": item["item_id"],
+                "source_item_id": item["source_item_id"],
+                "seed_id": item["seed_id"],
+                "source_modality": item["source_modality"],
+                "source_statement": item["source_statement"],
+                "task2_requirement": item["task2_requirement"],
+                "task2_text_modality": item.get("task2_text_modality", ""),
+                "reference_available": available,
+                "reference_status": item.get("task3_reference_status")
+                or ("available" if available else "unavailable"),
+                "gold_relation": item.get("task3_gold_relation", ""),
+                "audit_observed": bool(deterministic),
+                "audit_parse_status": deterministic.get("parse_status", "missing"),
+                "pred_relation": parsed.get("relation", ""),
+                "confidence": parsed.get("confidence", ""),
+                "evidence_phrase": parsed.get("evidence_phrase", ""),
+                "brief_reason": parsed.get("brief_reason", ""),
+                "valid_stochastic_samples": len(valid_stochastic),
+                "expected_stochastic_samples": expected_stochastic_samples,
+                "stochastic_complete": len(valid_stochastic)
+                == expected_stochastic_samples,
+            }
+        )
+    return result
+
+
+def task3_audit_coverage_rows(
+    review_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in review_rows:
+        by_model[str(row["model"])].append(row)
+    return [
+        {
+            "model": model,
+            "auditable_source_items": len(rows),
+            "reference_available_items": sum(
+                row["reference_available"] for row in rows
+            ),
+            "reference_unavailable_items": sum(
+                not row["reference_available"] for row in rows
+            ),
+            "observed_deterministic_audits": sum(row["audit_observed"] for row in rows),
+            "parsed_deterministic_audits": sum(
+                row["audit_parse_status"] == "ok" for row in rows
+            ),
+            "parsed_unscored_audits": sum(
+                not row["reference_available"] and row["audit_parse_status"] == "ok"
+                for row in rows
+            ),
+            "missing_deterministic_audits": sum(
+                not row["audit_observed"] for row in rows
+            ),
+            "complete_stochastic_groups": sum(
+                row["stochastic_complete"] for row in rows
+            ),
+        }
+        for model, rows in sorted(by_model.items())
+    ]
 
 
 # =============================================================================
@@ -7961,6 +8231,7 @@ PARSE_STATUS_CATEGORIES = (
     "invalid_label",
     "missing_fields",
     "request_error",
+    "model_output_error",
     "missing_batch_result",
 )
 
@@ -8470,22 +8741,24 @@ def pending_completion_jobs(
     raw_rows: Iterable[Mapping[str, Any]],
     run_id: str,
 ) -> list[dict[str, Any]]:
-    """The planned jobs `run_id` has no usable cached record for.
+    """The planned jobs `run_id` has no reusable observation for.
 
     A record is reusable only when it shares the full
     :class:`ObservationIdentity` of the planned job -- provider and profile
     included, so a cell re-run under a second provider is planned in full rather
     than served from the first provider's rows.
+
+    Native output rejections are terminal failed observations, not missing
+    calls. Ordinary resume must not draw again until such a sample succeeds.
     """
     # Map each completed record to the job_config_sha it was produced under so
     # resume can re-run rows whose planned config has since changed. Legacy rows
     # predate the field and fall back to the old key-only match.
     completed: dict[tuple[str, str, str, str, str, str, str, str, int], str] = {}
     for row in raw_rows:
-        if (
-            str(row.get("run_id", "")) == str(run_id)
-            and str(row.get("parse_status", "")) == "ok"
-        ):
+        if str(row.get("run_id", "")) == str(run_id) and str(
+            row.get("parse_status", "")
+        ) in {"ok", "model_output_error"}:
             completed[completion_record_key(row)] = str(row.get("job_config_sha", ""))
 
     pending: list[dict[str, Any]] = []

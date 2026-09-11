@@ -491,11 +491,23 @@ def main() -> None:
             f"observed {sorted(score_embedding_backends)!r}."
         )
     task3_scores = (
-        eu.build_task3_scores(task3_items, task3_rows)
+        eu.build_task3_scores(task3_items, task3_rows, sampling_plan=sampling_plan)
         if task3_items and task3_rows
         else []
     )
     baseline_scores = eu.build_rule_baseline_scores(result_benchmark)
+    # Derive coverage from every eligible source, not only audits that returned.
+    audit_items = (
+        eu.build_task3_verification_items(result_benchmark, raw_rows, task3_audit_mode)
+        if args.task3_run_id
+        else []
+    )
+    audit_review = eu.task3_audit_review_rows(
+        audit_items,
+        task3_rows,
+        expected_stochastic_samples=int(args.expected_stochastic_samples),
+    )
+    audit_coverage = eu.task3_audit_coverage_rows(audit_review)
     scores.extend(task3_scores)
     scores.extend(baseline_scores)
     acse_normalized_rows = eu.acse_normalized_score_rows(scores)
@@ -506,6 +518,8 @@ def main() -> None:
     )
 
     eu.write_csv_rows(output_dir / "uq_scores.csv", scores)
+    eu.write_csv_rows(output_dir / "task3_audit_review.csv", audit_review)
+    eu.write_csv_rows(output_dir / "task3_audit_coverage.csv", audit_coverage)
     eu.write_csv_rows(
         output_dir / "acse_semantic_normalized_scores.csv",
         acse_normalized_rows,
@@ -568,6 +582,7 @@ def main() -> None:
         "run_id": args.run_id,
         "semantic_embedding_backend": semantic_embedding_backend,
         "task3_run_id": args.task3_run_id or "",
+        "task3_audit_coverage": audit_coverage,
         "task3_audit_mode": task3_audit_mode if args.task3_run_id else "",
         "task3_audit_modes_observed": sorted(task3_audit_modes_in_rows(task3_rows))
         if task3_rows

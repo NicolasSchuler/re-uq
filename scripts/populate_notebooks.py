@@ -1220,7 +1220,7 @@ def notebook_03b() -> list[nbf.NotebookNode]:
                     status_counts[row["parse_status"]] = status_counts.get(row["parse_status"], 0) + 1
                 print(status_counts)
                 print(f"Parse success rate: {status_counts.get('ok', 0) / len(task3_rows):.3f}")
-                task3_scores = eu.build_task3_scores(task3_items, task3_rows)
+                task3_scores = eu.build_task3_scores(task3_items, task3_rows, sampling_plan=eu.SamplingPlan.from_run_config(CONFIG))
                 summary = eu.metric_summary_by_model_task_method(task3_scores)
                 fields = [
                     "model",
@@ -1343,7 +1343,7 @@ def notebook_04() -> list[nbf.NotebookNode]:
         code(
             r"""
             scores = eu.build_uq_scores(result_benchmark, raw_rows, sampling_plan=eu.SamplingPlan.from_run_config(CONFIG))
-            task3_scores = eu.build_task3_scores(task3_items, task3_raw_rows) if task3_items and task3_raw_rows else []
+            task3_scores = eu.build_task3_scores(task3_items, task3_raw_rows, sampling_plan=eu.SamplingPlan.from_run_config(CONFIG)) if task3_items and task3_raw_rows else []
             baseline_scores = eu.build_rule_baseline_scores(result_benchmark)
             scores.extend(task3_scores)
             scores.extend(baseline_scores)

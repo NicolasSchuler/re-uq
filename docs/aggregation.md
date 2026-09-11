@@ -6,6 +6,14 @@ metric, what happens to parse failures and to text whose modality cannot be
 read, pooled versus macro-of-cells aggregation, how models are pooled, and the
 bootstrap procedure.
 
+For the final single-item campaign, raw rows have no batched-request identity,
+so the existing cluster resolver uses capability (`seed_id`), keeping sibling
+modalities together. Historical grouped-arm request clustering remains as
+described below. Composition deltas use exact jointly eligible source items
+and capability resampling against the named reference arm, now `single`.
+The cluster actually used is exported; saved-generation intervals do not
+measure repeated-server variability or arbitrary cross-capability dependence.
+
 Line numbers are anchors into the current tree and may drift; the function names
 are canonical.
 
@@ -65,6 +73,26 @@ All Task 2 headline metrics are computed over rows with
 deterministic (temperature 0) answer per item and model.
 
 ## 2. Deterministic vs stochastic rows
+
+For new runs, a server-native output rejection is recorded as
+`parse_status=model_output_error`, separately from transport `request_error`.
+It remains a failed observation in the planned five-sample denominator. Neither
+transport retry, batch fallback, Instructor's internal retry loop, nor an
+ordinary same-configuration resume replaces it with a new draw. A deliberately
+changed configuration is a new experimental condition, not a repaired sample.
+
+Task 3 now audits every nonempty, structurally valid deterministic Task 2
+extraction. Unknown or negated extracted text receives an explicit
+`task3_reference_status` and a blank automatic gold relation. These judgments
+appear in `task3_audit_review.csv` and `task3_audit_coverage.csv`, including
+missing/failed audits, but do not enter reference-based accuracy or calibration.
+The auditor's own judgment must never be used as its correctness label. Human
+review is needed before assigning such a label. Coverage is relative to eligible
+Task 2 sources; it does not imply that empty or malformed extractions were
+auditable. Production Task 3 scoring uses the declared sample plan, so a missing
+fifth sample remains incomplete. Historical audits can have narrower coverage;
+the new export makes those unaudited sources visible without changing old raw
+outputs.
 
 | Row kind | `uq_method` | `total_n` | Enters |
 | --- | --- | --- | --- |

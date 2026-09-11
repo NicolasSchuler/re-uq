@@ -72,6 +72,7 @@ TRANSCRIPT_FIELDS = (
     "latency_s",
     "retry_count",
     "error",
+    "error_kind",
     "status_code",
 )
 
@@ -178,6 +179,7 @@ class TranscriptWriter:
                 "latency_s": completion.get("latency_s"),
                 "retry_count": retry_count,
                 "error": str(completion.get("error", "")),
+                "error_kind": str(completion.get("error_kind", "")),
                 "status_code": completion.get("status_code"),
             },
         )

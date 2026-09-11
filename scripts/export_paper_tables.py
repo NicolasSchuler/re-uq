@@ -1574,7 +1574,25 @@ def score_task3_cell(
             f"Task 3 rows in cell {dataset}/{variant} audit another model's answers "
             f"({', '.join(cross_audited)}). The paper tables assume a self-audit."
         )
-    scores = eu.build_task3_scores(items, raw_rows) if raw_rows else []
+    scores = (
+        eu.build_task3_scores(
+            items,
+            raw_rows,
+            sampling_plan=eu.SamplingPlan(
+                stochastic_samples=expected_stochastic_samples
+            ),
+        )
+        if raw_rows
+        else []
+    )
+    audit_review = eu.task3_audit_review_rows(
+        items,
+        raw_rows,
+        expected_stochastic_samples=expected_stochastic_samples,
+    )
+    audit_coverage = eu.task3_audit_coverage_rows(audit_review)
+    stamp_cell_identity(audit_review, dataset, variant)
+    stamp_cell_identity(audit_coverage, dataset, variant)
     stamp_cell_identity(scores, dataset, variant)
     return {
         "dataset": dataset,
@@ -1587,6 +1605,8 @@ def score_task3_cell(
         },
         "n_task3_items": len(items),
         "n_task3_raw_rows": len(raw_rows),
+        "audit_review": audit_review,
+        "audit_coverage": audit_coverage,
         "scores": scores,
     }
 
@@ -1627,6 +1647,8 @@ def export_tables(
     pooled_by_model: dict[str, list[dict[str, Any]]] = {}
     pooled_consistency: dict[PaperJoinKey, dict[str, Any]] = {}
     pooled_items_by_model: dict[str, int] = {}
+    audit_review_rows: list[dict[str, Any]] = []
+    audit_coverage_rows: list[dict[str, Any]] = []
     # RQ-table inputs, kept per model and per cell so the sparse row set of
     # `paper_per_model_rq_table.csv` can be built without rescoring anything.
     rq_cell_slices: list[tuple[str, str, dict[str, list[dict[str, Any]]]]] = []
@@ -1677,6 +1699,8 @@ def export_tables(
             else {"scores": []}
         )
         task3_scores = task3_cell.pop("scores")
+        audit_review_rows.extend(task3_cell.pop("audit_review", []))
+        audit_coverage_rows.extend(task3_cell.pop("audit_coverage", []))
         cell.update(task3_cell)
         # Index the deterministic rows once; the per-model and per-modality
         # slices below would otherwise rescan them models * (1 + 4) times.
@@ -1864,6 +1888,8 @@ def export_tables(
     eu.write_csv_rows(headline_path, headline_rows, fieldnames=PER_MODEL_FIELDS)
     eu.write_csv_rows(rq_path, rq_rows, fieldnames=PER_MODEL_RQ_FIELDS)
     eu.write_csv_rows(headline_ci_path, headline_ci_rows)
+    eu.write_csv_rows(output_dir / "task3_audit_review.csv", audit_review_rows)
+    eu.write_csv_rows(output_dir / "task3_audit_coverage.csv", audit_coverage_rows)
     modality_path.with_suffix(".md").write_text(
         markdown_for_rows("Per-Model Modality Table", per_model_rows, PER_MODEL_FIELDS),
         encoding="utf-8",
@@ -1912,6 +1938,8 @@ def export_tables(
             "per_model_headline": str(headline_path),
             "per_model_rq_table": str(rq_path),
             "headline_bootstrap_ci": str(headline_ci_path),
+            "task3_audit_review": str(output_dir / "task3_audit_review.csv"),
+            "task3_audit_coverage": str(output_dir / "task3_audit_coverage.csv"),
         },
     }
     eu.write_json(provenance_path, provenance)

@@ -503,6 +503,19 @@ class EvalUtilsTest(unittest.TestCase):
             ("The system exporting reports is useful.", "nice_to_have"),
             # A hedge that is not a weak-intent frame stays what its modal says.
             ("The system should ideally export reports.", "recommended"),
+            ("The system must export reports because doing so is useful.", "mandatory"),
+            ("The system should provide a report that is useful.", "recommended"),
+            ("The system may export reports because doing so is useful.", "optional"),
+            ("The system must not export reports even though it is useful.", "negated"),
+            (
+                "It would be useful for the system to export reports, but it must encrypt them.",
+                "mandatory",
+            ),
+            ("It is useful to know that the system must encrypt reports.", "mandatory"),
+            (
+                "It would be useful if the system could export reports, but it should encrypt them.",
+                "recommended",
+            ),
             ("The system exports reports.", "mandatory"),
             ("System provides export reports.", "mandatory"),
         ]
@@ -574,13 +587,13 @@ class EvalUtilsTest(unittest.TestCase):
                 "Not only must the system export reports, it must archive them."
             )["text_modality_multi_modal"]
         )
-        # A weak phrase still outranks every modal cue.
-        self.assertEqual(
-            eu.requirement_text_modality_diagnostic(
-                "It would be nice if the system must export reports."
-            )["text_modality"],
-            "nice_to_have",
+        # A weak phrase must not conceal an explicit obligation. This remains
+        # a lexical diagnostic, not an adjudication of the conditional's scope.
+        mixed = eu.requirement_text_modality_diagnostic(
+            "It would be nice if the system must export reports."
         )
+        self.assertEqual(mixed["text_modality"], "mandatory")
+        self.assertTrue(mixed["text_modality_multi_modal"])
 
     def test_text_modality_overcommitment_fields(self):
         optional_to_shall = eu.text_modality_fields(
@@ -3630,7 +3643,7 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(json.loads(result["raw_text"])["confidence"], 0.82)
         self.assertEqual(captured["response_model"], so.Task1Response)
-        self.assertEqual(captured["max_retries"], 3)
+        self.assertEqual(captured["max_retries"].stop.max_attempt_number, 3)
         self.assertEqual(captured["extra_body"], {"thinking": {"type": "disabled"}})
         self.assertNotIn("response_format", captured)
         self.assertEqual(captured["dump_mode"], "json")
