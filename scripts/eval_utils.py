@@ -268,13 +268,26 @@ NUMERIC_STRENGTH_RECOMMENDED_075 = {
     "nice_to_have": 0.00,
 }
 HIGH_CONFIDENCE_THRESHOLDS = (0.80, 0.90)
-# Bootstrap resampling unit. Every archived run sent 16 benchmark items per
-# provider request (four whole seeds x four source conditions) and model
-# behaviour is decided per request, so the request nests the seed and is the
-# conservative cluster. Score rows that predate batched requests, or that were
-# never sent to a provider, carry no request and fall back to the seed.
+# Bootstrap resampling unit. Batched runs sent 16 benchmark items per provider
+# request (four whole seeds x four source conditions) and model behaviour is
+# decided per request, so the request nests the seed and is the conservative
+# cluster. Rows that carry no request id are resolved in two steps: under the
+# single-item protocol the request *is* the item, so rows that all carry an
+# ``item_id`` cluster on it; rows without one (legacy score rows, synthesised
+# slices) fall back to the seed. Clustering single-item rows on the seed would
+# put the four source-modality variants of one capability into one cluster,
+# and a metric that is constant within every seed (strict strengthening is:
+# exactly the nice_to_have quarter) then resamples to a zero-width interval.
 DEFAULT_BOOTSTRAP_CLUSTER_FIELD = "batch_id"
+BOOTSTRAP_ITEM_CLUSTER_FIELD = "item_id"
 BOOTSTRAP_CLUSTER_FALLBACK_FIELD = "seed_id"
+# Which of the strict-strengthening rows changed the modal itself. A rewrite
+# of "It would be useful if the system could X" to "The system could X" keeps
+# the weak modal and only drops the wish frame; the scorer still reads it as
+# optional > nice_to_have. A rewrite to "should"/"shall"/"must" is an
+# escalation of the obligation. The two are reported apart.
+STRICT_OVERCOMMIT_ESCALATION = "modal_escalation"
+STRICT_OVERCOMMIT_FRAME_ONLY = "frame_only"
 RULE_BASELINE_MODEL = "rule_based_baseline"
 RULE_BASELINE_METHOD = "deterministic_rules"
 ENSEMBLE_MODEL_PREFIX = "ensemble"
@@ -4708,6 +4721,7 @@ def empty_text_modality_fields() -> dict[str, Any]:
         "text_overcommit": "",
         "text_undercommit": "",
         "strict_text_overcommit": "",
+        "strict_text_overcommit_kind": "",
         "text_high_conf_overcommit_80": "",
         "text_high_conf_overcommit_90": "",
         "strict_text_high_conf_overcommit_80": "",
@@ -4746,6 +4760,18 @@ def text_modality_fields(
     strict_overcommit = bool(
         overcommit and text_modality_basis in STRICT_TEXT_MODALITY_BASES
     )
+    # Which strict strengthening this is. The generated text expresses an
+    # obligation ("should"/"shall"/"must", strength >= recommended) only when
+    # the modal itself moved; a strict-strengthened text that still reads as
+    # optional came from a nice_to_have source whose wish frame was dropped
+    # while its weak modal ("could"/"may") survived.
+    strict_overcommit_kind = ""
+    if strict_overcommit:
+        strict_overcommit_kind = (
+            STRICT_OVERCOMMIT_ESCALATION
+            if (text_strength or 0) >= ORDINAL_STRENGTH["recommended"]
+            else STRICT_OVERCOMMIT_FRAME_ONLY
+        )
     label_correct = normalize_modality(pred_modality) == normalize_modality(
         gold_modality
     )
@@ -4764,6 +4790,7 @@ def text_modality_fields(
         "text_overcommit": overcommit,
         "text_undercommit": undercommit,
         "strict_text_overcommit": strict_overcommit,
+        "strict_text_overcommit_kind": strict_overcommit_kind,
         "text_high_conf_overcommit_80": bool(overcommit and confidence >= 0.80),
         "text_high_conf_overcommit_90": bool(overcommit and confidence >= 0.90),
         "strict_text_high_conf_overcommit_80": bool(
@@ -7562,22 +7589,39 @@ def resolve_bootstrap_cluster_field(
     rows: list[dict[str, Any]],
     cluster_field: str = DEFAULT_BOOTSTRAP_CLUSTER_FIELD,
     fallback_field: str = BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
+    item_field: str | None = BOOTSTRAP_ITEM_CLUSTER_FIELD,
 ) -> str:
     """Which field these rows can actually be clustered on.
 
     ``cluster_field`` is used only when *every* row carries a non-blank value
-    for it; otherwise the rows fall back to ``fallback_field``. Requiring the
-    column to be complete matters because a partially populated ``batch_id``
-    (legacy runs, single-item requests, synthesised completions) would collapse
+    for it. Requiring the column to be complete matters because a partially
+    populated ``batch_id`` (legacy runs, synthesised completions) would collapse
     every unbatched row into one meaningless cluster keyed on the empty string.
-    The fallback is reported back to the caller — the CI dictionaries expose it
-    as ``bootstrap_ci_cluster_field`` — so a slice that quietly reverted to the
-    seed is visible in the output rather than mislabelled.
+    Rows without a request then cluster on ``item_field`` when every row
+    carries one (the single-item protocol: one request per item), and on
+    ``fallback_field`` otherwise. Pass ``item_field=None`` where the cluster
+    must nest a coarser pairing unit, as the paired ablation deltas do. The
+    resolved field is reported back to the caller — the CI dictionaries expose
+    it as ``bootstrap_ci_cluster_field`` — so a slice that reverted to a finer
+    or coarser unit is visible in the output rather than mislabelled.
     """
     if cluster_field == fallback_field:
         return cluster_field
     if rows and all(str(row.get(cluster_field, "") or "") for row in rows):
         return cluster_field
+    if (
+        item_field
+        and item_field != fallback_field
+        and rows
+        and all(str(row.get(item_field, "") or "") for row in rows)
+    ):
+        logger.debug(
+            "bootstrap cluster field %r is incomplete over %d rows; clustering on %r",
+            cluster_field,
+            len(rows),
+            item_field,
+        )
+        return item_field
     logger.debug(
         "bootstrap cluster field %r is incomplete over %d rows; clustering on %r",
         cluster_field,
@@ -7597,11 +7641,12 @@ def bootstrap_seed_metric(
 ) -> tuple[float, float, float]:
     """Cluster bootstrap of ``metric`` over ``rows``.
 
-    Clusters default to the provider request (``batch_id``): every archived run
-    sent 16 items per request — four whole seeds x four source conditions — and
+    Clusters default to the provider request (``batch_id``): batched runs sent
+    16 items per request — four whole seeds x four source conditions — and
     model behaviour is decided per request, so the request nests the seed and
-    is the conservative unit. Rows without a complete request column fall back
-    to ``seed_id``, see :func:`resolve_bootstrap_cluster_field`.
+    is the conservative unit. Rows without a complete request column cluster on
+    the item (single-item requests) or, failing that, the seed; see
+    :func:`resolve_bootstrap_cluster_field`.
 
     ``seed_field`` is the deprecated spelling of ``cluster_field``. It names the
     field outright with no fallback, preserving the pre-request behaviour for
@@ -7719,8 +7764,10 @@ def bootstrap_seed_metric_delta(
     cohort_a = [row for key in paired for row in groups_a[key]]
     cohort_b = [row for key in paired for row in groups_b[key]]
     point = metric(cohort_b) - metric(cohort_a)
+    # The cluster must nest the pairing unit, so the item is never a fallback
+    # here: rows without a request cluster on the pair itself.
     resolved_field = resolve_bootstrap_cluster_field(
-        cohort_a + cohort_b, cluster_field, pair_field
+        cohort_a + cohort_b, cluster_field, pair_field, item_field=None
     )
     clusters: dict[str, list[str]] = {}
     for pair_key in paired:
@@ -9856,6 +9903,7 @@ def write_preliminary_result_snapshot(
         "text_overcommit",
         "text_undercommit",
         "strict_text_overcommit",
+        "strict_text_overcommit_kind",
         "text_high_conf_overcommit_80",
         "text_high_conf_overcommit_90",
         "strict_text_high_conf_overcommit_80",
@@ -11457,7 +11505,9 @@ def text_strengthening_rate(rows: list[dict[str, Any]], strict: bool = False) ->
 
 
 def weak_intent_strict_strengthening_rate(
-    rows: list[dict[str, Any]], threshold: float | None = None
+    rows: list[dict[str, Any]],
+    threshold: float | None = None,
+    kind: str | None = None,
 ) -> float:
     """Strict text strengthening over readable weak stakeholder-intent rows.
 
@@ -11470,6 +11520,8 @@ def weak_intent_strict_strengthening_rate(
     ``strict_text_high_conf_overcommit_90``. ``None`` counts all strict
     strengthening and supplies the primary weak-intent headline. Keep the
     two quantities distinct even if they coincide in a particular run.
+    ``kind`` restricts the numerator to one ``strict_text_overcommit_kind``
+    (:data:`STRICT_OVERCOMMIT_ESCALATION` or :data:`STRICT_OVERCOMMIT_FRAME_ONLY`).
     """
     weak_rows = [
         row
@@ -11489,6 +11541,7 @@ def weak_intent_strict_strengthening_rate(
         for row in readable
         if _truthy(row.get("strict_text_overcommit"))
         and (threshold is None or float(row.get("confidence", 0.0) or 0.0) >= threshold)
+        and (kind is None or str(row.get("strict_text_overcommit_kind", "")) == kind)
     )
     return numerator / len(readable)
 

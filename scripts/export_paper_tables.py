@@ -209,6 +209,10 @@ RQ_RATE_METRICS = (
     "task2_broad_strengthening",
     "task2_weak_strict_strengthening",
     "task2_weak_strict_high_conf_90",
+    # Weak-intent strict strengthening split by what moved: the obligation
+    # ("should"/"shall"/"must") or only the wish frame around a kept modal.
+    "task2_weak_strict_escalation",
+    "task2_weak_strict_frame_only",
     # RQ2
     "task2_strict_high_conf_90",
     "task2_strict_agreement",
@@ -216,11 +220,26 @@ RQ_RATE_METRICS = (
     "task3_strict_flagged",
     "task3_strict_called_preserved",
 )
+#: Rates whose denominator drops answers with no readable modal cue, reported
+#: with coverage bounds over the full answer set: the lower bound charges every
+#: unreadable answer as non-strengthening, the upper bound as strengthening.
+RQ_COVERAGE_BOUND_METRICS = (
+    "task2_strict_strengthening",
+    "task2_weak_strict_strengthening",
+)
 #: Detector AUROCs, reported with the same clustered intervals as the rates.
 RQ_AUROC_METRICS = (
     "task2_meaning_variation_auroc",
     "task2_verbalized_confidence_auroc",
 )
+
+
+def _bound_columns(name: str) -> list[str]:
+    return [
+        f"{name}_n_unreadable",
+        f"{name}_lower_bound",
+        f"{name}_upper_bound",
+    ]
 
 
 def _rate_columns(name: str) -> list[str]:
@@ -274,6 +293,7 @@ PER_MODEL_RQ_FIELDS = (
         "task2_strict_agreement_incomplete_excluded",
     ]
     + [column for name in RQ_RATE_METRICS for column in _rate_columns(name)]
+    + [column for name in RQ_COVERAGE_BOUND_METRICS for column in _bound_columns(name)]
     + [column for name in RQ_AUROC_METRICS for column in _auroc_columns(name)]
 )
 
@@ -993,6 +1013,24 @@ def _count(rows: Iterable[Mapping[str, Any]], field: str) -> int:
     return sum(1 for row in rows if eu.is_truthy_strict(row.get(field)))
 
 
+def _count_kind(rows: Iterable[Mapping[str, Any]], kind: str) -> int:
+    return sum(
+        1 for row in rows if str(row.get("strict_text_overcommit_kind", "")) == kind
+    )
+
+
+def _bound_fields(
+    name: str, numerator: int, readable: int, unreadable: int
+) -> dict[str, Any]:
+    """Coverage bounds of a rate over ``readable + unreadable`` answers."""
+    full = readable + unreadable
+    return {
+        f"{name}_n_unreadable": unreadable,
+        f"{name}_lower_bound": numerator / full if full else "",
+        f"{name}_upper_bound": (numerator + unreadable) / full if full else "",
+    }
+
+
 def _rate_fields(
     name: str, numerator: int, denominator: int, ci: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -1062,8 +1100,8 @@ def per_model_rq_row(
     Rates are computed on the same row slices that are resampled, so a printed
     rate and its interval can never come from different denominators. Each task
     family records the cluster its interval actually used
-    (``task*_ci_cluster_field``); it is ``batch_id`` for runs that carry one and
-    ``seed_id`` for legacy or single-item rows.
+    (``task*_ci_cluster_field``): ``batch_id`` for batched runs, ``item_id``
+    for single-item requests, ``seed_id`` for legacy rows without either.
     """
     task1_rows = slices["task1"]
     task2_rows = slices["task2"]
@@ -1110,6 +1148,16 @@ def per_model_rq_row(
             "task2_weak_strict_high_conf_90": lambda rows: (
                 eu.weak_intent_strict_strengthening_rate(
                     rows, HIGH_CONFIDENCE_THRESHOLD
+                )
+            ),
+            "task2_weak_strict_escalation": lambda rows: (
+                eu.weak_intent_strict_strengthening_rate(
+                    rows, kind=eu.STRICT_OVERCOMMIT_ESCALATION
+                )
+            ),
+            "task2_weak_strict_frame_only": lambda rows: (
+                eu.weak_intent_strict_strengthening_rate(
+                    rows, kind=eu.STRICT_OVERCOMMIT_FRAME_ONLY
                 )
             ),
         }
@@ -1214,6 +1262,30 @@ def per_model_rq_row(
             _count(weak_readable, "strict_text_high_conf_overcommit_90"),
             len(weak_readable),
             task2_ci,
+        ),
+        **_rate_fields(
+            "task2_weak_strict_escalation",
+            _count_kind(weak_readable, eu.STRICT_OVERCOMMIT_ESCALATION),
+            len(weak_readable),
+            task2_ci,
+        ),
+        **_rate_fields(
+            "task2_weak_strict_frame_only",
+            _count_kind(weak_readable, eu.STRICT_OVERCOMMIT_FRAME_ONLY),
+            len(weak_readable),
+            task2_ci,
+        ),
+        **_bound_fields(
+            "task2_strict_strengthening",
+            _count(readable, "strict_text_overcommit"),
+            len(readable),
+            len(task2_rows) - len(readable),
+        ),
+        **_bound_fields(
+            "task2_weak_strict_strengthening",
+            _count(weak_readable, "strict_text_overcommit"),
+            len(weak_readable),
+            len(weak_rows) - len(weak_readable),
         ),
         **_rate_fields(
             "task2_strict_high_conf_90",

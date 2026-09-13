@@ -2181,12 +2181,17 @@ class PerModelRqTableTest(CellFixture, unittest.TestCase):
             model = self._rows(self._export(root))[("m1", "all", "all")]
             self.assertEqual(model["task1_unsupported_acceptance_90_n"], 6)
             self.assertEqual(model["task1_unsupported_acceptance_90_denominator"], 18)
-            # Every capability contributes one eligible yes among three sources,
-            # so each resample must retain the same one-third rate.
-            for field in ("rate", "ci_low", "ci_high"):
-                self.assertAlmostEqual(
-                    model[f"task1_unsupported_acceptance_90_{field}"], 1 / 3
-                )
+            self.assertAlmostEqual(model["task1_unsupported_acceptance_90_rate"], 1 / 3)
+            # The fixture sends one item per request, so the interval clusters
+            # on the item and has real width; clustered on the seed it would
+            # collapse to exactly one third, because every capability holds
+            # one eligible yes among three sources.
+            self.assertEqual(model["task1_ci_cluster_field"], "item_id")
+            self.assertLess(model["task1_unsupported_acceptance_90_ci_low"], 1 / 3)
+            self.assertGreater(model["task1_unsupported_acceptance_90_ci_high"], 1 / 3)
+            self.assertAlmostEqual(
+                model["task1_unsupported_acceptance_90_seed_ci_low"], 1 / 3
+            )
 
     def test_exact_run_selection_rejects_a_newer_compatible_run(self):
         with TemporaryDirectory() as tmp:
@@ -2402,12 +2407,15 @@ class PerModelRqTableTest(CellFixture, unittest.TestCase):
             root = Path(tmpdir)
             self._write_cell(root, "mlm_tapt", "must")
             seed_clustered = self._rows(self._export(root))[("m1", "all", "all")]
-            # The shared fixture writes no batch_id, so the primary interval
-            # falls back to the seed and the two pairs coincide.
-            self.assertEqual(seed_clustered["task2_ci_cluster_field"], "seed_id")
+            # The shared fixture writes no batch_id: one request per item, so
+            # the primary interval clusters on the item and the seed pair is
+            # reported alongside.
+            self.assertEqual(seed_clustered["task2_ci_cluster_field"], "item_id")
+            self.assertIn("task2_strict_strengthening_seed_ci_low", seed_clustered)
             self.assertEqual(
-                seed_clustered["task2_strict_strengthening_ci_low"],
-                seed_clustered["task2_strict_strengthening_seed_ci_low"],
+                seed_clustered["task2_weak_strict_escalation_n"]
+                + seed_clustered["task2_weak_strict_frame_only_n"],
+                seed_clustered["task2_weak_strict_strengthening_n"],
             )
 
     def test_provenance_records_the_cohort_split_and_the_audit_runs(self):
@@ -2686,7 +2694,7 @@ class RqSliceMetricsTest(unittest.TestCase):
         )
         self.assertGreater(request_width, seed_width)
 
-    def test_rows_without_a_batch_id_fall_back_to_seed_clustering(self):
+    def test_rows_without_a_batch_id_cluster_on_the_item_then_the_seed(self):
         rows = [
             _rq_score_row(f"i{index}", seed_id=f"S{index:04d}", strict=index < 4)
             for index in range(8)
@@ -2700,7 +2708,23 @@ class RqSliceMetricsTest(unittest.TestCase):
             n_cells_pooled=1,
             bootstrap_samples=50,
         )
+        # One request per item: the item is the request.
+        self.assertEqual(row["task2_ci_cluster_field"], "item_id")
+        self.assertIn("task2_strict_strengthening_seed_ci_low", row)
 
+        without_items = [
+            {key: value for key, value in score.items() if key != "item_id"}
+            for score in rows
+        ]
+        row = export.per_model_rq_row(
+            "m1",
+            "all",
+            "all",
+            self._slices(without_items),
+            n_models_pooled=1,
+            n_cells_pooled=1,
+            bootstrap_samples=50,
+        )
         self.assertEqual(row["task2_ci_cluster_field"], "seed_id")
         self.assertEqual(
             row["task2_strict_strengthening_ci_low"],

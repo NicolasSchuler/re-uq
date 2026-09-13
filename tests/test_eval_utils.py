@@ -70,6 +70,7 @@ SCORE_ROW_FIELDS = frozenset(
         "strict_text_high_conf_overcommit_80",
         "strict_text_high_conf_overcommit_90",
         "strict_text_overcommit",
+        "strict_text_overcommit_kind",
         "task",
         "text_high_conf_overcommit_80",
         "text_high_conf_overcommit_90",
@@ -614,6 +615,23 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertTrue(nice_to_could["strict_text_overcommit"])
         self.assertFalse(weak_phrase["text_overcommit"])
         self.assertEqual(weak_phrase["text_modality"], "nice_to_have")
+        # The kind says what moved: the obligation, or only the wish frame.
+        self.assertEqual(
+            optional_to_shall["strict_text_overcommit_kind"],
+            eu.STRICT_OVERCOMMIT_ESCALATION,
+        )
+        self.assertEqual(
+            nice_to_could["strict_text_overcommit_kind"],
+            eu.STRICT_OVERCOMMIT_FRAME_ONLY,
+        )
+        self.assertEqual(weak_phrase["strict_text_overcommit_kind"], "")
+        nice_to_shall = eu.text_modality_fields(
+            "The system shall export reports.", "nice_to_have", "nice_to_have", 0.9
+        )
+        self.assertEqual(
+            nice_to_shall["strict_text_overcommit_kind"],
+            eu.STRICT_OVERCOMMIT_ESCALATION,
+        )
 
     def test_manifest_hash_generation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -7242,6 +7260,41 @@ class BootstrapClusteringTest(unittest.TestCase):
             with self.subTest(label):
                 self.assertEqual(eu.resolve_bootstrap_cluster_field(rows), "seed_id")
         self.assertEqual(eu.resolve_bootstrap_cluster_field([]), "seed_id")
+
+    def test_single_item_rows_cluster_on_the_item_before_the_seed(self):
+        # One request per item: the request is the item. Clustering on the
+        # seed would make a metric that is constant within every seed
+        # (exactly one of four variants strengthens) resample to zero width.
+        rows = [
+            {
+                **{key: value for key, value in row.items() if key != "batch_id"},
+                "item_id": f"{row['seed_id']}_{row['source_modality']}",
+                "flag": 1 if row["source_modality"] == "nice_to_have" else 0,
+            }
+            for row in self._rows()
+        ]
+        self.assertEqual(eu.resolve_bootstrap_cluster_field(rows), "item_id")
+        self.assertEqual(
+            eu.resolve_bootstrap_cluster_field(rows, item_field=None), "seed_id"
+        )
+        _, item_low, item_high = eu.bootstrap_seed_metric(
+            rows, self._rate, iterations=300
+        )
+        _, seed_low, seed_high = eu.bootstrap_seed_metric(
+            rows, self._rate, cluster_field="seed_id", iterations=300
+        )
+        self.assertEqual(seed_low, seed_high)
+        self.assertLess(item_low, item_high)
+        # A row set without item ids still reverts to the seed.
+        self.assertEqual(
+            eu.resolve_bootstrap_cluster_field(
+                [
+                    {key: value for key, value in row.items() if key != "item_id"}
+                    for row in rows
+                ]
+            ),
+            "seed_id",
+        )
 
     def test_request_clustered_interval_is_at_least_as_wide_as_seed_clustered(self):
         # All-or-none per request, exactly how strict text strengthening

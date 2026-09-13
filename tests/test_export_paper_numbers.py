@@ -360,6 +360,8 @@ def _rq_row(model, dataset, variant, models, cells):
         "task2_broad_strengthening": (broad, readable),
         "task2_weak_strict_strengthening": (weak_strict, weak_readable),
         "task2_weak_strict_high_conf_90": (weak_strict, weak_readable),
+        "task2_weak_strict_escalation": (weak_strict, weak_readable),
+        "task2_weak_strict_frame_only": (0, weak_readable),
         "task2_strict_high_conf_90": (by_cell("high_conf", 0) * strict, strict),
         "task2_strict_agreement": (by_cell("agreement", 0) * strict, strict),
         "task3_strict_flagged": (recall * strict, strict),
@@ -379,6 +381,17 @@ def _rq_row(model, dataset, variant, models, cells):
                 f"{name}_ci_high": min(1.0, rate + 0.01) if rate != "" else "",
                 f"{name}_seed_ci_low": max(0.0, rate - 0.005) if rate != "" else "",
                 f"{name}_seed_ci_high": min(1.0, rate + 0.005) if rate != "" else "",
+            }
+        )
+    for name, (numerator, denominator) in (
+        ("task2_strict_strengthening", (strict, readable)),
+        ("task2_weak_strict_strengthening", (weak_strict, weak_readable)),
+    ):
+        row.update(
+            {
+                f"{name}_n_unreadable": 0,
+                f"{name}_lower_bound": numerator / denominator if denominator else "",
+                f"{name}_upper_bound": numerator / denominator if denominator else "",
             }
         )
     return row

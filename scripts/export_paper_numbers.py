@@ -174,6 +174,13 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "task2_weak_strict_high_conf_90_n",
         "task2_weak_strict_high_conf_90_denominator",
         "task2_weak_strict_high_conf_90_rate",
+        "task2_weak_strict_escalation_n",
+        "task2_weak_strict_escalation_rate",
+        "task2_weak_strict_frame_only_n",
+        "task2_weak_strict_frame_only_rate",
+        "task2_weak_strict_strengthening_n_unreadable",
+        "task2_weak_strict_strengthening_lower_bound",
+        "task2_weak_strict_strengthening_upper_bound",
         "task2_strict_high_conf_90_rate",
         "task2_strict_agreement_n",
         "task2_strict_agreement_denominator",
@@ -841,6 +848,7 @@ def _benchmark_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
 
 CLUSTER_LABEL = {
     eu.DEFAULT_BOOTSTRAP_CLUSTER_FIELD: "request-clustered",
+    eu.BOOTSTRAP_ITEM_CLUSTER_FIELD: "item-clustered",
     eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD: "seed-clustered",
 }
 
@@ -1157,6 +1165,44 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
             "numWeakStrictModelsRange",
             fmt_range(weak_models, fmt_percent, "weak strict over models"),
             "per model, pooled over cells",
+        ),
+        Macro(
+            "numWeakEscalation",
+            fmt_percent(rq.pooled("task2_weak_strict_escalation_rate")),
+            "weak-intent answers rewritten to should/shall/must, pooled",
+        ),
+        Macro(
+            "numWeakEscalationModelsRange",
+            fmt_range(
+                rq.over_models("task2_weak_strict_escalation_rate"),
+                fmt_percent,
+                "weak escalation over models",
+            ),
+            "per model, pooled over cells",
+        ),
+        Macro(
+            "numWeakFrameOnly",
+            fmt_percent(rq.pooled("task2_weak_strict_frame_only_rate")),
+            "weak-intent answers that kept could/may and only dropped the wish frame, pooled",
+        ),
+        Macro(
+            "numWeakFrameOnlyModelsRange",
+            fmt_range(
+                rq.over_models("task2_weak_strict_frame_only_rate"),
+                fmt_percent,
+                "weak frame-only over models",
+            ),
+            "per model, pooled over cells",
+        ),
+        Macro(
+            "numWeakStrictLowerBound",
+            fmt_percent(rq.pooled("task2_weak_strict_strengthening_lower_bound")),
+            "every unreadable weak answer counted as not strengthened",
+        ),
+        Macro(
+            "numWeakStrictUpperBound",
+            fmt_percent(rq.pooled("task2_weak_strict_strengthening_upper_bound")),
+            "every unreadable weak answer counted as strengthened",
         ),
         Macro(
             "numNoCueShare",

@@ -281,16 +281,43 @@ paper cells therefore yields 360 seed clusters (2 datasets x 180 seeds) against
 1080 request clusters. `batch_id` embeds the run id and is globally unique, so
 the primary interval is unaffected.
 
-Rows fall back to clustering on `seed_id` unless **every** row carries a
-non-blank `batch_id` (`resolve_bootstrap_cluster_field`). A partially populated
-column — legacy runs, single-item requests, synthesised completions, the rule
-baseline — would otherwise collapse all unbatched rows into one meaningless
-cluster. When the fallback engages the two intervals coincide, only one
-bootstrap runs, and `bootstrap_ci_cluster_field` reads `seed_id`.
+Rows cluster on `batch_id` only when **every** row carries a non-blank one
+(`resolve_bootstrap_cluster_field`). A partially populated column — legacy
+runs, synthesised completions, the rule baseline — would otherwise collapse
+all unbatched rows into one meaningless cluster. Rows without a request then
+cluster on `item_id` when every row carries one: under the single-item
+protocol (the manuscript-final campaign) the request *is* the item, and
+clustering on the seed instead would put the four source-modality variants of
+one capability into one cluster. Strict strengthening is constant within
+every such cluster (exactly the `nice_to_have` quarter strengthens), so a
+seed-clustered bootstrap resamples it to a zero-width interval; the item
+cluster reports the sampling variation that actually exists. Only rows with
+neither a request nor an item fall back to `seed_id`. The seed-clustered pair
+is still reported alongside, and `bootstrap_ci_cluster_field` names the unit
+the primary interval used (`batch_id`, `item_id` or `seed_id`). Paired
+ablation deltas never use the item, because their cluster must nest the
+seed-level pairing.
 
 The RNG seed is fixed at `20260518` (`BOOTSTRAP_SEED` in
 `scripts/export_paper_tables.py` and `scripts/compare_run_matrix.py`), so the
 intervals are reproducible.
+
+### Strict strengthening: what moved
+
+`strict_text_overcommit_kind` on every deterministic Task 2 score row says
+which of two things a strict-strengthened text did. `modal_escalation`: the
+generated modal is `should`/`shall`/`must` (strength at or above
+`recommended`), so the obligation itself moved. `frame_only`: the text still
+reads as `could`/`may` (`optional`) and only the weak-intent wish frame
+("It would be useful if …") was dropped; the scorer ranks `optional` above
+`nice_to_have`, so this counts as strict strengthening, but the modal was
+kept. The per-model RQ table splits the weak-intent rate into
+`task2_weak_strict_escalation_*` and `task2_weak_strict_frame_only_*`, whose
+numerators sum to `task2_weak_strict_strengthening_n`, and adds coverage
+bounds (`*_lower_bound` / `*_upper_bound`) that charge every answer without a
+readable modal cue as not strengthened / strengthened, so a model whose
+answers often carry no cue (gpt-oss-20b) is not read off a shrunken
+denominator.
 
 ### The per-model RQ table
 
