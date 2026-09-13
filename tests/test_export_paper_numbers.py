@@ -360,8 +360,8 @@ def _rq_row(model, dataset, variant, models, cells):
         "task2_broad_strengthening": (broad, readable),
         "task2_weak_strict_strengthening": (weak_strict, weak_readable),
         "task2_weak_strict_high_conf_90": (weak_strict, weak_readable),
-        "task2_weak_strict_escalation": (weak_strict, weak_readable),
-        "task2_weak_strict_frame_only": (0, weak_readable),
+        "task2_weak_strict_escalation": (weak_strict * 0.75, weak_readable),
+        "task2_weak_strict_frame_only": (weak_strict * 0.25, weak_readable),
         "task2_strict_high_conf_90": (by_cell("high_conf", 0) * strict, strict),
         "task2_strict_agreement": (by_cell("agreement", 0) * strict, strict),
         "task3_strict_flagged": (recall * strict, strict),
@@ -1153,14 +1153,16 @@ class RqTableMacroTest(ExporterFixtureTest):
         self.assertEqual(rows[0], r"\multicolumn{5}{@{}l}{\textit{Hosted}} \\")
         cells = [cell.strip() for cell in rows[1].split("&")]
         self.assertEqual(cells[0], "GLM-5.1")
+        # Weak-intent escalation and frame-only partition the weak strict
+        # count (940 = 705 + 235); the all-modality strict rate closes the row.
         for cell, counts, rate in zip(
             cells[1:],
-            ("60/2000", "1540/13,600", "2800/13,600", "940/3400"),
+            ("60/2000", "705/3400", "235/3400", "1540/13,600"),
             (
                 "3.0 [2.0, 4.0]",
+                "20.7 [19.7, 21.7]",
+                "6.9 [5.9, 7.9]",
                 "11.3 [10.3, 12.3]",
-                "20.6 [19.6, 21.6]",
-                "27.6 [26.6, 28.6]",
             ),
             strict=True,
         ):

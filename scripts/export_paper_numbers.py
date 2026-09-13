@@ -1699,14 +1699,22 @@ def _rate_cell(
 
 
 def _rq_one_row(label: str, row: Mapping[str, Any]) -> str:
-    """Model and four outcomes, each showing n/N above its rate and interval."""
+    """Model and four outcomes, each showing n/N above its rate and interval.
+
+    The weak-intent stratum leads and is split by what moved: the obligation
+    (``should``/``shall``/``must``) or only the wish frame around a kept
+    ``could``/``may``. The all-modality strict rate stays as the last column;
+    its denominator is the whole benchmark, of which mandatory sources cannot
+    strengthen and weak-intent sources are one quarter, so it reads as a
+    benchmark-composition figure rather than a per-model propensity.
+    """
     columns = [label] + [
         _rate_cell(row, name, denominator=True, centered=True)
         for name in (
             "task1_unsupported_acceptance_90",
+            "task2_weak_strict_escalation",
+            "task2_weak_strict_frame_only",
             "task2_strict_strengthening",
-            "task2_broad_strengthening",
-            "task2_weak_strict_strengthening",
         )
     ]
     return " & ".join(columns) + r" \\"
