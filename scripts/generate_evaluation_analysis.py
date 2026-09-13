@@ -153,13 +153,22 @@ def parse_failure_rate(rows: list[dict[str, Any]]) -> float:
 def require_parse_quality(
     name: str, rows: list[dict[str, Any]], max_failure_rate: float
 ) -> None:
-    rate = parse_failure_rate(rows)
-    if math.isnan(rate):
+    """Refuse a run whose logical observations fail to parse too often.
+
+    A raw file is append-only, so a resumed run keeps every failed attempt next
+    to the retry that superseded it. Scoring reads the latest attempt per
+    planned observation (:func:`eu.dedupe_raw_rows`), so the gate measures the
+    same view: an observation counts as failed only when no attempt parsed.
+    """
+    if not rows:
         raise ValueError(f"{name} has no raw rows.")
+    observations = eu.dedupe_raw_rows(rows)
+    rate = parse_failure_rate(observations)
     if rate > max_failure_rate:
         raise ValueError(
-            f"{name} parse failure rate {rate:.3f} exceeds threshold {max_failure_rate:.3f}: "
-            f"{parse_status_counts(rows)}"
+            f"{name} parse failure rate {rate:.3f} exceeds threshold {max_failure_rate:.3f} "
+            f"over {len(observations)} observations ({len(rows)} attempts): "
+            f"{parse_status_counts(observations)}"
         )
 
 

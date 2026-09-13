@@ -200,6 +200,41 @@ class AnalysisProvenanceContractTest(unittest.TestCase):
         self._assert_probability_row_rejected(row)
 
 
+class ParseQualityGateCountsObservationsTest(unittest.TestCase):
+    """A resumed run keeps failed attempts beside the retry that fixed them.
+
+    The analysis gate must judge the latest attempt per observation, the same
+    view scoring reads, or a fully repaired run is refused for its history.
+    """
+
+    @staticmethod
+    def _row(item: str, status: str) -> dict[str, object]:
+        return {
+            "run_id": "full-1",
+            "task": "task1",
+            "item_id": item,
+            "sample_kind": "deterministic",
+            "sample_index": 0,
+            "parse_status": status,
+        }
+
+    def test_superseded_failures_do_not_count(self) -> None:
+        rows = [self._row(f"S{i:04d}_mandatory", "ok") for i in range(48)]
+        rows += [self._row("S0001_mandatory", "invalid_json")] * 4
+        rows.append(self._row("S0001_mandatory", "ok"))
+        rows.append(self._row("S0002_mandatory", "invalid_confidence"))
+        rows.append(self._row("S0002_mandatory", "ok"))
+        # 6 failed attempts over 54 rows would exceed 2 %; 0 of 48 observations does not.
+        analysis_cli.require_parse_quality("Task 1/2 run", rows, 0.02)
+
+    def test_observation_with_no_ok_attempt_still_counts(self) -> None:
+        rows = [self._row(f"S{i:04d}_mandatory", "ok") for i in range(48)]
+        rows += [self._row("S0001_mandatory", "invalid_json")] * 2
+        rows.append(self._row("S0099_mandatory", "invalid_json"))
+        with self.assertRaisesRegex(ValueError, "49 observations \\(51 attempts\\)"):
+            analysis_cli.require_parse_quality("Task 1/2 run", rows, 0.02)
+
+
 class ExpectedStochasticSampleContractTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
