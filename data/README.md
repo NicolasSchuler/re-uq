@@ -22,7 +22,7 @@ Variant suffixes are documented in `docs/repository_layout.md`.
 
 Raw model outputs and run-execution bookkeeping stay on the machine that ran the experiment:
 
-- `model_outputs_raw*.jsonl`
+- `model_outputs_raw*.jsonl` and their compacted `model_outputs_raw*.parquet` siblings
 - `run_registry*.csv`, `run_progress*.csv`, `run_events*.jsonl`
 - `logs/<run_id>.log` — per-run execution logs
 - `uq_scores*.csv`
@@ -38,5 +38,7 @@ Fake-completion smoke runs write into a separate `data/processed/smoke/` tree, u
 Beyond the run identity and request parameters, `run_registry*.csv` records per-run quality counters: `batch_order`, `item_context`, `parse_status_histogram`, `retry_total`, `truncated_records`, `latency_p50_s`, `latency_p95_s`, and `usage_completion_tokens`. A `truncated` response counts as a parse failure, so `parse_success_rate` and `truncated_records` should be read together: a low success rate with nonzero truncations is a token-budget problem.
 
 ## What Raw Records Contain
+
+Raw files are append-only JSONL while a run is in flight; `scripts/compact_raw_store.py` moves finished rows into a zstd Parquet sibling (`<stem>.parquet`, roughly 40x smaller) and leaves an empty JSONL tail for later appends. Every reader goes through `eval_utils.read_jsonl`, which returns the Parquet rows followed by the tail, so the two halves are one logical file.
 
 `model_outputs_raw*.jsonl` rows carry run/model identity, the request parameters, the raw response text, the parsed JSON, and a parse status. Newer runs additionally record `finish_reason`, token `usage_*`, `served_model`, `system_fingerprint`, `request_seed`, `request_payload_sha`, `system_prompt` (always empty: only a user message is sent), `batch_variant_mix`, `response_chars`, and `requirement_word_count`, and can report a `truncated` parse status. The archived runs predate those fields; the field-by-field before/after table is in `docs/experimental_setup.md`.

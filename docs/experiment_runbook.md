@@ -428,8 +428,8 @@ the stage log if you deliberately need to regenerate an existing analysis.
 | Generated legacy-tool config | `outputs/rerun/run_config.json` |
 | Stage commands, stdout/stderr, exit status | `outputs/rerun/logs/*.log` |
 | Per-run logs, transmitted requests/responses, resolved YAML | `data/processed/logs/<safe_run_id>.*` |
-| Task 1/2 answers and attempts | `data/processed/model_outputs_raw*.jsonl` |
-| Audit answers | `data/processed/model_outputs_raw_task3_verification*.jsonl` |
+| Task 1/2 answers and attempts | `data/processed/model_outputs_raw*.jsonl` plus the compacted `*.parquet` sibling |
+| Audit answers | `data/processed/model_outputs_raw_task3_verification*.jsonl` plus the compacted `*.parquet` sibling |
 | Registries, events and progress | `data/processed/run_registry*.csv`, `run_events*.jsonl`, `run_progress_live*.csv` |
 | Per-cell analysis and provenance | `outputs/evaluation_<dataset>_<variant>_<safe_run_id>/` |
 | Selected embedding-cache manifest | `outputs/rerun/acse_selected_manifest.csv` |
@@ -439,6 +439,12 @@ the stage log if you deliberately need to regenerate an existing analysis.
 | Batching and context comparisons | `outputs/batching_ablation_summary*`, `outputs/context_ablation_summary*` |
 | Per-run weak-phrasing summaries | `outputs/weak_modality_probe/<safe_run_id>/` |
 | Candidate manuscript macros | `outputs/paper_numbers.tex` |
+
+Raw files are append-only JSONL while runs are in flight. After a campaign, run
+`.venv/bin/python scripts/compact_raw_store.py` (or `--dry-run` first) to move
+the finished rows into zstd Parquet siblings, about 40x smaller; the JSONL is
+left as an empty tail for later appends and every reader returns both halves.
+Do not compact while a runner is appending to the same file.
 
 **The real analysis refreshes shared paper snapshots in `outputs/`.** A
 different campaign group isolates state and run selection, but does not give

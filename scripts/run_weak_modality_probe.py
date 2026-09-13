@@ -226,7 +226,7 @@ def plan_cell(
         eu.write_csv_rows(items_path, items, fieldnames=eu.WEAK_MODALITY_PROBE_FIELDS)
 
     output_path = probe_raw_path(root, dataset_id, variant, run_id=run_id)
-    existing_rows = eu.read_jsonl(output_path) if output_path.exists() else []
+    existing_rows = eu.read_jsonl(output_path)
     jobs = eu.planned_completion_jobs(
         items,
         tasks=PROBE_TASKS,
@@ -377,7 +377,7 @@ def write_summary(
     bootstrap_samples: int | None = None,
 ) -> dict[str, Path]:
     """Label and text diagnostics, plus paired deterministic phrasing differences."""
-    rows = eu.read_jsonl(cell.output_path) if cell.output_path.exists() else []
+    rows = eu.read_jsonl(cell.output_path)
     rows = [row for row in rows if str(row.get("run_id", "")) == cell.run_id]
     summary = eu.weak_modality_probe_summary(cell.items, rows)
     scores = text_score_rows(cell.items, rows)

@@ -30,8 +30,11 @@ from dataclasses import dataclass, field as dataclass_field
 from functools import cache
 from itertools import batched, pairwise
 from pathlib import Path
-from typing import Any, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 from xml.etree import ElementTree as ET
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 try:
     from scripts import structured_outputs as so
@@ -1892,10 +1895,169 @@ def verify_benchmark_manifest(
     }
 
 
-def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
+# ---------------------------------------------------------------------------
+# Raw row store: append-only JSONL tail + compacted Parquet sibling
+# ---------------------------------------------------------------------------
+# Every raw file (`model_outputs_raw*.jsonl`, transcripts, events) is written
+# one JSON line at a time under `file_lock`, which is what makes concurrent
+# runners and crashes safe. Those lines repeat the prompt and dozens of constant
+# metadata fields per row, so a finished run costs ~40x more disk as JSONL than
+# as zstd Parquet. `compact_jsonl` moves the accumulated lines into the sibling
+# `<stem>.parquet`; readers transparently return Parquet rows followed by the
+# JSONL tail, so nothing downstream needs to know which file holds a row.
+#
+# The Parquet file is a faithful row store, not a typed table: nested values
+# and columns of mixed Python types are JSON-encoded, and keys absent from a
+# row stay absent after a round trip (see `RAW_STORE_DENSE_COLUMNS_KEY`).
+# Compaction verifies the round trip before it truncates the JSONL tail.
+
+RAW_STORE_SUFFIX = ".parquet"
+RAW_STORE_FORMAT = "re-uq-raw-store/1"
+RAW_STORE_FORMAT_KEY = b"re_uq.raw_store.format"
+RAW_STORE_JSON_COLUMNS_KEY = b"re_uq.raw_store.json_columns"
+RAW_STORE_DENSE_COLUMNS_KEY = b"re_uq.raw_store.dense_columns"
+# Per-row list of sparse keys that were present with a JSON null value, which a
+# nullable Arrow column cannot tell apart from an absent key.
+RAW_STORE_NULL_KEYS_COLUMN = "_re_uq_null_keys"
+RAW_STORE_COMPRESSION = "zstd"
+RAW_STORE_COMPRESSION_LEVEL = 3
+_RAW_STORE_SCALAR_TYPES = (str, int, float, bool)
+
+
+def raw_store_path(path: str | Path) -> Path:
+    """The compacted Parquet sibling of a raw JSONL path (`x.jsonl` -> `x.parquet`)."""
     path = Path(path)
-    if not path.exists():
+    if path.suffix != ".jsonl":
+        raise ValueError(f"raw store paths end with .jsonl, got {path}")
+    return path.with_suffix(RAW_STORE_SUFFIX)
+
+
+def raw_store_exists(path: str | Path) -> bool:
+    """Whether either half of the store holds rows for this raw path."""
+    path = Path(path)
+    return path.exists() or raw_store_path(path).exists()
+
+
+def raw_store_files(path: str | Path) -> list[Path]:
+    """The existing files backing a raw path, Parquet first."""
+    path = Path(path)
+    store = raw_store_path(path)
+    return [candidate for candidate in (store, path) if candidate.exists()]
+
+
+def _raw_store_json_columns(rows: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
+    """Columns that need JSON encoding, and columns present in every row."""
+    types: dict[str, set[type]] = defaultdict(set)
+    counts: Counter[str] = Counter()
+    for row in rows:
+        for key, value in row.items():
+            counts[key] += 1
+            if value is not None:
+                types[key].add(type(value))
+    json_columns = {
+        key
+        for key, seen in types.items()
+        if len(seen) > 1 or any(kind not in _RAW_STORE_SCALAR_TYPES for kind in seen)
+    }
+    dense = {key for key, count in counts.items() if count == len(rows)}
+    return json_columns, dense
+
+
+def raw_rows_to_table(rows: list[dict[str, Any]]) -> pa.Table:
+    """Arrow table for `rows`, with the encoding recorded in the schema metadata."""
+    import pyarrow as pa
+
+    json_columns, dense = _raw_store_json_columns(rows)
+    columns = sorted({key for row in rows for key in row})
+    if RAW_STORE_NULL_KEYS_COLUMN in columns:
+        raise ValueError(f"{RAW_STORE_NULL_KEYS_COLUMN} is reserved by the raw store")
+    arrays = {}
+    null_keys = [
+        sorted(key for key, value in row.items() if value is None and key not in dense)
+        for row in rows
+    ]
+    if any(null_keys):
+        arrays[RAW_STORE_NULL_KEYS_COLUMN] = pa.array(
+            [json.dumps(keys) if keys else None for keys in null_keys], type=pa.string()
+        )
+    for key in columns:
+        if key in json_columns:
+            values = [
+                None
+                if key not in row or row[key] is None
+                else json.dumps(row[key], ensure_ascii=True, sort_keys=True)
+                for row in rows
+            ]
+            arrays[key] = pa.array(values, type=pa.string())
+        else:
+            arrays[key] = pa.array([row.get(key) for row in rows])
+    table = pa.table(arrays) if arrays else pa.table({})
+    metadata = {
+        RAW_STORE_FORMAT_KEY: RAW_STORE_FORMAT.encode(),
+        RAW_STORE_JSON_COLUMNS_KEY: json.dumps(sorted(json_columns)).encode(),
+        RAW_STORE_DENSE_COLUMNS_KEY: json.dumps(sorted(dense)).encode(),
+    }
+    return table.replace_schema_metadata({**(table.schema.metadata or {}), **metadata})
+
+
+def raw_table_to_rows(table: pa.Table) -> list[dict[str, Any]]:
+    """Rows of a store table, decoding what `raw_rows_to_table` encoded."""
+    metadata = table.schema.metadata or {}
+    if metadata.get(RAW_STORE_FORMAT_KEY, b"").decode() != RAW_STORE_FORMAT:
+        raise ValueError("not a re-uq raw store Parquet file (missing format metadata)")
+    json_columns = set(json.loads(metadata.get(RAW_STORE_JSON_COLUMNS_KEY, b"[]")))
+    dense = set(json.loads(metadata.get(RAW_STORE_DENSE_COLUMNS_KEY, b"[]")))
+    rows: list[dict[str, Any]] = []
+    for record in table.to_pylist():
+        row: dict[str, Any] = {}
+        null_keys = record.pop(RAW_STORE_NULL_KEYS_COLUMN, None)
+        for key, value in record.items():
+            if value is None:
+                if key in dense:
+                    row[key] = None
+                continue
+            row[key] = json.loads(value) if key in json_columns else value
+        if null_keys:
+            for key in json.loads(null_keys):
+                row[key] = None
+        rows.append(row)
+    return rows
+
+
+def read_raw_store(
+    path: str | Path,
+    *,
+    columns: Iterable[str] | None = None,
+    run_ids: Iterable[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Rows of the Parquet half of a raw path, optionally a column/run subset.
+
+    Column projection and run-id filtering happen inside Parquet, which is what
+    makes resume and the paper exporter cheap on a multi-GB corpus. A partial
+    projection returns rows holding only those columns.
+    """
+    import pyarrow.parquet as pq
+
+    store = raw_store_path(path)
+    if not store.exists():
         return []
+    filters = None
+    if run_ids is not None:
+        selected = sorted({str(run_id) for run_id in run_ids})
+        if not selected:
+            return []
+        filters = [("run_id", "in", selected)]
+    requested = None if columns is None else list(columns)
+    if requested is not None:
+        schema = pq.read_schema(store)
+        requested = [name for name in requested if name in schema.names]
+        if RAW_STORE_NULL_KEYS_COLUMN in schema.names:
+            requested.append(RAW_STORE_NULL_KEYS_COLUMN)
+    table = pq.read_table(store, columns=requested, filters=filters)
+    return raw_table_to_rows(table)
+
+
+def _read_jsonl_lines(path: Path) -> list[dict[str, Any]]:
     rows = []
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
@@ -1903,6 +2065,91 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
             if line:
                 rows.append(json.loads(line))
     return rows
+
+
+def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
+    """Every row of a raw path: the compacted Parquet rows, then the JSONL tail.
+
+    Reads under a shared lock so a concurrent `compact_jsonl` cannot hand back
+    a row twice (once from the new Parquet file, once from the not-yet-truncated
+    tail).
+    """
+    path = Path(path)
+    if not raw_store_exists(path):
+        return []
+    with file_lock(path, shared=True):
+        rows = read_raw_store(path)
+        if path.exists():
+            rows.extend(_read_jsonl_lines(path))
+    return rows
+
+
+def _raw_rows_canonical(rows: list[dict[str, Any]]) -> list[str]:
+    return [json.dumps(row, ensure_ascii=True, sort_keys=True) for row in rows]
+
+
+def compact_jsonl(path: str | Path, *, verify: bool = True) -> dict[str, Any]:
+    """Move the JSONL tail of a raw path into its Parquet sibling.
+
+    Holds the exclusive lock for the whole operation: read both halves, write
+    the merged Parquet file atomically, then truncate the tail to zero bytes
+    (kept, not deleted, so `path.exists()` checks and appenders keep working).
+    With `verify`, the merged file is read back and compared row for row
+    before the tail is touched; a mismatch leaves both files as they were and
+    raises, because losing raw rows is the one thing this must never do.
+    """
+    import pyarrow.parquet as pq
+
+    path = Path(path)
+    store = raw_store_path(path)
+    summary = {
+        "path": str(path),
+        "store": str(store),
+        "tail_rows": 0,
+        "store_rows_before": 0,
+        "store_rows_after": 0,
+        "tail_bytes_before": 0,
+        "store_bytes_after": 0,
+        "compacted": False,
+    }
+    if not path.exists() or path.stat().st_size == 0:
+        if store.exists():
+            summary["store_rows_after"] = pq.read_metadata(store).num_rows
+            summary["store_bytes_after"] = store.stat().st_size
+        return summary
+    with file_lock(path):
+        summary["tail_bytes_before"] = path.stat().st_size
+        existing = read_raw_store(path)
+        tail = _read_jsonl_lines(path)
+        summary["store_rows_before"] = len(existing)
+        summary["tail_rows"] = len(tail)
+        if not tail:
+            return summary
+        merged = existing + tail
+        table = raw_rows_to_table(merged)
+        temp = store.with_name(store.name + f".tmp-{os.getpid()}")
+        pq.write_table(
+            table,
+            temp,
+            compression=RAW_STORE_COMPRESSION,
+            compression_level=RAW_STORE_COMPRESSION_LEVEL,
+        )
+        if verify:
+            written = raw_table_to_rows(pq.read_table(temp))
+            if _raw_rows_canonical(written) != _raw_rows_canonical(merged):
+                temp.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"raw store round trip mismatch for {path}; JSONL left untouched"
+                )
+        temp.replace(store)
+        with path.open("w", encoding="utf-8") as handle:
+            handle.truncate(0)
+            handle.flush()
+            os.fsync(handle.fileno())
+        summary["store_rows_after"] = len(merged)
+        summary["store_bytes_after"] = store.stat().st_size
+        summary["compacted"] = True
+    return summary
 
 
 def latest_run_id(
@@ -1962,17 +2209,19 @@ def run_id_matches_prefix(
 
 
 @contextlib.contextmanager
-def file_lock(path: str | Path) -> Iterator[None]:
-    """Advisory exclusive lock on a sidecar ``<path>.lock`` file.
+def file_lock(path: str | Path, *, shared: bool = False) -> Iterator[None]:
+    """Advisory lock on a sidecar ``<path>.lock`` file (exclusive by default).
 
     Concurrent runners share the per-dataset raw JSONL and registry CSVs, so
-    every append/rewrite is serialized across processes. The lock is advisory:
-    it only protects writers that go through these helpers.
+    every append/rewrite is serialized across processes. Readers of the raw
+    store take the lock ``shared`` so they never observe a half-compacted
+    file. The lock is advisory: it only protects callers that go through
+    these helpers.
     """
     lock_path = Path(str(path) + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
         try:
             yield handle
         finally:

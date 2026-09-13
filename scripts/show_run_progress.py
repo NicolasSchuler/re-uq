@@ -231,11 +231,11 @@ def print_progress(
 
 
 class RawRowReader:
-    """Incremental JSONL reader for ``--watch``.
+    """Incremental raw-store reader for ``--watch``.
 
-    Remembers the byte offset already consumed so each tick parses only rows
-    appended since the previous tick instead of re-reading a multi-hundred-MB
-    raw file. Restarts from scratch if the file shrinks or is replaced.
+    Loads the compacted Parquet rows once, then remembers the JSONL byte offset
+    already consumed so each tick parses only rows appended since the previous
+    tick. Restarts from the Parquet rows if the tail shrinks or is replaced.
     """
 
     def __init__(self) -> None:
@@ -246,12 +246,14 @@ class RawRowReader:
     def read(self, path: Path) -> list[dict[str, Any]]:
         path = Path(path)
         if path != self._path:
-            self._path, self._offset, self._rows = path, 0, []
+            self._path, self._offset = path, 0
+            self._rows = eu.read_raw_store(path)
         if not path.exists():
             return list(self._rows)
         size = path.stat().st_size
         if size < self._offset:
-            self._offset, self._rows = 0, []
+            # The tail was compacted into the Parquet sibling: reload it.
+            self._offset, self._rows = 0, eu.read_raw_store(path)
         if size > self._offset:
             with path.open("r", encoding="utf-8") as handle:
                 handle.seek(self._offset)

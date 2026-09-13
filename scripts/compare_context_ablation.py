@@ -599,7 +599,7 @@ def main(argv: list[str] | None = None) -> dict[str, Path]:
         if registry_path.exists():
             registry_rows.extend(eu.read_csv_rows(registry_path))
         raw_path = eu.model_outputs_raw_path(root, DATASET_ID, VARIANT, smoke=smoke)
-        if raw_path.exists():
+        if eu.raw_store_exists(raw_path):
             raw_rows.extend(eu.read_jsonl(raw_path))
     if args.run_id:
         selected = set(args.run_id)

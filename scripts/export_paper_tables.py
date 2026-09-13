@@ -409,19 +409,24 @@ def stream_raw_rows(path: Path, run_ids: set[str]) -> Iterator[dict[str, Any]]:
     The raw files hold 60-70k records each, so the filter is applied while
     streaming instead of materializing the whole file.
     """
-    if not path.exists():
+    if not eu.raw_store_exists(path):
         return
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            # Cheap substring prefilter before paying for json.loads.
-            if not any(run_id in line for run_id in run_ids):
-                continue
-            record = json.loads(line)
-            if str(record.get("run_id", "")) in run_ids:
-                yield record
+    with eu.file_lock(path, shared=True):
+        # The compacted half filters by run_id inside Parquet.
+        yield from eu.read_raw_store(path, run_ids=run_ids)
+        if not path.exists():
+            return
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                # Cheap substring prefilter before paying for json.loads.
+                if not any(run_id in line for run_id in run_ids):
+                    continue
+                record = json.loads(line)
+                if str(record.get("run_id", "")) in run_ids:
+                    yield record
 
 
 # ---------------------------------------------------------------------------
@@ -1406,7 +1411,7 @@ def score_cell(
         [
             row
             for path in raw_paths
-            if path.exists()
+            if eu.raw_store_exists(path)
             for row in stream_raw_rows(path, run_ids)
         ]
         if run_ids
@@ -1538,7 +1543,7 @@ def score_task3_cell(
         [
             row
             for path in raw_paths
-            if path.exists()
+            if eu.raw_store_exists(path)
             for row in stream_raw_rows(path, run_ids)
         ]
         if run_ids

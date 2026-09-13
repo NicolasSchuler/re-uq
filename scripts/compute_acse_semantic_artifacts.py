@@ -9,6 +9,7 @@ calling the embedding backend again.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from collections import defaultdict
@@ -329,9 +330,21 @@ def input_fingerprint(path: Path, manifest_dir: Path) -> dict[str, Any]:
         "sha256": "",
         "bytes": 0,
     }
-    if path.exists():
-        entry["sha256"] = eu.sha256_file(path)
-        entry["bytes"] = path.stat().st_size
+    # A raw JSONL path may be backed by its compacted Parquet sibling as well
+    # (see `eu.compact_jsonl`); the fingerprint covers every backing file so a
+    # compaction that changes nothing logical still reads as a changed input
+    # only when bytes actually differ.
+    backing = eu.raw_store_files(path) if path.suffix == ".jsonl" else [path]
+    backing = [candidate for candidate in backing if candidate.exists()]
+    if len(backing) == 1:
+        entry["sha256"] = eu.sha256_file(backing[0])
+        entry["bytes"] = backing[0].stat().st_size
+    elif backing:
+        digest = hashlib.sha256()
+        for candidate in backing:
+            digest.update(eu.sha256_file(candidate).encode())
+        entry["sha256"] = digest.hexdigest()
+        entry["bytes"] = sum(candidate.stat().st_size for candidate in backing)
     return entry
 
 
