@@ -1,0 +1,183 @@
+{
+  "benchmark_variant": "must",
+  "dataset_id": "pure",
+  "generated_at_utc": "2026-09-13T19:37:26Z",
+  "runs": [
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "bare",
+      "model": "gemma4-12b-it",
+      "notes": "mode=full; resolved_config_sha=123f7ef4ecf0dcbe16cae36db2c0f4ac90d6791e94b110e380a83199cd341529",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-183056-a8f859c6",
+      "started_at_utc": "2026-09-12T16:30:56Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "document",
+      "model": "gemma4-12b-it",
+      "notes": "mode=full; resolved_config_sha=3619d62178676e570a927c0bc03b06e9d4f5ff4b56be6946fb9c19ad131f48c4",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-183247-67006adc",
+      "started_at_utc": "2026-09-12T16:32:47Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "bare",
+      "model": "gemma4-31b-it",
+      "notes": "mode=full; resolved_config_sha=cf40b48aa2d7cfcd753d951d2932f1fb7bd22a33a816320eaed27ee736b68800",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-155608-49b7f0d3",
+      "started_at_utc": "2026-09-12T13:56:08Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "document",
+      "model": "gemma4-31b-it",
+      "notes": "mode=full; resolved_config_sha=a12f695f658d05123ab5e5997fc076971d768329705e98c755cf9b7fd4a937ad",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-160021-5684d7ca",
+      "started_at_utc": "2026-09-12T14:00:22Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "bare",
+      "model": "glm-5.3",
+      "notes": "mode=full; resolved_config_sha=ba8065d5521609e43eb5e539b0328aaa439185864b7839732ab70c0078fa8b38",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-150752-31b933cd",
+      "started_at_utc": "2026-09-12T13:07:53Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "document",
+      "model": "glm-5.3",
+      "notes": "mode=full; resolved_config_sha=cb791d983ebe1da4e104954b3bd5befc416076791efde777cd1966bd4cbeba9c",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-152522-d815b750",
+      "started_at_utc": "2026-09-12T13:25:22Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "bare",
+      "model": "gpt-oss-20b",
+      "notes": "mode=full; resolved_config_sha=eb8fbeacd42a9e20548cac7bde54c8bedd1a3cea0882ba1a16b569d3f9613ad7",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260913-042902-897f853b",
+      "started_at_utc": "2026-09-13T02:29:03Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "document",
+      "model": "gpt-oss-20b",
+      "notes": "mode=full; resolved_config_sha=8430e12fc232c1214802501b8e470c47457f21f05d4360093af611c368959747",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260913-043057-a054d8f4",
+      "started_at_utc": "2026-09-13T02:30:58Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "bare",
+      "model": "muse-glimmer-30b",
+      "notes": "mode=full; resolved_config_sha=1fdf5f6ff42eefeab9d5cb33fcacca09e0d68f0ec7ea214e8042302936803b64",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260913-013142-e9778c65",
+      "started_at_utc": "2026-09-12T23:31:43Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "document",
+      "model": "muse-glimmer-30b",
+      "notes": "mode=full; resolved_config_sha=2924b9ad6b1dd3594c98521531effa97790c8510e1c7e0837dde7b46a810c1ae",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260913-013709-7eaba0f9",
+      "started_at_utc": "2026-09-12T23:37:10Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "bare",
+      "model": "qwen3.5-9b",
+      "notes": "mode=full; resolved_config_sha=d8649df5c6fbdec3824d87ede73ea96c8bb74bafb9904f879d93d4e41dc0712c",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-104139-00bb258d",
+      "started_at_utc": "2026-09-12T08:41:40Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "document",
+      "model": "qwen3.5-9b",
+      "notes": "mode=full; resolved_config_sha=79699f50e9ae5734559143ad8689a87b40fddda1cd431c7d4ab3656742b964e7",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-104313-a3955555",
+      "started_at_utc": "2026-09-12T08:43:14Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "bare",
+      "model": "qwen3.6-27b",
+      "notes": "mode=full; resolved_config_sha=4d9ca1b8f6d6fdca95c441efe3319f0575af7fed6ec909e3a2eb1e22dd903987",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-025359-02bbecc9",
+      "started_at_utc": "2026-09-12T00:54:00Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "document",
+      "model": "qwen3.6-27b",
+      "notes": "mode=full; resolved_config_sha=2f6590f59d2057784a4f715f6847b8f5ba9f88d4606de3316c69b93bbf73e78b",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-025802-c467f8ff",
+      "started_at_utc": "2026-09-12T00:58:03Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "bare",
+      "model": "qwen3.8-27b",
+      "notes": "mode=full; resolved_config_sha=e3d7af1f9b4e3d70fdbe27d6d2ba0aa429a7f6789dc6dcf45f84f938e4596453",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-083204-af155f9f",
+      "started_at_utc": "2026-09-12T06:32:04Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "document",
+      "model": "qwen3.8-27b",
+      "notes": "mode=full; resolved_config_sha=f23edd3a1a3c9855ec96042801a81905402809af79098734732fc818d94d788a",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260912-083615-ffd81237",
+      "started_at_utc": "2026-09-12T06:36:16Z",
+      "task2_rows": 720
+    }
+  ]
+}

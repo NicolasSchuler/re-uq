@@ -1,8 +1,9 @@
 # Embedding diagnostic figure
 
 Status: the manuscript includes the current held-out diagnostic results from
-`outputs/embedding_diagnostic/probe_grid_summary.csv`. Its included figure is
-`manuscript/figures/embedding_diagnostic.pdf`, with a PNG preview beside it.
+`outputs/embedding_diagnostic/probe_grid_summary.csv`. The tracked figure is
+`outputs/rerun/figures/embedding_diagnostic.pdf`, with a PNG preview beside it;
+the manuscript includes a copy under `manuscript/figures/`.
 
 Figure 2 presents three dot-and-interval panels:
 

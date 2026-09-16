@@ -1,0 +1,1409 @@
+{
+  "cells": {
+    "analysis:acse": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T13:45:44Z"
+    },
+    "analysis:batching-ablation": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T19:39:55Z"
+    },
+    "analysis:cohort:local_llama_cpp:gemma4-12b-it:mlm_tapt:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T11:43:05Z"
+    },
+    "analysis:cohort:local_llama_cpp:gemma4-12b-it:mlm_tapt:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:16:58Z"
+    },
+    "analysis:cohort:local_llama_cpp:gemma4-12b-it:nice:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:41:32Z"
+    },
+    "analysis:cohort:local_llama_cpp:gemma4-12b-it:nice:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T13:06:29Z"
+    },
+    "analysis:cohort:local_llama_cpp:gemma4-31b-it:mlm_tapt:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T11:40:05Z"
+    },
+    "analysis:cohort:local_llama_cpp:gemma4-31b-it:mlm_tapt:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:14:03Z"
+    },
+    "analysis:cohort:local_llama_cpp:gemma4-31b-it:nice:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:38:29Z"
+    },
+    "analysis:cohort:local_llama_cpp:gemma4-31b-it:nice:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T13:03:40Z"
+    },
+    "analysis:cohort:local_llama_cpp:gpt-oss-20b:mlm_tapt:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T11:49:02Z"
+    },
+    "analysis:cohort:local_llama_cpp:gpt-oss-20b:mlm_tapt:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:21:56Z"
+    },
+    "analysis:cohort:local_llama_cpp:gpt-oss-20b:nice:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:46:19Z"
+    },
+    "analysis:cohort:local_llama_cpp:gpt-oss-20b:nice:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T13:11:11Z"
+    },
+    "analysis:cohort:local_llama_cpp:muse-glimmer-30b:mlm_tapt:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T11:46:32Z"
+    },
+    "analysis:cohort:local_llama_cpp:muse-glimmer-30b:mlm_tapt:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:19:32Z"
+    },
+    "analysis:cohort:local_llama_cpp:muse-glimmer-30b:nice:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:44:00Z"
+    },
+    "analysis:cohort:local_llama_cpp:muse-glimmer-30b:nice:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T13:08:54Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.5-9b:mlm_tapt:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T11:37:15Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.5-9b:mlm_tapt:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:11:13Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.5-9b:nice:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:35:42Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.5-9b:nice:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T13:00:50Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.6-27b:mlm_tapt:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T11:31:31Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.6-27b:mlm_tapt:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:05:36Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.6-27b:nice:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:30:08Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.6-27b:nice:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:54:41Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.8-27b:mlm_tapt:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T11:34:21Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.8-27b:mlm_tapt:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:08:22Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.8-27b:nice:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:32:49Z"
+    },
+    "analysis:cohort:local_llama_cpp:qwen3.8-27b:nice:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:57:51Z"
+    },
+    "analysis:cohort:zai:glm-5.3-flash:mlm_tapt:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T11:28:41Z"
+    },
+    "analysis:cohort:zai:glm-5.3-flash:mlm_tapt:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:02:23Z"
+    },
+    "analysis:cohort:zai:glm-5.3-flash:nice:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:27:20Z"
+    },
+    "analysis:cohort:zai:glm-5.3-flash:nice:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:51:31Z"
+    },
+    "analysis:cohort:zai:glm-5.3:mlm_tapt:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T11:25:52Z"
+    },
+    "analysis:cohort:zai:glm-5.3:mlm_tapt:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T11:59:34Z"
+    },
+    "analysis:cohort:zai:glm-5.3:nice:must": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:24:35Z"
+    },
+    "analysis:cohort:zai:glm-5.3:nice:shall": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T12:48:55Z"
+    },
+    "analysis:context-ablation": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T19:37:26Z"
+    },
+    "analysis:embedding-probe": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T15:15:38Z"
+    },
+    "analysis:figure2": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T15:15:40Z"
+    },
+    "analysis:figure3": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T15:15:49Z"
+    },
+    "analysis:headline-metrics": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T19:32:45Z"
+    },
+    "analysis:numbers": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T19:32:46Z"
+    },
+    "analysis:paper-tables": {
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T19:32:43Z"
+    },
+    "batching:grouped:local_llama_cpp:gemma4-12b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-182714-7f0d7bea",
+      "started_at_utc": "2026-09-12T16:27:12Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T16:29:05Z"
+    },
+    "batching:grouped:local_llama_cpp:gemma4-31b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-154816-74714fa3",
+      "started_at_utc": "2026-09-12T13:48:12Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:52:11Z"
+    },
+    "batching:grouped:local_llama_cpp:gpt-oss-20b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-042724-178991db",
+      "started_at_utc": "2026-09-13T02:27:23Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T02:28:11Z"
+    },
+    "batching:grouped:local_llama_cpp:muse-glimmer-30b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-012755-1a8f0fb1",
+      "started_at_utc": "2026-09-12T23:27:53Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T23:29:52Z"
+    },
+    "batching:grouped:local_llama_cpp:qwen3.5-9b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-103906-115d172d",
+      "started_at_utc": "2026-09-12T08:39:05Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T08:40:21Z"
+    },
+    "batching:grouped:local_llama_cpp:qwen3.6-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-024737-9035907c",
+      "started_at_utc": "2026-09-12T00:47:35Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T00:50:42Z"
+    },
+    "batching:grouped:local_llama_cpp:qwen3.8-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-082615-2d984b23",
+      "started_at_utc": "2026-09-12T06:26:13Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T06:29:09Z"
+    },
+    "batching:grouped:zai:glm-5.3:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-150225-7b879841",
+      "started_at_utc": "2026-09-12T13:02:21Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:05:02Z"
+    },
+    "batching:grouped_4:local_llama_cpp:gemma4-12b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-182343-19b06c86",
+      "started_at_utc": "2026-09-12T16:23:41Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T16:25:28Z"
+    },
+    "batching:grouped_4:local_llama_cpp:gemma4-31b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-154042-5aa822b8",
+      "started_at_utc": "2026-09-12T13:40:40Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:44:28Z"
+    },
+    "batching:grouped_4:local_llama_cpp:gpt-oss-20b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-042520-4640fc4b",
+      "started_at_utc": "2026-09-13T02:25:19Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T02:26:18Z"
+    },
+    "batching:grouped_4:local_llama_cpp:muse-glimmer-30b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-012257-c0fbce99",
+      "started_at_utc": "2026-09-12T23:22:55Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T23:25:15Z"
+    },
+    "batching:grouped_4:local_llama_cpp:qwen3.5-9b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-103624-6ab5145f",
+      "started_at_utc": "2026-09-12T08:36:22Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T08:37:44Z"
+    },
+    "batching:grouped_4:local_llama_cpp:qwen3.6-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-024118-0cc89ccd",
+      "started_at_utc": "2026-09-12T00:41:16Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T00:44:24Z"
+    },
+    "batching:grouped_4:local_llama_cpp:qwen3.8-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-081950-af65bd13",
+      "started_at_utc": "2026-09-12T06:19:48Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T06:23:01Z"
+    },
+    "batching:grouped_4:zai:glm-5.3:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-145245-dc3aa3f6",
+      "started_at_utc": "2026-09-12T12:52:24Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T12:57:37Z"
+    },
+    "batching:shuffled:local_llama_cpp:gemma4-12b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-182908-8f6ea7c6",
+      "started_at_utc": "2026-09-12T16:29:05Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T16:30:53Z"
+    },
+    "batching:shuffled:local_llama_cpp:gemma4-31b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-155216-dfa0b225",
+      "started_at_utc": "2026-09-12T13:52:11Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:56:03Z"
+    },
+    "batching:shuffled:local_llama_cpp:gpt-oss-20b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-042812-e231911d",
+      "started_at_utc": "2026-09-13T02:28:11Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T02:29:01Z"
+    },
+    "batching:shuffled:local_llama_cpp:muse-glimmer-30b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-012954-5e036edc",
+      "started_at_utc": "2026-09-12T23:29:52Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T23:31:40Z"
+    },
+    "batching:shuffled:local_llama_cpp:qwen3.5-9b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-104023-1d4eb309",
+      "started_at_utc": "2026-09-12T08:40:21Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T08:41:37Z"
+    },
+    "batching:shuffled:local_llama_cpp:qwen3.6-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-025044-bf2b977a",
+      "started_at_utc": "2026-09-12T00:50:42Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T00:53:57Z"
+    },
+    "batching:shuffled:local_llama_cpp:qwen3.8-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-082912-b6711e74",
+      "started_at_utc": "2026-09-12T06:29:09Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T06:32:01Z"
+    },
+    "batching:shuffled:zai:glm-5.3:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-150505-54bbf594",
+      "started_at_utc": "2026-09-12T13:05:02Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:07:49Z"
+    },
+    "batching:shuffled_4:local_llama_cpp:gemma4-12b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-182530-d092c9be",
+      "started_at_utc": "2026-09-12T16:25:28Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T16:27:12Z"
+    },
+    "batching:shuffled_4:local_llama_cpp:gemma4-31b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-154431-da59ea89",
+      "started_at_utc": "2026-09-12T13:44:28Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:48:12Z"
+    },
+    "batching:shuffled_4:local_llama_cpp:gpt-oss-20b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-042620-3e5c577a",
+      "started_at_utc": "2026-09-13T02:26:18Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T02:27:23Z"
+    },
+    "batching:shuffled_4:local_llama_cpp:muse-glimmer-30b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-012517-8099098c",
+      "started_at_utc": "2026-09-12T23:25:15Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T23:27:53Z"
+    },
+    "batching:shuffled_4:local_llama_cpp:qwen3.5-9b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-103746-3637efc2",
+      "started_at_utc": "2026-09-12T08:37:44Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T08:39:05Z"
+    },
+    "batching:shuffled_4:local_llama_cpp:qwen3.6-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-024426-f8dd082b",
+      "started_at_utc": "2026-09-12T00:44:24Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T00:47:35Z"
+    },
+    "batching:shuffled_4:local_llama_cpp:qwen3.8-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-082303-710cb591",
+      "started_at_utc": "2026-09-12T06:23:01Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T06:26:13Z"
+    },
+    "batching:shuffled_4:zai:glm-5.3:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-145739-8e491836",
+      "started_at_utc": "2026-09-12T12:57:37Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:02:21Z"
+    },
+    "batching:single:local_llama_cpp:gemma4-12b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-182144-98f4101f",
+      "started_at_utc": "2026-09-12T16:21:42Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T16:23:41Z"
+    },
+    "batching:single:local_llama_cpp:gemma4-31b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-153627-86520c81",
+      "started_at_utc": "2026-09-12T13:36:25Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:40:40Z"
+    },
+    "batching:single:local_llama_cpp:gpt-oss-20b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-042319-9d244b6d",
+      "started_at_utc": "2026-09-13T02:23:17Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T02:25:19Z"
+    },
+    "batching:single:local_llama_cpp:muse-glimmer-30b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-011717-18bf2f61",
+      "started_at_utc": "2026-09-12T23:17:15Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T23:22:55Z"
+    },
+    "batching:single:local_llama_cpp:qwen3.5-9b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-103443-9aa424a0",
+      "started_at_utc": "2026-09-12T08:34:41Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T08:36:22Z"
+    },
+    "batching:single:local_llama_cpp:qwen3.6-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-023708-03c57d9b",
+      "started_at_utc": "2026-09-12T00:37:06Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T00:41:16Z"
+    },
+    "batching:single:local_llama_cpp:qwen3.8-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-081534-09e59c8d",
+      "started_at_utc": "2026-09-12T06:15:32Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T06:19:48Z"
+    },
+    "batching:single:zai:glm-5.3:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-143818-62f432ec",
+      "started_at_utc": "2026-09-12T12:38:14Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T12:52:24Z"
+    },
+    "cohort:local_llama_cpp:gemma4-12b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-160611-e08419f2",
+      "started_at_utc": "2026-09-12T14:06:07Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T14:26:07Z"
+    },
+    "cohort:local_llama_cpp:gemma4-12b-it:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-162609-c314fa29",
+      "started_at_utc": "2026-09-12T14:26:07Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T14:45:57Z"
+    },
+    "cohort:local_llama_cpp:gemma4-12b-it:nice:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-164558-c3f2f1be",
+      "started_at_utc": "2026-09-12T14:45:57Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T15:04:40Z"
+    },
+    "cohort:local_llama_cpp:gemma4-12b-it:nice:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-170442-6679d1c6",
+      "started_at_utc": "2026-09-12T15:04:40Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T15:23:33Z"
+    },
+    "cohort:local_llama_cpp:gemma4-31b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-104501-e2e22a73",
+      "started_at_utc": "2026-09-12T08:44:57Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T09:27:15Z"
+    },
+    "cohort:local_llama_cpp:gemma4-31b-it:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-112717-58317b4e",
+      "started_at_utc": "2026-09-12T09:27:15Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T10:09:53Z"
+    },
+    "cohort:local_llama_cpp:gemma4-31b-it:nice:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-120955-e4c79b31",
+      "started_at_utc": "2026-09-12T10:09:53Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T10:50:23Z"
+    },
+    "cohort:local_llama_cpp:gemma4-31b-it:nice:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-125024-dfce83b7",
+      "started_at_utc": "2026-09-12T10:50:23Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T11:30:37Z"
+    },
+    "cohort:local_llama_cpp:gpt-oss-20b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-021745-77e92c9e",
+      "started_at_utc": "2026-09-13T00:17:41Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T00:37:03Z"
+    },
+    "cohort:local_llama_cpp:gpt-oss-20b:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260913-023704-d4f43283",
+      "started_at_utc": "2026-09-13T00:37:03Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T00:56:26Z"
+    },
+    "cohort:local_llama_cpp:gpt-oss-20b:nice:must": {
+      "attempts": 1,
+      "run_id": "full-20260913-025628-930f02bf",
+      "started_at_utc": "2026-09-13T00:56:26Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T01:14:48Z"
+    },
+    "cohort:local_llama_cpp:gpt-oss-20b:nice:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260913-031449-0fd5039e",
+      "started_at_utc": "2026-09-13T01:14:48Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T01:33:29Z"
+    },
+    "cohort:local_llama_cpp:muse-glimmer-30b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-183519-52976245",
+      "started_at_utc": "2026-09-12T16:35:14Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T17:35:42Z"
+    },
+    "cohort:local_llama_cpp:muse-glimmer-30b:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-193544-2bf7cfc2",
+      "started_at_utc": "2026-09-12T17:35:42Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T18:36:23Z"
+    },
+    "cohort:local_llama_cpp:muse-glimmer-30b:nice:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-203625-8f09e51a",
+      "started_at_utc": "2026-09-12T18:36:23Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T19:34:35Z"
+    },
+    "cohort:local_llama_cpp:muse-glimmer-30b:nice:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-213437-c6495ee7",
+      "started_at_utc": "2026-09-12T19:34:35Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T20:33:07Z"
+    },
+    "cohort:local_llama_cpp:qwen3.5-9b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-084057-a7401db3",
+      "started_at_utc": "2026-09-12T06:40:53Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T06:57:57Z"
+    },
+    "cohort:local_llama_cpp:qwen3.5-9b:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-085758-7e9fe440",
+      "started_at_utc": "2026-09-12T06:57:57Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T07:14:39Z"
+    },
+    "cohort:local_llama_cpp:qwen3.5-9b:nice:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-091440-51791f51",
+      "started_at_utc": "2026-09-12T07:14:39Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T07:31:10Z"
+    },
+    "cohort:local_llama_cpp:qwen3.5-9b:nice:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-093111-0684daf9",
+      "started_at_utc": "2026-09-12T07:31:10Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T07:47:40Z"
+    },
+    "cohort:local_llama_cpp:qwen3.6-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260911-215231-ad82989f",
+      "started_at_utc": "2026-09-11T19:52:27Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-11T20:35:04Z"
+    },
+    "cohort:local_llama_cpp:qwen3.6-27b:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260911-223506-0919f188",
+      "started_at_utc": "2026-09-11T20:35:04Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-11T21:17:31Z"
+    },
+    "cohort:local_llama_cpp:qwen3.6-27b:nice:must": {
+      "attempts": 1,
+      "run_id": "full-20260911-231732-c8243f01",
+      "started_at_utc": "2026-09-11T21:17:31Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-11T21:58:45Z"
+    },
+    "cohort:local_llama_cpp:qwen3.6-27b:nice:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260911-235847-f3a50e23",
+      "started_at_utc": "2026-09-11T21:58:45Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-11T22:40:12Z"
+    },
+    "cohort:local_llama_cpp:qwen3.8-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-032413-6a6a23b7",
+      "started_at_utc": "2026-09-12T01:24:09Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T02:08:08Z"
+    },
+    "cohort:local_llama_cpp:qwen3.8-27b:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-040810-b9e8c521",
+      "started_at_utc": "2026-09-12T02:08:08Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T02:52:20Z"
+    },
+    "cohort:local_llama_cpp:qwen3.8-27b:nice:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-045222-4936b48d",
+      "started_at_utc": "2026-09-12T02:52:20Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T03:35:39Z"
+    },
+    "cohort:local_llama_cpp:qwen3.8-27b:nice:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-053541-bc757449",
+      "started_at_utc": "2026-09-12T03:35:39Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T04:19:05Z"
+    },
+    "cohort:zai:glm-5.3-flash:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-171008-6781ef6d",
+      "started_at_utc": "2026-09-12T15:10:05Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T18:15:17Z"
+    },
+    "cohort:zai:glm-5.3-flash:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-201520-e2de5d2e",
+      "started_at_utc": "2026-09-12T18:15:17Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T21:33:38Z"
+    },
+    "cohort:zai:glm-5.3-flash:nice:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-233340-d3e3437b",
+      "started_at_utc": "2026-09-12T21:33:38Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T00:04:34Z"
+    },
+    "cohort:zai:glm-5.3-flash:nice:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260913-020437-9dd2e0af",
+      "started_at_utc": "2026-09-13T00:04:34Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T02:31:25Z"
+    },
+    "cohort:zai:glm-5.3:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260911-215230-81704c72",
+      "started_at_utc": "2026-09-11T19:52:27Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-11T22:13:37Z"
+    },
+    "cohort:zai:glm-5.3:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-001340-f08b4f45",
+      "started_at_utc": "2026-09-11T22:13:37Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T00:48:55Z"
+    },
+    "cohort:zai:glm-5.3:nice:must": {
+      "attempts": 1,
+      "run_id": "full-20260912-024900-62ad04b3",
+      "started_at_utc": "2026-09-12T00:48:55Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T03:26:10Z"
+    },
+    "cohort:zai:glm-5.3:nice:shall": {
+      "attempts": 1,
+      "run_id": "full-shall-20260912-052614-cb923af8",
+      "started_at_utc": "2026-09-12T03:26:10Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T06:17:00Z"
+    },
+    "context:bare:local_llama_cpp:gemma4-12b-it": {
+      "attempts": 1,
+      "run_id": "full-20260912-183056-a8f859c6",
+      "started_at_utc": "2026-09-12T16:30:53Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T16:32:45Z"
+    },
+    "context:bare:local_llama_cpp:gemma4-31b-it": {
+      "attempts": 1,
+      "run_id": "full-20260912-155608-49b7f0d3",
+      "started_at_utc": "2026-09-12T13:56:03Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T14:00:19Z"
+    },
+    "context:bare:local_llama_cpp:gpt-oss-20b": {
+      "attempts": 1,
+      "run_id": "full-20260913-042902-897f853b",
+      "started_at_utc": "2026-09-13T02:29:01Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T02:30:56Z"
+    },
+    "context:bare:local_llama_cpp:muse-glimmer-30b": {
+      "attempts": 1,
+      "run_id": "full-20260913-013142-e9778c65",
+      "started_at_utc": "2026-09-12T23:31:40Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T23:37:07Z"
+    },
+    "context:bare:local_llama_cpp:qwen3.5-9b": {
+      "attempts": 1,
+      "run_id": "full-20260912-104139-00bb258d",
+      "started_at_utc": "2026-09-12T08:41:37Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T08:43:12Z"
+    },
+    "context:bare:local_llama_cpp:qwen3.6-27b": {
+      "attempts": 1,
+      "run_id": "full-20260912-025359-02bbecc9",
+      "started_at_utc": "2026-09-12T00:53:57Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T00:58:00Z"
+    },
+    "context:bare:local_llama_cpp:qwen3.8-27b": {
+      "attempts": 1,
+      "run_id": "full-20260912-083204-af155f9f",
+      "started_at_utc": "2026-09-12T06:32:01Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T06:36:13Z"
+    },
+    "context:bare:zai:glm-5.3": {
+      "attempts": 1,
+      "run_id": "full-20260912-150752-31b933cd",
+      "started_at_utc": "2026-09-12T13:07:49Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:25:19Z"
+    },
+    "context:document:local_llama_cpp:gemma4-12b-it": {
+      "attempts": 1,
+      "run_id": "full-20260912-183247-67006adc",
+      "started_at_utc": "2026-09-12T16:32:45Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T16:35:14Z"
+    },
+    "context:document:local_llama_cpp:gemma4-31b-it": {
+      "attempts": 1,
+      "run_id": "full-20260912-160021-5684d7ca",
+      "started_at_utc": "2026-09-12T14:00:19Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T14:06:07Z"
+    },
+    "context:document:local_llama_cpp:gpt-oss-20b": {
+      "attempts": 1,
+      "run_id": "full-20260913-043057-a054d8f4",
+      "started_at_utc": "2026-09-13T02:30:56Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T02:32:58Z"
+    },
+    "context:document:local_llama_cpp:muse-glimmer-30b": {
+      "attempts": 1,
+      "run_id": "full-20260913-013709-7eaba0f9",
+      "started_at_utc": "2026-09-12T23:37:07Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T23:43:38Z"
+    },
+    "context:document:local_llama_cpp:qwen3.5-9b": {
+      "attempts": 1,
+      "run_id": "full-20260912-104313-a3955555",
+      "started_at_utc": "2026-09-12T08:43:12Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T08:44:57Z"
+    },
+    "context:document:local_llama_cpp:qwen3.6-27b": {
+      "attempts": 1,
+      "run_id": "full-20260912-025802-c467f8ff",
+      "started_at_utc": "2026-09-12T00:58:00Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T01:02:35Z"
+    },
+    "context:document:local_llama_cpp:qwen3.8-27b": {
+      "attempts": 1,
+      "run_id": "full-20260912-083615-ffd81237",
+      "started_at_utc": "2026-09-12T06:36:13Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T06:40:53Z"
+    },
+    "context:document:zai:glm-5.3": {
+      "attempts": 1,
+      "run_id": "full-20260912-152522-d815b750",
+      "started_at_utc": "2026-09-12T13:25:19Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:40:41Z"
+    },
+    "task3:local_llama_cpp:gemma4-12b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-172335-eea1b8ca",
+      "started_at_utc": "2026-09-12T15:23:33Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T15:38:21Z"
+    },
+    "task3:local_llama_cpp:gemma4-12b-it:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-173823-2e16a40f",
+      "started_at_utc": "2026-09-12T15:38:21Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T15:53:09Z"
+    },
+    "task3:local_llama_cpp:gemma4-12b-it:nice:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-175310-1c012124",
+      "started_at_utc": "2026-09-12T15:53:09Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T16:07:22Z"
+    },
+    "task3:local_llama_cpp:gemma4-12b-it:nice:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-180724-bad55d8c",
+      "started_at_utc": "2026-09-12T16:07:22Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T16:21:42Z"
+    },
+    "task3:local_llama_cpp:gemma4-31b-it:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-133039-9e51c3cf",
+      "started_at_utc": "2026-09-12T11:30:37Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T12:02:45Z"
+    },
+    "task3:local_llama_cpp:gemma4-31b-it:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-140247-aa1c33ba",
+      "started_at_utc": "2026-09-12T12:02:45Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T12:34:55Z"
+    },
+    "task3:local_llama_cpp:gemma4-31b-it:nice:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-143458-012aaa93",
+      "started_at_utc": "2026-09-12T12:34:55Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:05:24Z"
+    },
+    "task3:local_llama_cpp:gemma4-31b-it:nice:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-150526-5560ff5b",
+      "started_at_utc": "2026-09-12T13:05:24Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T13:36:25Z"
+    },
+    "task3:local_llama_cpp:gpt-oss-20b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "task3-20260913-033331-b1194015",
+      "started_at_utc": "2026-09-13T01:33:29Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T01:46:21Z"
+    },
+    "task3:local_llama_cpp:gpt-oss-20b:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260913-034622-db555294",
+      "started_at_utc": "2026-09-13T01:46:21Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T01:58:54Z"
+    },
+    "task3:local_llama_cpp:gpt-oss-20b:nice:must": {
+      "attempts": 1,
+      "run_id": "task3-20260913-035855-dc67da2a",
+      "started_at_utc": "2026-09-13T01:58:54Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T02:11:08Z"
+    },
+    "task3:local_llama_cpp:gpt-oss-20b:nice:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260913-041109-ce73726d",
+      "started_at_utc": "2026-09-13T02:11:08Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T02:23:17Z"
+    },
+    "task3:local_llama_cpp:muse-glimmer-30b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-223309-849252ca",
+      "started_at_utc": "2026-09-12T20:33:07Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T21:14:51Z"
+    },
+    "task3:local_llama_cpp:muse-glimmer-30b:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-231453-1e539d4e",
+      "started_at_utc": "2026-09-12T21:14:51Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T21:56:37Z"
+    },
+    "task3:local_llama_cpp:muse-glimmer-30b:nice:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-235639-d79b5495",
+      "started_at_utc": "2026-09-12T21:56:37Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T22:37:03Z"
+    },
+    "task3:local_llama_cpp:muse-glimmer-30b:nice:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260913-003705-7a920fbe",
+      "started_at_utc": "2026-09-12T22:37:03Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T23:17:15Z"
+    },
+    "task3:local_llama_cpp:qwen3.5-9b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-094741-d2948f8b",
+      "started_at_utc": "2026-09-12T07:47:40Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T07:59:41Z"
+    },
+    "task3:local_llama_cpp:qwen3.5-9b:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-095943-44cc4749",
+      "started_at_utc": "2026-09-12T07:59:41Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T08:11:37Z"
+    },
+    "task3:local_llama_cpp:qwen3.5-9b:nice:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-101139-ac77992a",
+      "started_at_utc": "2026-09-12T08:11:37Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T08:23:09Z"
+    },
+    "task3:local_llama_cpp:qwen3.5-9b:nice:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-102310-2436d88a",
+      "started_at_utc": "2026-09-12T08:23:09Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T08:34:41Z"
+    },
+    "task3:local_llama_cpp:qwen3.6-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-004014-bcfe61f6",
+      "started_at_utc": "2026-09-11T22:40:12Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-11T23:10:05Z"
+    },
+    "task3:local_llama_cpp:qwen3.6-27b:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-011007-c5a495ad",
+      "started_at_utc": "2026-09-11T23:10:05Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-11T23:39:56Z"
+    },
+    "task3:local_llama_cpp:qwen3.6-27b:nice:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-013958-fae951fd",
+      "started_at_utc": "2026-09-11T23:39:56Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T00:08:29Z"
+    },
+    "task3:local_llama_cpp:qwen3.6-27b:nice:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-020831-5c1d62d8",
+      "started_at_utc": "2026-09-12T00:08:29Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T00:37:06Z"
+    },
+    "task3:local_llama_cpp:qwen3.8-27b:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-061906-b8d42bf9",
+      "started_at_utc": "2026-09-12T04:19:05Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T04:48:47Z"
+    },
+    "task3:local_llama_cpp:qwen3.8-27b:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-064849-ed04d468",
+      "started_at_utc": "2026-09-12T04:48:47Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T05:18:33Z"
+    },
+    "task3:local_llama_cpp:qwen3.8-27b:nice:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-071836-d2e951ca",
+      "started_at_utc": "2026-09-12T05:18:33Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T05:47:04Z"
+    },
+    "task3:local_llama_cpp:qwen3.8-27b:nice:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-074706-4518feed",
+      "started_at_utc": "2026-09-12T05:47:04Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T06:15:32Z"
+    },
+    "task3:zai:glm-5.3-flash:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "task3-20260913-043127-fe130764",
+      "started_at_utc": "2026-09-13T02:31:25Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T04:00:48Z"
+    },
+    "task3:zai:glm-5.3-flash:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260913-060050-b797a0ff",
+      "started_at_utc": "2026-09-13T04:00:48Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T05:27:52Z"
+    },
+    "task3:zai:glm-5.3-flash:nice:must": {
+      "attempts": 1,
+      "run_id": "task3-20260913-072754-ae401c7a",
+      "started_at_utc": "2026-09-13T05:27:52Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T06:51:56Z"
+    },
+    "task3:zai:glm-5.3-flash:nice:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260913-085158-eb9a24da",
+      "started_at_utc": "2026-09-13T06:51:56Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T08:17:28Z"
+    },
+    "task3:zai:glm-5.3:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-081702-f8d8529e",
+      "started_at_utc": "2026-09-12T06:17:00Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T07:47:19Z"
+    },
+    "task3:zai:glm-5.3:mlm_tapt:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-094722-44b342f8",
+      "started_at_utc": "2026-09-12T07:47:19Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T09:24:54Z"
+    },
+    "task3:zai:glm-5.3:nice:must": {
+      "attempts": 1,
+      "run_id": "task3-20260912-112457-d662fa69",
+      "started_at_utc": "2026-09-12T09:24:54Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T10:56:53Z"
+    },
+    "task3:zai:glm-5.3:nice:shall": {
+      "attempts": 1,
+      "run_id": "task3-shall-20260912-125657-1f996620",
+      "started_at_utc": "2026-09-12T10:56:53Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T12:38:14Z"
+    },
+    "weak_phrasing:local_llama_cpp:gemma4-12b-it": {
+      "run_id": "weak-probe-must-20260916-181413-6acee5b6",
+      "status": "complete",
+      "updated_at_utc": "2026-09-16T16:24:00Z"
+    },
+    "weak_phrasing:local_llama_cpp:gemma4-31b-it": {
+      "run_id": "weak-probe-must-20260916-175325-d4c27c2a",
+      "status": "complete",
+      "updated_at_utc": "2026-09-16T16:14:13Z"
+    },
+    "weak_phrasing:local_llama_cpp:gpt-oss-20b": {
+      "run_id": "weak-probe-must-20260916-182400-662b9e1f",
+      "status": "complete",
+      "updated_at_utc": "2026-09-16T16:35:08Z"
+    },
+    "weak_phrasing:local_llama_cpp:muse-glimmer-30b": {
+      "run_id": "weak-probe-must-20260913-014338-191ed7e6",
+      "status": "complete",
+      "updated_at_utc": "2026-09-13T00:17:41Z"
+    },
+    "weak_phrasing:local_llama_cpp:qwen3.5-9b": {
+      "run_id": "weak-probe-must-20260916-174515-633df89c",
+      "status": "complete",
+      "updated_at_utc": "2026-09-16T15:53:25Z"
+    },
+    "weak_phrasing:local_llama_cpp:qwen3.6-27b": {
+      "run_id": "weak-probe-must-20260912-030235-3b743ad0",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T01:24:09Z"
+    },
+    "weak_phrasing:local_llama_cpp:qwen3.8-27b": {
+      "run_id": "weak-probe-must-20260916-172309-4743c746",
+      "status": "complete",
+      "updated_at_utc": "2026-09-16T15:45:15Z"
+    },
+    "weak_phrasing:zai:glm-5.3": {
+      "run_id": "weak-probe-must-20260912-154041-c7e3e3e5",
+      "status": "complete",
+      "updated_at_utc": "2026-09-12T15:10:05Z"
+    },
+    "weak_phrasing:zai:glm-5.3-flash": {
+      "run_id": "weak-probe-must-20260916-172244-8c09f7f1",
+      "status": "complete",
+      "updated_at_utc": "2026-09-16T17:04:41Z"
+    }
+  },
+  "configuration": {
+    "fake_completion": false,
+    "rerun": {
+      "ablations": {
+        "batching": {
+          "baseline_arm": "single",
+          "batch_orders": [
+            "grouped",
+            "shuffled"
+          ],
+          "batch_sizes": [
+            1,
+            4,
+            16
+          ],
+          "dataset": "mlm_tapt",
+          "models": [
+            {
+              "model": "glm-5.3",
+              "profile": "zai"
+            },
+            {
+              "model": "qwen3.6-27b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "qwen3.8-27b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "qwen3.5-9b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "gemma4-31b-it",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "gemma4-12b-it",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "muse-glimmer-30b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "gpt-oss-20b",
+              "profile": "local_llama_cpp"
+            }
+          ],
+          "variant": "must"
+        },
+        "context": {
+          "batch_order": "grouped",
+          "batch_size": 1,
+          "models": [
+            {
+              "model": "glm-5.3",
+              "profile": "zai"
+            },
+            {
+              "model": "qwen3.6-27b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "qwen3.8-27b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "qwen3.5-9b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "gemma4-31b-it",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "gemma4-12b-it",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "muse-glimmer-30b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "gpt-oss-20b",
+              "profile": "local_llama_cpp"
+            }
+          ],
+          "run_group_id": "context-manuscript-final"
+        },
+        "weak_phrasing": {
+          "dataset": "nice",
+          "models": [
+            {
+              "model": "glm-5.3",
+              "profile": "zai"
+            },
+            {
+              "model": "glm-5.3-flash",
+              "profile": "zai"
+            },
+            {
+              "model": "qwen3.6-27b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "qwen3.8-27b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "qwen3.5-9b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "gemma4-31b-it",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "gemma4-12b-it",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "muse-glimmer-30b",
+              "profile": "local_llama_cpp"
+            },
+            {
+              "model": "gpt-oss-20b",
+              "profile": "local_llama_cpp"
+            }
+          ],
+          "variant": "must"
+        }
+      },
+      "analysis": {
+        "bootstrap_samples": 1000,
+        "numbers_output": "outputs/paper_numbers.tex"
+      },
+      "cohort_profiles": [
+        "zai"
+      ],
+      "datasets": [
+        "mlm_tapt",
+        "nice"
+      ],
+      "embedding": "qwen3_06b",
+      "local_profiles": [
+        "local_llama_cpp"
+      ],
+      "primary_protocol": {
+        "batch_order": "grouped",
+        "batch_size": 1
+      },
+      "primary_sampling": {
+        "deterministic": 1,
+        "stochastic": 5
+      },
+      "run_group_id": "manuscript-final",
+      "task3": {
+        "audit_mode": "blind"
+      },
+      "variants": [
+        "must",
+        "shall"
+      ]
+    },
+    "run_config": {
+      "acse_embedding_backend": "mlx",
+      "acse_embedding_mlx_model": "mlx-community/Qwen3-Embedding-0.6B-8bit",
+      "batch_order": "grouped",
+      "benchmark_variants": [
+        "must",
+        "shall"
+      ],
+      "datasets": [
+        "mlm_tapt",
+        "nice",
+        "pure"
+      ],
+      "deterministic": {
+        "samples": 1,
+        "temperature": 0.0,
+        "top_p": 1.0
+      },
+      "item_context": "bare",
+      "logging": {
+        "progress_every_records": 100,
+        "progress_every_seconds": 60,
+        "warn_after_records": 100,
+        "warn_parse_failure_rate": 0.02,
+        "warn_request_error_rate": 0.02,
+        "write_event_jsonl": true,
+        "write_progress_csv": true,
+        "write_request_transcripts": true
+      },
+      "profiles": [
+        {
+          "api_key_env": "ZAI_API_KEY",
+          "base_url": "https://api.z.ai/api/coding/paas/v4",
+          "batch_order": "grouped",
+          "batch_size": 1,
+          "concurrency": 2,
+          "extra_body": {
+            "response_format": {
+              "type": "json_object"
+            },
+            "thinking": {
+              "type": "disabled"
+            }
+          },
+          "fallback_batch_size": 1,
+          "instructor_mode": "json",
+          "json_mode": true,
+          "max_retries": 3,
+          "max_tokens": 256,
+          "models": [
+            "glm-5.3",
+            "glm-5.3-flash"
+          ],
+          "notes": "GLM Coding Plan endpoint. Standard paid API users should switch this to https://api.z.ai/api/paas/v4.",
+          "profile_id": "zai",
+          "provider_id": "zai",
+          "requires_manual_server": false,
+          "response_format": null,
+          "seed": 20260518,
+          "send_seed": true,
+          "structured_output": "json_object",
+          "timeout_s": 180,
+          "validation_retries": 2
+        },
+        {
+          "api_key_env": "LLAMA_API_KEY",
+          "base_url": "http://localhost:9292/v1",
+          "batch_order": "grouped",
+          "batch_size": 1,
+          "concurrency": 8,
+          "extra_body": {
+            "chat_template_kwargs": {
+              "enable_thinking": false
+            },
+            "reasoning_effort": "low"
+          },
+          "fallback_batch_size": 1,
+          "instructor_mode": "json",
+          "json_mode": true,
+          "max_retries": 3,
+          "max_tokens": 1024,
+          "models": [
+            "qwen3.6-27b",
+            "qwen3.8-27b",
+            "qwen3.5-9b",
+            "gemma4-31b-it",
+            "gemma4-12b-it",
+            "muse-glimmer-30b",
+            "gpt-oss-20b"
+          ],
+          "notes": "Router loads models by request model name. The rerun driver completes all requests for one model before starting the next.",
+          "profile_id": "local_llama_cpp",
+          "provider_id": "llama_cpp",
+          "requires_manual_server": false,
+          "response_format": null,
+          "seed": 20260518,
+          "send_seed": true,
+          "structured_output": "json_schema",
+          "timeout_s": 300,
+          "validation_retries": 2
+        }
+      ],
+      "prompt_version": "v2-conf01",
+      "run_group_id": "manuscript-final",
+      "seed": 20260518,
+      "stochastic": {
+        "samples": 5,
+        "temperature": 0.7,
+        "top_p": 1.0
+      },
+      "tasks": [
+        "task1",
+        "task2"
+      ]
+    },
+    "smoke_items": 8
+  },
+  "updated_at_utc": "2026-09-16T17:30:01Z"
+}

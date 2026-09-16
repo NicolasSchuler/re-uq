@@ -1,0 +1,7 @@
+model,run_id,template_id,baseline,metric,baseline_unreadable_or_missing_n,other_unreadable_or_missing_n,delta,ci_low,ci_high,n_complete_pairs,n_excluded_single_arm,cluster_field,n_clusters
+gpt-oss-20b,weak-probe-must-20260916-182400-662b9e1f,nice_if,useful_if,strict,31,73,-0.01041666666666663,-0.03125,0.0,96,64,seed_id,96
+gpt-oss-20b,weak-probe-must-20260916-182400-662b9e1f,nice_if,useful_if,broad,31,73,0.0,0.0,0.0,96,64,seed_id,96
+gpt-oss-20b,weak-probe-must-20260916-182400-662b9e1f,low_priority_enhancement,useful_if,strict,31,33,-0.01538461538461533,-0.038461538461538436,0.0,130,36,seed_id,130
+gpt-oss-20b,weak-probe-must-20260916-182400-662b9e1f,low_priority_enhancement,useful_if,broad,31,33,0.0,0.0,0.0,130,36,seed_id,130
+gpt-oss-20b,weak-probe-must-20260916-182400-662b9e1f,future_enhancement,useful_if,strict,31,53,0.0,0.0,0.0,111,54,seed_id,111
+gpt-oss-20b,weak-probe-must-20260916-182400-662b9e1f,future_enhancement,useful_if,broad,31,53,0.0,0.0,0.0,111,54,seed_id,111

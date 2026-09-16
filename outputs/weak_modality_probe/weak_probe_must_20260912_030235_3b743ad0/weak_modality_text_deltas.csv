@@ -1,0 +1,7 @@
+model,run_id,template_id,baseline,metric,baseline_unreadable_or_missing_n,other_unreadable_or_missing_n,delta,ci_low,ci_high,n_complete_pairs,n_excluded_single_arm,cluster_field,n_clusters
+qwen3.6-27b,weak-probe-must-20260912-030235-3b743ad0,nice_if,useful_if,strict,0,0,0.0,0.0,0.0,180,0,seed_id,180
+qwen3.6-27b,weak-probe-must-20260912-030235-3b743ad0,nice_if,useful_if,broad,0,0,0.0,0.0,0.0,180,0,seed_id,180
+qwen3.6-27b,weak-probe-must-20260912-030235-3b743ad0,low_priority_enhancement,useful_if,strict,0,0,0.0,0.0,0.0,180,0,seed_id,180
+qwen3.6-27b,weak-probe-must-20260912-030235-3b743ad0,low_priority_enhancement,useful_if,broad,0,0,0.0,0.0,0.0,180,0,seed_id,180
+qwen3.6-27b,weak-probe-must-20260912-030235-3b743ad0,future_enhancement,useful_if,strict,0,0,-0.022222222222222254,-0.0444444444444444,-0.005555555555555536,180,0,seed_id,180
+qwen3.6-27b,weak-probe-must-20260912-030235-3b743ad0,future_enhancement,useful_if,broad,0,0,0.0,0.0,0.0,180,0,seed_id,180

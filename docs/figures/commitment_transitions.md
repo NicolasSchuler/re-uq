@@ -18,7 +18,9 @@ Outputs:
   percentages.
 - `outputs/commitment_transition_accounting.csv`: source-level denominators and
   mutually exclusive outcomes, including invalid, unknown, and negated outputs.
-- `manuscript/figures/commitment_transitions.tex`: the generated TikZ figure.
+- `outputs/rerun/figures/commitment_transitions.tex`: the generated TikZ figure
+  (the driver writes it there; the manuscript includes a copy under
+  `manuscript/figures/`).
 
 Both CSVs include model/cell detail and pooled rows. `all` in model, dataset, or
 variant identifies an aggregate. Do not sum aggregate rows with their components.

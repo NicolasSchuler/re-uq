@@ -1,0 +1,4 @@
+# Generated tables and reviews may carry trailing whitespace that is part of
+# the data; keep CI's whitespace check to hand-written files.
+outputs/** -whitespace
+data/processed/** -whitespace

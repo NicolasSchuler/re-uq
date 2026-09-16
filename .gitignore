@@ -50,25 +50,91 @@ data/processed/*.lock
 
 manuscript/**
 
+# outputs/: ignored by default. The allow-list below IS the replication package.
 outputs/*
 !outputs/README.md
+# Benchmark construction (paper-ready inputs)
 !outputs/benchmark_manifest*.json
 !outputs/benchmark_statements_review*
 !outputs/included_capabilities_review*
-!outputs/logprob_probe.json
-!outputs/pilot_results_summary.md
-!outputs/prompt_sensitivity_summary.csv
-!outputs/task2_prompt_sensitivity_summary.csv
-!outputs/weak_modality_probe_summary.*
-!outputs/weak_modality_template_sanity_check.*
 !outputs/modality_template_inventory.*
-!outputs/external_ai_service_probe/
-!outputs/external_ai_service_probe/README.md
-!outputs/external_ai_service_probe/*_evaluation.md
-!outputs/external_ai_service_probe/*_confusion_matrix.csv
-!outputs/external_ai_service_probe/*_source_condition_summary.csv
-!outputs/external_ai_service_probe/external_probe_comparison.md
-!outputs/external_ai_service_probe/external_task2_*
-outputs/external_ai_service_probe/*_outputs.jsonl
-outputs/external_ai_service_probe/*_scored_items.csv
+!outputs/weak_modality_template_sanity_check.*
+# Final campaign (run group manuscript-final): cross-cell tables and macros
+!outputs/paper_task2_text_drift_metrics.csv
+!outputs/paper_text_drift_confidence_and_stability.csv
+!outputs/paper_per_model_modality_table.csv
+!outputs/paper_per_model_modality_table.md
+!outputs/paper_per_model_modality_pooled.csv
+!outputs/paper_per_model_modality_pooled.md
+!outputs/paper_per_model_headline.csv
+!outputs/paper_per_model_headline.md
+!outputs/paper_per_model_rq_table.csv
+!outputs/paper_per_model_rq_table.md
+!outputs/paper_headline_bootstrap_ci.csv
+!outputs/paper_headline_metrics.csv
+!outputs/paper_snapshot_provenance.json
+!outputs/paper_numbers.tex
+!outputs/task3_audit_coverage.csv
+!outputs/batching_ablation_summary*
+!outputs/context_ablation_summary*
+!outputs/commitment_transition_counts.csv
+!outputs/commitment_transition_accounting.csv
+!outputs/meaning_variation_sensitivity/
+outputs/meaning_variation_sensitivity/*
+!outputs/meaning_variation_sensitivity/cohort_accounting.csv
+!outputs/meaning_variation_sensitivity/reproduction_check.csv
+!outputs/meaning_variation_sensitivity/grid_auroc.csv
+!outputs/meaning_variation_sensitivity/cluster_diagnostics.csv
+!outputs/meaning_variation_sensitivity/settings.json
+!outputs/embedding_diagnostic/
+outputs/embedding_diagnostic/*
+!outputs/embedding_diagnostic/manifest.json
+!outputs/embedding_diagnostic/probe_grid_summary.csv
+!outputs/embedding_diagnostic/probe_grid_summary.md
+!outputs/embedding_diagnostic/probe_grid_folds.csv
+# Weak-phrasing probe: the nine runs recorded in outputs/rerun/manuscript-final/state.json
+!outputs/weak_modality_probe/
+outputs/weak_modality_probe/*
+!outputs/weak_modality_probe/weak_probe_must_20260912_030235_3b743ad0/
+!outputs/weak_modality_probe/weak_probe_must_20260912_154041_c7e3e3e5/
+!outputs/weak_modality_probe/weak_probe_must_20260913_014338_191ed7e6/
+!outputs/weak_modality_probe/weak_probe_must_20260916_172244_8c09f7f1/
+!outputs/weak_modality_probe/weak_probe_must_20260916_172309_4743c746/
+!outputs/weak_modality_probe/weak_probe_must_20260916_174515_633df89c/
+!outputs/weak_modality_probe/weak_probe_must_20260916_175325_d4c27c2a/
+!outputs/weak_modality_probe/weak_probe_must_20260916_181413_6acee5b6/
+!outputs/weak_modality_probe/weak_probe_must_20260916_182400_662b9e1f/
+outputs/weak_modality_probe/weak_probe_must_*/*
+!outputs/weak_modality_probe/weak_probe_must_*/weak_modality_probe_summary.csv
+!outputs/weak_modality_probe/weak_probe_must_*/weak_modality_probe_summary.md
+!outputs/weak_modality_probe/weak_probe_must_*/weak_modality_text_deltas.csv
+# Campaign state, selected-run manifest, and the figures the manuscript includes
+!outputs/rerun/
+outputs/rerun/*
+!outputs/rerun/acse_selected_manifest.csv
+!outputs/rerun/manuscript-final/
+outputs/rerun/manuscript-final/*
+!outputs/rerun/manuscript-final/state.json
+!outputs/rerun/figures/
+outputs/rerun/figures/*
+!outputs/rerun/figures/ablation_deltas.pdf
+!outputs/rerun/figures/ablation_deltas.png
+!outputs/rerun/figures/embedding_diagnostic.pdf
+!outputs/rerun/figures/embedding_diagnostic.png
+!outputs/rerun/figures/embedding_diagnostic_tsne_supp.pdf
+!outputs/rerun/figures/embedding_diagnostic_tsne_supp.png
+!outputs/rerun/figures/commitment_transitions.tex
+# Archived pre-final summaries (each directory carries a status README)
+!outputs/archive/
+!outputs/archive/**
+outputs/archive/**/*_outputs.jsonl
+outputs/archive/**/*_scored_items.csv
+# Never promote (row-level, regenerable, or large; shipped in the Zenodo dataset record)
+outputs/*_regenerated.csv
+outputs/task3_audit_review.csv
+outputs/evaluation_*/
+outputs/smoke/
+outputs/embedding_diagnostic/probe_grid_predictions.jsonl
+outputs/embedding_diagnostic/task2_reqonly_mlx_embeddings.npz
+outputs/meaning_variation_sensitivity/per_item_scores.csv
 .devcontainer/*

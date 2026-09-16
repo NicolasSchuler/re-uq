@@ -1,0 +1,31 @@
+{
+  "bootstrap_samples": 1000,
+  "global_targets": [
+    "source_modality",
+    "dataset_variant",
+    "deterministic_strict_text_overcommit",
+    "sample_strict_text_overcommit"
+  ],
+  "held_out_predictions": "probe_grid_predictions.jsonl",
+  "hgb_budgets": null,
+  "hgb_max_iter": 300,
+  "models": [
+    "hgb"
+  ],
+  "n_samples": 129600,
+  "n_splits": 3,
+  "pca_components": 128,
+  "random_state": 20260527,
+  "reduction": "fold-local",
+  "text_vectorizer": "fold-local",
+  "uncertainty_scope": "capability bootstrap of fixed predictions; conditional on fitted models and splits",
+  "within_scopes": [
+    "recommended",
+    "optional",
+    "nice_to_have"
+  ],
+  "within_targets": [
+    "deterministic_strict_text_overcommit",
+    "sample_strict_text_overcommit"
+  ]
+}
