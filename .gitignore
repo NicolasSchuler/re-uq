@@ -65,3 +65,4 @@ outputs/*
 !outputs/external_ai_service_probe/external_task2_*
 outputs/external_ai_service_probe/*_outputs.jsonl
 outputs/external_ai_service_probe/*_scored_items.csv
+.devcontainer/*
