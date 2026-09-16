@@ -1009,5 +1009,49 @@ class AcseCacheValidityTest(unittest.TestCase):
         self.assertEqual(sum(fits), len(self.items))
 
 
+class SelectedManifestPathTest(unittest.TestCase):
+    """The tracked selected-run manifest records checkout-relative directories."""
+
+    def test_relative_manifest_directories_resolve_under_the_checkout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manifest_path = Path(tmpdir) / "selected.csv"
+            eu.write_csv_rows(
+                manifest_path,
+                [
+                    {
+                        "embedding_backend": "mlx:model",
+                        "analysis_dir": "outputs/evaluation_x",
+                        "artifact_dir": "outputs/evaluation_x/acse_semantic_mlx_m",
+                    },
+                    {
+                        "embedding_backend": "mlx:model",
+                        "analysis_dir": str(Path(tmpdir) / "abs"),
+                        "artifact_dir": str(Path(tmpdir) / "abs" / "cache"),
+                    },
+                ],
+            )
+            rows = diagnostic_figure.manifest_rows(manifest_path, "mlx:")
+        root = eu.project_root()
+        self.assertEqual(rows[0]["analysis_dir"], str(root / "outputs/evaluation_x"))
+        self.assertEqual(
+            rows[0]["artifact_dir"],
+            str(root / "outputs/evaluation_x/acse_semantic_mlx_m"),
+        )
+        self.assertEqual(rows[1]["artifact_dir"], str(Path(tmpdir) / "abs" / "cache"))
+
+    def test_the_writer_relativises_only_paths_inside_the_checkout(self):
+        root = eu.project_root().resolve()
+        rows = semantic_cache.checkout_relative_rows(
+            [
+                {
+                    "analysis_dir": str(root / "outputs/evaluation_x"),
+                    "artifact_dir": "/elsewhere/cache",
+                }
+            ]
+        )
+        self.assertEqual(rows[0]["analysis_dir"], "outputs/evaluation_x")
+        self.assertEqual(rows[0]["artifact_dir"], "/elsewhere/cache")
+
+
 if __name__ == "__main__":
     unittest.main()

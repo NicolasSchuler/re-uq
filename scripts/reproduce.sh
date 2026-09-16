@@ -25,7 +25,7 @@
 # Required environment overrides (set via env or pass as extra args):
 #   RE_UQ_CONFIG     Path to run config (default: run_configs/current_run.json)
 #   RE_UQ_PROFILE    Provider profile name (default: zai)
-#   RE_UQ_MODEL      Model id (default: glm-5.1)
+#   RE_UQ_MODEL      Model id (default: glm-5.3)
 #   RE_UQ_DATASET    Dataset id (default: mlm_tapt)
 #   RE_UQ_VARIANT    Benchmark variant (default: must)
 #   RE_UQ_MODE       Run mode for `task3` (default: full)
@@ -33,7 +33,7 @@
 #
 # The `hydra` subcommand ignores the RE_UQ_* variables above: it is configured
 # entirely by conf/ plus the overrides you pass, e.g.
-#   scripts/reproduce.sh hydra profile=zai model=glm-5.1 dataset=nice mode=full
+#   scripts/reproduce.sh hydra profile=zai model=glm-5.3 dataset=nice mode=full
 #   scripts/reproduce.sh hydra --multirun +experiment=paper_cohort
 # See docs/configuration.md.
 #
@@ -46,7 +46,7 @@ cd "$(dirname "$0")/.."
 
 CONFIG="${RE_UQ_CONFIG:-run_configs/current_run.json}"
 PROFILE="${RE_UQ_PROFILE:-zai}"
-MODEL="${RE_UQ_MODEL:-glm-5.1}"
+MODEL="${RE_UQ_MODEL:-glm-5.3}"
 DATASET="${RE_UQ_DATASET:-mlm_tapt}"
 VARIANT="${RE_UQ_VARIANT:-must}"
 MODE="${RE_UQ_MODE:-full}"

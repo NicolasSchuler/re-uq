@@ -2803,3 +2803,24 @@ class RunGroupDefaultTest(unittest.TestCase):
             # by prefix and the incomplete run by status.
             self.assertEqual(sorted(chosen), ["m1", "m2"])
             self.assertEqual(chosen["m1"]["run_id"], "full-new")
+
+
+class ProvenancePathTest(unittest.TestCase):
+    """Provenance JSON is tracked, so it records checkout-relative paths."""
+
+    def test_paths_inside_the_root_are_recorded_relative(self):
+        from scripts import export_paper_tables as tables
+
+        root = Path("/checkout")
+        self.assertEqual(
+            tables.repo_relative(root / "data/processed/raw.parquet", root),
+            "data/processed/raw.parquet",
+        )
+
+    def test_paths_outside_the_root_stay_absolute(self):
+        from scripts import export_paper_tables as tables
+
+        self.assertEqual(
+            tables.repo_relative(Path("/elsewhere/raw.parquet"), Path("/checkout")),
+            "/elsewhere/raw.parquet",
+        )

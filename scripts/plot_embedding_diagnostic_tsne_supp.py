@@ -54,7 +54,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("docs/figures/embedding_diagnostic_tsne_supp.pdf"),
+        default=Path("outputs/rerun/figures/embedding_diagnostic_tsne_supp.pdf"),
     )
     parser.add_argument("--method", choices=["tsne", "pca"], default="tsne")
     parser.add_argument("--per-modality", type=int, default=850)
@@ -98,7 +98,8 @@ def main() -> None:
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path)
+    # No CreationDate: the tracked PDF must not change on a byte-identical rerun.
+    fig.savefig(output_path, metadata={"CreationDate": None})
     fig.savefig(output_path.with_suffix(".png"), dpi=300)
     plt.close(fig)
     print(f"wrote {output_path} and {output_path.with_suffix('.png')}")

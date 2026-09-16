@@ -346,7 +346,13 @@ def draw(
     if notes:
         fig.text(0.015, 0.005, " · ".join(notes), fontsize=8.5, color=INK)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, bbox_inches="tight", pad_inches=0.06)
+    # No CreationDate: the tracked PDF must not change on a byte-identical rerun.
+    fig.savefig(
+        output_path,
+        bbox_inches="tight",
+        pad_inches=0.06,
+        metadata={"CreationDate": None},
+    )
     fig.savefig(
         output_path.with_suffix(".png"), dpi=300, bbox_inches="tight", pad_inches=0.06
     )
@@ -359,7 +365,9 @@ def main() -> None:
         "--diagnostic-dir", type=Path, default=Path("outputs/embedding_diagnostic")
     )
     parser.add_argument(
-        "--output", type=Path, default=Path("docs/figures/embedding_diagnostic.pdf")
+        "--output",
+        type=Path,
+        default=Path("outputs/rerun/figures/embedding_diagnostic.pdf"),
     )
     args = parser.parse_args()
 

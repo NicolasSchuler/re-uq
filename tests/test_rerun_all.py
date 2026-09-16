@@ -67,6 +67,29 @@ class StateTest(unittest.TestCase):
         self.assertEqual(reloaded.run_id("cohort:a"), "full-1")
         self.assertEqual(reloaded.failures(), ["cohort:b"])
 
+    def test_a_moved_endpoint_is_still_the_same_experiment(self):
+        """base_url is where a profile was served, not what was asked of it."""
+        state = rerun_all.RerunState.load(self.path)
+        profile = {
+            "profile_id": "local",
+            "base_url": "http://lab:9292/v1",
+            "max_tokens": 256,
+        }
+        state.bind_configuration({"run_config": {"profiles": [profile]}})
+        state.record("cohort:a", "complete", run_id="full-1")
+
+        moved = {**profile, "base_url": "http://localhost:9292/v1"}
+        state.bind_configuration({"run_config": {"profiles": [moved]}})
+        self.assertEqual(
+            state.configuration["run_config"]["profiles"][0]["base_url"],
+            "http://localhost:9292/v1",
+        )
+
+        with self.assertRaises(rerun_all.StageError):
+            state.bind_configuration(
+                {"run_config": {"profiles": [{**moved, "max_tokens": 512}]}}
+            )
+
     def test_a_dry_run_never_writes_state(self):
         state = rerun_all.RerunState.load(self.path, dry_run=True)
         state.record("cohort:a", "complete", run_id="full-1")
@@ -641,6 +664,96 @@ class AnalysisGateTest(unittest.TestCase):
                 if label == "analysis:headline-metrics"
             )
             self.assertNotIn("--regenerate-snapshots", aggregate)
+            # The manuscript's remaining artifacts follow the tables they read.
+            self.assertLess(
+                labels.index("analysis:paper-tables"),
+                labels.index("analysis:commitment-transitions"),
+            )
+            self.assertLess(
+                labels.index("analysis:acse"),
+                labels.index("analysis:meaning-variation"),
+            )
+            transitions = next(
+                argv
+                for label, argv in runner.commands
+                if label == "analysis:commitment-transitions"
+            )
+            self.assertIn(
+                "outputs/rerun/figures/commitment_transitions.tex", transitions
+            )
+            supplement = next(
+                argv for label, argv in runner.commands if label == "analysis:figure3"
+            )
+            self.assertIn(
+                "outputs/rerun/figures/embedding_diagnostic_tsne_supp.pdf", supplement
+            )
+            # Only the batching ablation is configured, and without models:
+            # nothing to plot side by side.
+            self.assertNotIn("analysis:ablation-figure", labels)
+
+    def test_the_ablation_figure_runs_once_every_ablation_has_models(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            runner = RecordingRunner(root)
+            state = rerun_all.RerunState.load(root / "state.json")
+            state.configuration = {
+                "run_config": {
+                    "profiles": [{"batch_size": 1, "batch_order": "grouped"}]
+                }
+            }
+            state.record("cohort:zai:glm-5.3:nice:must", "complete", run_id="full-1")
+            state.record("task3:zai:glm-5.3:nice:must", "complete", run_id="task3-1")
+            batching = {
+                "dataset": "nice",
+                "variant": "must",
+                "batch_sizes": [1, 4],
+                "batch_orders": ["grouped"],
+                "baseline_arm": "single",
+                "models": [{"profile": "zai", "model": "glm-5.3"}],
+            }
+            for arm, _, _ in rerun_all.batching_arm_specs(batching):
+                state.record(
+                    f"batching:{arm}:zai:glm-5.3:nice:must",
+                    "complete",
+                    run_id=f"full-batching-{arm}",
+                )
+            for arm in ("bare", "document"):
+                state.record(
+                    f"context:{arm}:zai:glm-5.3", "complete", run_id=f"full-{arm}"
+                )
+            state.record("weak_phrasing:zai:glm-5.3", "complete", run_id="weak-1")
+            rerun = {
+                "run_group_id": "manuscript-final",
+                "datasets": ["nice"],
+                "variants": ["must"],
+                "analysis": {"bootstrap_samples": 10},
+                "ablations": {
+                    "batching": batching,
+                    "context": {"models": [{"profile": "zai", "model": "glm-5.3"}]},
+                    "weak_phrasing": {
+                        "models": [{"profile": "zai", "model": "glm-5.3"}]
+                    },
+                },
+            }
+
+            rerun_all.stage_analysis(runner, state, rerun, [("zai", "glm-5.3")], [])
+
+            labels = [label for label, _ in runner.commands]
+            self.assertLess(
+                labels.index("analysis:batching-ablation"),
+                labels.index("analysis:ablation-figure"),
+            )
+            self.assertLess(
+                labels.index("analysis:context-ablation"),
+                labels.index("analysis:ablation-figure"),
+            )
+            figure = next(
+                argv
+                for label, argv in runner.commands
+                if label == "analysis:ablation-figure"
+            )
+            self.assertEqual(figure[figure.index("--state") + 1], str(state.path))
+            self.assertIn("outputs/rerun/figures/ablation_deltas.pdf", figure)
 
     def test_a_failed_analysis_step_stops_the_stage(self):
         with TemporaryDirectory() as tmpdir:

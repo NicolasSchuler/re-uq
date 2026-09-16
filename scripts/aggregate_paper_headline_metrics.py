@@ -87,16 +87,19 @@ CELL_KEYS = ("dataset", "variant")
 # when present so the number is derived rather than transcribed.
 WEAK_HEADLINE_COLUMN = "weak_strict_text_strengthening_90"
 
-# The five numbers the README "Reported Paper Findings" section quotes, as
-# decimals, keyed by headline id. Used only for the stdout comparison.
+# The five headline numbers the README "Results at a glance" table quotes for
+# the manuscript-final campaign, as decimals, keyed by headline id. They are
+# read off the tracked outputs/paper_headline_metrics.csv and used only for the
+# stdout comparison; tests/test_aggregate_paper_headline_metrics.py pins them.
 README_VALUES = {
-    "strict_text_strengthening": 0.086,
-    # The README leads with the pooled figure (13.8%) as the conservative
-    # headline convention; the macro-of-cells figure (13.9%) is secondary.
-    "broad_text_strengthening": 0.138,
-    "weak_strict_text_strengthening_90": 0.298,
-    "strict_text_oc_high_conf_90": 0.984,
-    "strict_text_oc_repeated_sample_agreement": 1.000,
+    "strict_text_strengthening": 0.260,
+    "broad_text_strengthening": 0.279,
+    # Confidence-gated (>= 0.90). The manuscript's ungated weak-intent rate
+    # (99.7%) is task2_weak_strict_strengthening_rate in
+    # paper_per_model_rq_table.csv, not this headline.
+    "weak_strict_text_strengthening_90": 0.828,
+    "strict_text_oc_high_conf_90": 0.834,
+    "strict_text_oc_repeated_sample_agreement": 0.675,
 }
 
 
@@ -202,7 +205,7 @@ def build_headline_rows(
             "value_macro_over_cells": _macro(broad_per_cell),
             "per_cell_values": _fmt_list(broad_per_cell),
             "cell_n": _fmt_int_list(denom_n),
-            "readme_aggregation": "macro-of-cells (README 13.9%); pooled is 13.8%",
+            "readme_aggregation": "pooled (README figure); macro-of-cells alongside",
             "confidence_threshold": "",
             "source_csv": "paper_task2_text_drift_metrics.csv;paper_text_drift_confidence_and_stability.csv",
         }
@@ -211,7 +214,16 @@ def build_headline_rows(
     # 3. Weak-intent strict strengthening at confidence >= 0.90. The exporter
     # now recomputes this column into the Task 2 snapshot; the blind Task 3
     # summary remains the fallback for the shipped static snapshots.
-    weak_source = task2 if _has_column(task2, cells, WEAK_HEADLINE_COLUMN) else blind
+    if _has_column(task2, cells, WEAK_HEADLINE_COLUMN):
+        weak_source = task2
+    elif _has_column(blind, cells, WEAK_HEADLINE_COLUMN):
+        weak_source = blind
+    else:
+        raise SystemExit(
+            "neither the Task 2 snapshot nor the blind Task 3 summary carries "
+            f"{WEAK_HEADLINE_COLUMN} for every requested cell; regenerate the "
+            "snapshots with scripts/export_paper_tables.py"
+        )
     weak_per_cell = [
         _parse_ratio(weak_source[cell][WEAK_HEADLINE_COLUMN]) for cell in cells
     ]
@@ -265,7 +277,7 @@ def build_headline_rows(
             "value_macro_over_cells": _macro(high_conf_per_cell),
             "per_cell_values": _fmt_list(high_conf_per_cell),
             "cell_n": _fmt_int_list(strict_oc_n),
-            "readme_aggregation": "unweighted macro-of-cells (README 98.4%); pooled is 98.6%",
+            "readme_aggregation": "pooled (README figure); unweighted macro-of-cells alongside",
             "confidence_threshold": "0.90",
             "source_csv": "paper_text_drift_confidence_and_stability.csv",
         }
@@ -299,7 +311,7 @@ def build_headline_rows(
             "value_macro_over_cells": _macro(unanimous_per_cell),
             "per_cell_values": _fmt_list(unanimous_per_cell),
             "cell_n": _fmt_int_list(agreement_n),
-            "readme_aggregation": "unanimous in every cell (saturated label accuracy, temperature 0.7)",
+            "readme_aggregation": "pooled (README figure) over complete five-sample groups",
             "confidence_threshold": "",
             "source_csv": "paper_text_drift_confidence_and_stability.csv",
         }
@@ -330,12 +342,23 @@ def attach_bootstrap_cis(
     return rows
 
 
-def print_readme_comparison(rows: list[dict[str, Any]]) -> None:
-    print("Headline metric reconstruction vs. README 'Reported Paper Findings':")
+def print_readme_comparison(
+    rows: list[dict[str, Any]], expected: dict[str, float] | None = None
+) -> None:
+    """Print every headline next to the README figure it should reproduce.
+
+    ``expected`` overrides ``README_VALUES``; tests pass the figures their
+    fixtures were built from.
+    """
+    readme_values = README_VALUES if expected is None else expected
+    print("Headline metric reconstruction vs. the README 'Results at a glance':")
     print(f"{'headline':<42} {'README':>8} {'pooled':>8} {'macro':>8} {'verdict':>10}")
     for row in rows:
         key = row["headline_key"]
-        readme = README_VALUES.get(key)
+        readme = readme_values.get(key)
+        if readme is None:
+            print(f"{key:<42} {'-':>8} {'-':>8} {'-':>8} {'n/a':>10}")
+            continue
         macro = float(row["value_macro_over_cells"])
         pooled = row["value_pooled"]
         pooled_val = float(pooled) if pooled != "" else None
@@ -429,7 +452,16 @@ def main() -> None:
 
     task2_rows = eu.read_csv_rows(args.task2)
     confidence_rows = eu.read_csv_rows(args.confidence)
-    blind_rows = eu.read_csv_rows(args.blind)
+    if args.blind.exists():
+        blind_rows = eu.read_csv_rows(args.blind)
+    else:
+        # Only the archived May 2026 snapshots needed the blind Task 3 summary;
+        # regenerated Task 2 snapshots carry the weak-intent column themselves.
+        print(
+            f"Note: {args.blind} is absent; the weak-intent headline is read "
+            "from the Task 2 snapshot."
+        )
+        blind_rows = []
 
     rows = build_headline_rows(
         task2_rows, confidence_rows, blind_rows, bootstrap_ci_rows

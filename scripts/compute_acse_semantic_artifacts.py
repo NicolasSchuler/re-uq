@@ -9,6 +9,7 @@ calling the embedding backend again.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -282,6 +283,28 @@ def existing_backend_manifests(output_root: Path) -> list[dict[str, Any]]:
         manifest["artifact_dir"] = str(manifest_path.parent)
         manifests.append(manifest)
     return manifests
+
+
+def checkout_relative_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Manifest rows with ``analysis_dir``/``artifact_dir`` relative to the checkout.
+
+    The selected-run manifest is tracked with the paper artifacts, so it must
+    not carry one machine's absolute paths; ``manifest_rows`` in
+    ``plot_acse_global_embedding_projection`` re-roots relative entries. Paths
+    outside the checkout (tests, scratch runs) stay absolute.
+    """
+    root = eu.project_root().resolve()
+    relative: list[dict[str, Any]] = []
+    for row in rows:
+        record = dict(row)
+        for key in ("analysis_dir", "artifact_dir"):
+            value = str(record.get(key, ""))
+            if not value:
+                continue
+            with contextlib.suppress(ValueError):
+                record[key] = Path(value).resolve().relative_to(root).as_posix()
+        relative.append(record)
+    return relative
 
 
 def manifest_summary_rows(
@@ -850,7 +873,8 @@ def main() -> None:
             in selected
         ]
         eu.write_csv_rows(
-            args.selected_manifest, manifest_summary_rows(scoped, manifests)
+            args.selected_manifest,
+            checkout_relative_rows(manifest_summary_rows(scoped, manifests)),
         )
 
 

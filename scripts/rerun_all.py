@@ -96,8 +96,24 @@ class RerunState:
         except (OSError, ValueError) as error:
             raise StageError(f"Cannot read rerun state {path}: {error}") from error
 
+    @staticmethod
+    def experiment_identity(configuration: dict[str, Any]) -> dict[str, Any]:
+        """The recorded configuration without deployment details.
+
+        An endpoint address (``base_url``) says where a profile was served
+        from, not what was asked of it; the run registries keep the address
+        each run actually used. Leaving it out lets a moved server, or the
+        published placeholder, resume the same experiment.
+        """
+        identity = copy.deepcopy(configuration)
+        for profile in identity.get("run_config", {}).get("profiles", []):
+            profile.pop("base_url", None)
+        return identity
+
     def bind_configuration(self, configuration: dict[str, Any]) -> None:
-        if self.cells and self.configuration != configuration:
+        if self.cells and self.experiment_identity(
+            self.configuration
+        ) != self.experiment_identity(configuration):
             raise StageError(
                 f"{self.path} belongs to a different or unrecorded configuration. "
                 "Use a new run_group_id for a new experiment (or --state with a new path). "
@@ -1054,7 +1070,7 @@ def stage_analysis(
                 "--diagnostic-dir",
                 f"{outputs_dir}/embedding_diagnostic",
                 "--output",
-                f"{outputs_dir}/rerun/figures/embedding_diagnostic_tsne.pdf",
+                f"{outputs_dir}/rerun/figures/embedding_diagnostic_tsne_supp.pdf",
             ],
         )
     )
@@ -1196,6 +1212,66 @@ def stage_analysis(
         )
     )
 
+    # The manuscript's remaining artifacts, which read the tables above: the
+    # commitment-transition counts and TikZ figure, the ablation-delta figure
+    # (batching, context and weak phrasing side by side), and the
+    # meaning-variation sensitivity grid. The grid reads the MLX caches, so it
+    # is skipped with the other MLX steps in a fake run.
+    ablations = rerun.get("ablations", {})
+    paper_steps = [
+        (
+            "analysis:commitment-transitions",
+            [
+                "scripts/export_commitment_transitions.py",
+                "--provenance",
+                f"{outputs_dir}/paper_snapshot_provenance.json",
+                "--output-dir",
+                outputs_dir,
+                "--tikz-output",
+                f"{outputs_dir}/rerun/figures/commitment_transitions.tex",
+            ],
+        ),
+        (
+            "analysis:ablation-figure",
+            [
+                "scripts/plot_ablation_deltas.py",
+                "--batching",
+                f"{outputs_dir}/batching_ablation_summary_deltas.csv",
+                "--context",
+                f"{outputs_dir}/context_ablation_summary_deltas.csv",
+                "--state",
+                str(state.path),
+                "--output",
+                f"{outputs_dir}/rerun/figures/ablation_deltas.pdf",
+            ],
+        ),
+        (
+            "analysis:meaning-variation",
+            [
+                "scripts/meaning_variation_sensitivity.py",
+                "--provenance",
+                f"{outputs_dir}/paper_snapshot_provenance.json",
+                "--manifest",
+                selected_manifest,
+                "--rq-table",
+                f"{outputs_dir}/paper_per_model_rq_table.csv",
+                "--output-dir",
+                f"{outputs_dir}/meaning_variation_sensitivity",
+            ],
+        ),
+    ]
+    if not runner.fake:
+        steps.extend(
+            (key, argv)
+            for key, argv in paper_steps
+            # The figure needs all three ablations; the other two only the tables.
+            if key != "analysis:ablation-figure"
+            or all(
+                ablations.get(name, {}).get("models")
+                for name in ("batching", "context", "weak_phrasing")
+            )
+        )
+
     if runner.fake:
         print(
             "[analysis] skipped (need a complete cell and the MLX embeddings a "
@@ -1206,6 +1282,7 @@ def stage_analysis(
                     *mlx_steps,
                     headline_step,
                     ("analysis:numbers", []),
+                    *paper_steps,
                 ]
             )
         )

@@ -75,6 +75,14 @@ def manifest_rows(path: Path, backend_prefix: str) -> list[dict[str, str]]:
         raise ValueError(
             f"No manifest rows found for backend prefix {backend_prefix!r} in {path}."
         )
+    # The tracked selected-run manifest records checkout-relative directories;
+    # every consumer expects absolute ones.
+    root = eu.project_root()
+    for row in rows:
+        for key in ("analysis_dir", "artifact_dir"):
+            value = str(row.get(key, ""))
+            if value and not Path(value).is_absolute():
+                row[key] = str(root / value)
     return rows
 
 

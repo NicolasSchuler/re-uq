@@ -306,7 +306,7 @@ def ci_rows_for_scores(
 
 def write_result_notes_template(path: Path) -> None:
     notes = [
-        "# Result Notes for IST Manuscript",
+        "# Result Notes for JSS Manuscript",
         "",
         "## Observations",
         "- Observation: <grounded result from metrics_summary.csv>.",

@@ -73,6 +73,14 @@ def _path(root: Path, value: str) -> Path:
     return root / path
 
 
+def _relative(root: Path, path: Path | str) -> str:
+    """A path as recorded in settings.json: checkout-relative when inside root."""
+    try:
+        return Path(path).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def load_snapshot(provenance_path: Path) -> dict[str, Any]:
     snapshot = json.loads(provenance_path.read_text(encoding="utf-8"))
     models = snapshot["models_cohort"]
@@ -784,7 +792,7 @@ def build_cohort(
                     "variant": variant,
                     "model": model,
                     "run_id": run_id,
-                    "artifact_dir": str(artifact_dir),
+                    "artifact_dir": _relative(root, artifact_dir),
                     "cached_samples": int(cache.embeddings.shape[0]),
                     "embedding_dtype": str(cache.embeddings.dtype),
                     "samples_sha256": eu.sha256_file(
@@ -860,7 +868,18 @@ def run(
     iterations = (
         int(snapshot["bootstrap_samples"]) if iterations is None else iterations
     )
-    manifest_rows = eu.read_csv_rows(manifest_path)
+    # The tracked selected-run manifest records checkout-relative directories.
+    manifest_rows = [
+        {
+            **row,
+            **{
+                key: str(_path(root, str(row[key])))
+                for key in ("analysis_dir", "artifact_dir")
+                if row.get(key)
+            },
+        }
+        for row in eu.read_csv_rows(manifest_path)
+    ]
     reported = reported_rq_rows(rq_table_path) if rq_table_path.exists() else {}
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1051,10 +1070,10 @@ def run(
     settings_record = {
         "generated_at_utc": eu.utc_now_iso(),
         "script": "scripts/meaning_variation_sensitivity.py",
-        "provenance": str(provenance_path),
+        "provenance": _relative(root, provenance_path),
         "provenance_generated_at_utc": snapshot.get("generated_at_utc", ""),
-        "selected_manifest": str(manifest_path),
-        "reported_table": str(rq_table_path),
+        "selected_manifest": _relative(root, manifest_path),
+        "reported_table": _relative(root, rq_table_path),
         "embedding_backend": EXPECTED_BACKEND,
         "thresholds": list(thresholds),
         "dispersion_weights": list(weights),

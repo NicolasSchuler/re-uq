@@ -92,6 +92,21 @@ HEADLINE_CI_NAME = "paper_headline_bootstrap_ci.csv"
 PROVENANCE_NAME = "paper_snapshot_provenance.json"
 
 
+def repo_relative(path: Path | str, root: Path) -> str:
+    """A path as recorded in the provenance JSON: relative to ``root`` when inside.
+
+    The provenance file is tracked with the paper tables, so it must not carry
+    one checkout's absolute paths. Its readers (``_path`` in
+    ``export_commitment_transitions`` and ``meaning_variation_sensitivity``)
+    re-root relative entries under the checkout they run from.
+    """
+    candidate = Path(path)
+    try:
+        return candidate.relative_to(root).as_posix()
+    except ValueError:
+        return str(candidate)
+
+
 TASK2_SNAPSHOT_FIELDS = [
     "dataset",
     "variant",
@@ -118,7 +133,7 @@ TASK2_SNAPSHOT_FIELDS = [
     "label_correct_text_overcommit_80",
     "label_correct_text_overcommit_90",
     "parse_failure_rate",
-    # Weak stakeholder-intent headline (README 29.8%): the strict, high-confidence
+    # Weak stakeholder-intent headline (confidence-gated): the strict, high-confidence
     # strengthening rate over `nice_to_have` sources, on both denominators.
     "weak_n",
     "weak_n_readable",
@@ -576,7 +591,7 @@ def agreement_for_strict_rows(
 
 
 def weak_intent_snapshot_fields(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Weak stakeholder-intent strengthening, the README's 29.8% headline.
+    """Weak stakeholder-intent strengthening at confidence >= 0.90 (gated headline).
 
     Weak rows are the deterministic Task 2 rows whose *source* modality is
     ``nice_to_have``. The published rate divides the strict, p>=0.90
@@ -1509,11 +1524,11 @@ def score_cell(
     return {
         "dataset": dataset,
         "variant": variant,
-        "registry_path": str(registry_paths[0]),
-        "registry_paths": [str(path) for path in registry_paths],
-        "benchmark_path": str(benchmark_path),
-        "raw_path": str(raw_paths[0]),
-        "raw_paths": [str(path) for path in raw_paths],
+        "registry_path": repo_relative(registry_paths[0], root),
+        "registry_paths": [repo_relative(path, root) for path in registry_paths],
+        "benchmark_path": repo_relative(benchmark_path, root),
+        "raw_path": repo_relative(raw_paths[0], root),
+        "raw_paths": [repo_relative(path, root) for path in raw_paths],
         "run_ids": {model: str(row["run_id"]) for model, row in sorted(chosen.items())},
         "n_benchmark_items": len(scored_benchmark),
         "n_raw_rows": len(raw_rows),
@@ -1675,8 +1690,8 @@ def score_task3_cell(
         "dataset": dataset,
         "variant": variant,
         "audit_mode": audit_mode,
-        "task3_registry_path": str(registry_paths[0]),
-        "task3_raw_path": str(raw_paths[0]),
+        "task3_registry_path": repo_relative(registry_paths[0], root),
+        "task3_raw_path": repo_relative(raw_paths[0], root),
         "task3_run_ids": {
             model: str(row["run_id"]) for model, row in sorted(chosen.items())
         },

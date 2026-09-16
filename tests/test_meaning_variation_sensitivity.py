@@ -463,5 +463,17 @@ class SnapshotTest(unittest.TestCase):
                 mvs.load_snapshot(path)
 
 
+class SettingsPathTest(unittest.TestCase):
+    def test_settings_paths_are_recorded_relative_to_the_root(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self.assertEqual(
+                mvs._relative(root, root / "outputs" / "x.json"), "outputs/x.json"
+            )
+            self.assertEqual(
+                mvs._relative(root, "/elsewhere/x.json"), "/elsewhere/x.json"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

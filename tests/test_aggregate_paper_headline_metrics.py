@@ -1,18 +1,33 @@
 """Tests for scripts/aggregate_paper_headline_metrics.py.
 
-The per-cell paper snapshots the production script reads
-(outputs/paper_task2_text_drift_metrics.csv, ...) are *not* tracked in git, so
-these tests build a small synthetic fixture that mirrors the real snapshot
-columns and the exact shipped values. The asserted headline reconstructions are
-the known review targets: 8.6% strict, 13.9% macro / 13.8% pooled broad,
-29.8% weak (mlm_tapt/must cell), 98.4% macro high-confidence, 100.0% agreement.
+These tests build a small synthetic fixture that mirrors the real snapshot
+columns with the values of the archived May 2026 grouped-batching campaign, so
+the reconstruction rules stay pinned independently of the tracked
+manuscript-final snapshots (which one test reads directly). The asserted
+headline reconstructions for the fixture are: 8.6% strict, 13.9% macro / 13.8%
+pooled broad, 29.8% weak (mlm_tapt/must cell), 98.4% macro high-confidence,
+100.0% agreement.
 """
 
 import io
+import sys
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from scripts import aggregate_paper_headline_metrics as agg
+from scripts import aggregate_paper_headline_metrics as agg, eval_utils as eu
+
+# The README figures of the archived May 2026 campaign, which the fixtures
+# below reproduce; the production README_VALUES describe the final campaign.
+FIXTURE_README_VALUES = {
+    "strict_text_strengthening": 0.086,
+    "broad_text_strengthening": 0.138,
+    "weak_strict_text_strengthening_90": 0.298,
+    "strict_text_oc_high_conf_90": 0.984,
+    "strict_text_oc_repeated_sample_agreement": 1.000,
+}
 
 # Synthetic fixtures mirroring the shipped per-cell snapshot columns and values.
 TASK2_ROWS = [
@@ -255,11 +270,78 @@ class AggregatePaperHeadlineMetricsTest(unittest.TestCase):
                 rows = agg.build_headline_rows(task2_rows, CONFIDENCE_ROWS, BLIND_ROWS)
                 buffer = io.StringIO()
                 with redirect_stdout(buffer):
-                    agg.print_readme_comparison(rows)
+                    agg.print_readme_comparison(rows, expected=FIXTURE_README_VALUES)
                 output = buffer.getvalue()
                 self.assertNotIn("MISMATCH", output)
-                for key in agg.README_VALUES:
+                for key in FIXTURE_README_VALUES:
                     self.assertIn(key, output)
+
+    def test_missing_blind_rows_fall_back_to_the_task2_snapshot(self):
+        rows = {
+            row["headline_key"]: row
+            for row in agg.build_headline_rows(
+                TASK2_ROWS_WITH_WEAK, CONFIDENCE_ROWS, []
+            )
+        }
+        weak = rows["weak_strict_text_strengthening_90"]
+        self.assertEqual(weak["source_csv"], "paper_task2_text_drift_metrics.csv")
+        self.assertAlmostEqual(
+            float(weak["value_macro_over_cells"]),
+            (304 / 1020 + 283 / 1000 + 317 / 1000 + 274 / 1000) / 4,
+            places=4,
+        )
+
+    def test_missing_weak_column_without_blind_rows_is_an_error(self):
+        with self.assertRaises(SystemExit) as caught:
+            agg.build_headline_rows(TASK2_ROWS, CONFIDENCE_ROWS, [])
+        self.assertIn(agg.WEAK_HEADLINE_COLUMN, str(caught.exception))
+
+    def test_main_tolerates_an_absent_blind_summary(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            task2 = root / "task2.csv"
+            confidence = root / "confidence.csv"
+            output = root / "headline.csv"
+            eu.write_csv_rows(task2, TASK2_ROWS_WITH_WEAK)
+            eu.write_csv_rows(confidence, CONFIDENCE_ROWS)
+            argv = [
+                "aggregate_paper_headline_metrics.py",
+                "--task2",
+                str(task2),
+                "--confidence",
+                str(confidence),
+                "--blind",
+                str(root / "absent.csv"),
+                "--output",
+                str(output),
+            ]
+            buffer = io.StringIO()
+            with patch.object(sys, "argv", argv), redirect_stdout(buffer):
+                agg.main()
+            rows = {row["headline_key"]: row for row in eu.read_csv_rows(output)}
+            self.assertIn("absent.csv is absent", buffer.getvalue())
+            self.assertEqual(
+                rows["weak_strict_text_strengthening_90"]["source_csv"],
+                "paper_task2_text_drift_metrics.csv",
+            )
+
+    def test_readme_values_are_the_tracked_manuscript_final_headlines(self):
+        """README_VALUES must be readable off outputs/paper_headline_metrics.csv."""
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "outputs"
+            / "paper_headline_metrics.csv"
+        )
+        if not path.exists():
+            self.skipTest(f"{path} is not present in this checkout")
+        rows = {row["headline_key"]: row for row in eu.read_csv_rows(path)}
+        for key, readme in agg.README_VALUES.items():
+            row = rows[key]
+            candidates = [float(row["value_macro_over_cells"])]
+            if row["value_pooled"]:
+                candidates.append(float(row["value_pooled"]))
+            best = min(candidates, key=lambda value: abs(value - readme))
+            self.assertLessEqual(abs(round(best, 3) - readme), 0.0005, key)
 
 
 if __name__ == "__main__":

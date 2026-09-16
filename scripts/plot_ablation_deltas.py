@@ -352,7 +352,13 @@ def main(argv: list[str] | None = None) -> int:
         phrasing_points(probe_dirs),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(args.output, bbox_inches="tight", pad_inches=0.02)
+    # No CreationDate: the tracked PDF must not change on a byte-identical rerun.
+    fig.savefig(
+        args.output,
+        bbox_inches="tight",
+        pad_inches=0.02,
+        metadata={"CreationDate": None},
+    )
     fig.savefig(args.output.with_suffix(".png"), bbox_inches="tight", pad_inches=0.02)
     print(f"Wrote {args.output}")
     return 0
