@@ -232,7 +232,7 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
         rows = eu.read_csv_rows("data/processed/weak_modality_probe_items.csv")
 
         # All 180 seeds since the 2026-09-10 rerun (the probe covers the full
-        # benchmark, see docs/ablation_proposals.md); previously a 20-seed subset.
+        # benchmark, see docs/internal/ablation_proposals.md); previously a 20-seed subset.
         self.assertEqual(len(rows), 720)
         self.assertEqual(len({row["item_id"] for row in rows}), 720)
         self.assertEqual(len({row["seed_id"] for row in rows}), 180)
@@ -251,7 +251,7 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
 
     def test_checked_external_probe_is_blind_and_balanced(self):
         inputs_path = Path(
-            "outputs/external_ai_service_probe/external_task2_inputs.csv"
+            "outputs/archive/2026-05-grouped-cohort/external_ai_service_probe/external_task2_inputs.csv"
         )
         with inputs_path.open(newline="", encoding="utf-8") as handle:
             input_reader = csv.DictReader(handle)
@@ -260,7 +260,7 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
             )
             inputs = list(input_reader)
         gold = eu.read_csv_rows(
-            "outputs/external_ai_service_probe/external_task2_gold_key.csv"
+            "outputs/archive/2026-05-grouped-cohort/external_ai_service_probe/external_task2_gold_key.csv"
         )
 
         expected_ids = [f"EXT{index:04d}" for index in range(1, 141)]
@@ -566,7 +566,7 @@ class ParsingAndExternalProbeTest(unittest.TestCase):
                 eu.build_weak_modality_probe_items(seed_rows(3)),
             )
 
-            output_dir = root / "outputs" / "external_ai_service_probe"
+            output_dir = root / "outputs" / external_export.OUTPUT_DIR_NAME
             with io.StringIO() as buffer, redirect_stdout(buffer):
                 external_export.main(["--root", str(root), "--dry-run"])
                 output = buffer.getvalue()

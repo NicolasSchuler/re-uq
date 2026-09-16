@@ -19,7 +19,8 @@ except (
     from scripts import eval_utils as eu
 
 
-OUTPUT_DIR_NAME = "external_ai_service_probe"
+# Archived with the May 2026 campaign; the probe is not part of the revised paper.
+OUTPUT_DIR_NAME = "archive/2026-05-grouped-cohort/external_ai_service_probe"
 RANDOM_SEED = 20260519
 EXCLUDED_DUPLICATE_WEAK_TEMPLATE = "useful_if"
 

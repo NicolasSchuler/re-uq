@@ -99,7 +99,7 @@ an owner, and neighbours.
    strength, reported separately from the controlled benchmark. Best first
    candidate: the Public Jira Dataset's Apache "Wish" issues, whose declared
    type and priority are contextual cues orthogonal to the phrasing; survey in
-   [`docs/external_validity_datasets.md`](docs/external_validity_datasets.md).
+   [`docs/external_validity_datasets.md`](docs/internal/external_validity_datasets.md).
 
 ## C. More diverse model families
 

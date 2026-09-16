@@ -42,6 +42,10 @@ data/processed/run_registry*.csv
 data/processed/task3_verification_items*.csv
 data/processed/task3_verification_items/
 data/processed/uq_scores*.csv
+# Notebook execution rewrites the May-era metric snapshots in place; the
+# archived copies live under data/processed/archive/.
+data/processed/metrics_summary*.csv
+data/processed/bootstrap_seed_ci.csv
 # Smoke/fake runs (parallel artifact tree), run logs, and pre-strip backups.
 data/processed/smoke/
 data/processed/logs/

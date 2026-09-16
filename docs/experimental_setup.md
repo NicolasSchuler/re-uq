@@ -10,9 +10,9 @@ per request and five stochastic samples plus one deterministic answer, with
 sizes 4 and 16 as grouped/sibling-separated ablations. Revised PURE data has an
 AI-assisted source review. Local models now use task-specific JSON-schema
 decoding; reference-free extractions are audited but excluded from automatic
-audit correctness scores. The [generation qualification](generation_qualification_2026-09-11.md)
+audit correctness scores. The [generation qualification](internal/generation_qualification_2026-09-11.md)
 documents the formatting comparison and failure accounting. Current settings and launch gates are documented in
-[final-run readiness](final_run_readiness.md); old results are not relabeled.
+[final-run readiness](internal/final_run_readiness.md); old results are not relabeled.
 
 Related pages: [`docs/evaluation.md`](evaluation.md) (metric definitions),
 [`docs/aggregation.md`](aggregation.md) (how per-cell numbers are pooled into
@@ -272,7 +272,7 @@ shuffled run keeps the batch membership of the original run. The
 historical comparison used size 16 for both batch-order arms. The final
 campaign instead uses single-item primary requests, with size-4 and size-16
 grouped/sibling-separated ablations. Historical numbers retain their original
-protocol; see [final-run readiness](final_run_readiness.md).
+protocol; see [final-run readiness](internal/final_run_readiness.md).
 
 ## 5. Model Cohort And Request Parameters
 

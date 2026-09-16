@@ -57,7 +57,7 @@ The seed review table is `data/processed/seeds_review_pure.csv`
 other datasets). On 2026-09-11 the author delegated a renewed AI-assisted
 source review after defects in the old extraction were found. All 180
 capabilities were reviewed and corrected, then 720 items regenerated. This is
-not renewed human validation. See [row-level decisions](pure_capability_ai_review.md)
+not renewed human validation. See [row-level decisions](internal/pure_capability_ai_review.md)
 and [validation review](validation_review.md). Earlier benchmark inputs are
 archived under `outputs/pure_before_capability_review/`.
 
@@ -255,7 +255,7 @@ remain pending.
   an additional evaluated construct. Stakeholder intent remains unmeasured.
 - Naturally occurring stakeholder statements (for example Apache Jira "Wish"
   issues with a declared priority) are a separate track; candidates are in
-  [`docs/external_validity_datasets.md`](external_validity_datasets.md).
+  [`docs/external_validity_datasets.md`](internal/external_validity_datasets.md).
 
 ## 8. Provenance and what did not change
 

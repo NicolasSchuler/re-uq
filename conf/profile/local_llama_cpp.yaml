@@ -37,7 +37,7 @@ json_mode: false
 # Constrain the existing JSON contract, including GPT-OSS's Harmony final
 # header. Unconstrained output can emit a valid JSON-format header that this
 # server build rejects; Qwen3.5 audits also need JSON escaping constraints.
-# Qualification evidence: docs/generation_qualification_2026-09-11.md.
+# Qualification evidence: docs/internal/generation_qualification_2026-09-11.md.
 structured_output: "json_schema"
 requires_manual_server: false
 # Qwen3.6 thinks by default and only writes the answer to `content` after the

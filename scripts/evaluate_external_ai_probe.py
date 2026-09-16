@@ -371,19 +371,20 @@ def main() -> None:
         "--gold-key",
         type=Path,
         default=eu.project_root()
-        / "outputs/external_ai_service_probe/external_task2_gold_key.csv",
+        / "outputs/archive/2026-05-grouped-cohort/external_ai_service_probe/external_task2_gold_key.csv",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=eu.project_root() / "outputs/external_ai_service_probe",
+        default=eu.project_root()
+        / "outputs/archive/2026-05-grouped-cohort/external_ai_service_probe",
     )
     parser.add_argument("--prompt-version", default="external-task2-v2-conf01")
     parser.add_argument(
         "--prompt-path",
         type=Path,
         default=eu.project_root()
-        / "outputs/external_ai_service_probe/external_task2_prompt.md",
+        / "outputs/archive/2026-05-grouped-cohort/external_ai_service_probe/external_task2_prompt.md",
     )
     args = parser.parse_args()
 

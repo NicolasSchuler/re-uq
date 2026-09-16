@@ -49,7 +49,7 @@ The local endpoint must route/load by the requested model name. Both profiles
 contribute to pooled estimates and retain separate per-model table groups.
 Each ablation uses the **first model in each profile's list** unless explicit
 `models` are supplied in `conf/rerun/default.yaml`; reorder the lists to choose
-representatives. See [ablation proposals](ablation_proposals.md).
+representatives. See [ablation proposals](internal/ablation_proposals.md).
 
 The driver forces request transcripts, events, and progress files on:
 

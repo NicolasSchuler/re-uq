@@ -1,7 +1,7 @@
 # External-Validity Datasets (natural stakeholder language)
 
 Candidate **ready-to-use public datasets** for the natural-statements track of
-[`TODO.md`](../TODO.md) section B: measuring modality strengthening on
+[`TODO.md`](../../TODO.md) section B: measuring modality strengthening on
 naturally occurring stakeholder language instead of template output. Status:
 desktop research from repository and dataset pages, 2026-09. Entries marked
 *second-hand* were taken from search-result summaries and should be re-verified
@@ -10,7 +10,7 @@ against the record before use in the paper.
 ## What the controlled benchmark cannot show
 
 The benchmark buys causal control by rendering one capability through four
-fixed templates (see [`benchmark_ground_truth.md`](benchmark_ground_truth.md)).
+fixed templates (see [`benchmark_ground_truth.md`](../benchmark_ground_truth.md)).
 External validity needs the opposite trade: real utterances — wish-shaped
 statements in app reviews, user stories, interview transcripts — whose intended
 commitment strength is annotated rather than constructed. Reviewer 2 of the
@@ -20,7 +20,7 @@ journal revision asked for exactly this.
 
 | Dataset | Contents | Why it fits | License / access |
 | --- | --- | --- | --- |
-| **PURE** ([Zenodo 7118517](https://zenodo.org/records/7118517)) | 79 public requirements documents, 34,268 sentences; 19 documents in a common XML format with structure (sections, headings, requirement ids). Verified 2026-09-04: only **EIRENE FRS 7** and **ERTMS FRS 5.0** attach an author-assigned mandatory/optional marker to every requirement (EIRENE inline `(M)`/`(O)`/`(I)`: 378/82/102; ERTMS `<modifier>`: M 196, O 3) | Real, in-document requirements with the surrounding context (headings, neighbours) *and* a document-level commitment cue independent of the modal verb. **In use:** the `pure` dataset of the document-context ablation ([`context_ablation.md`](context_ablation.md)) | CC BY 4.0 (Zenodo record, v2.0, 2018) |
+| **PURE** ([Zenodo 7118517](https://zenodo.org/records/7118517)) | 79 public requirements documents, 34,268 sentences; 19 documents in a common XML format with structure (sections, headings, requirement ids). Verified 2026-09-04: only **EIRENE FRS 7** and **ERTMS FRS 5.0** attach an author-assigned mandatory/optional marker to every requirement (EIRENE inline `(M)`/`(O)`/`(I)`: 378/82/102; ERTMS `<modifier>`: M 196, O 3) | Real, in-document requirements with the surrounding context (headings, neighbours) *and* a document-level commitment cue independent of the modal verb. **In use:** the `pure` dataset of the document-context ablation ([`context_ablation.md`](../context_ablation.md)) | CC BY 4.0 (Zenodo record, v2.0, 2018) |
 | **Public Jira Dataset** ([Zenodo 5901804](https://zenodo.org/records/5901804); Montgomery, Lüders & Maalej, MSR 2022) | 16 public Jira instances, 2.7M issues with type, priority, status, summary, description and comments. Apache's tracker defines an issue type **Wish** ("General wishlist item"; 7,942 issues on 2026-09-04, priorities Blocker 57 / Critical 155 / Major 4,242 / Minor 2,720 / Trivial 603) | Natural wish-shaped statements whose *reporter-declared* type and priority are contextual cues orthogonal to the phrasing: "would be nice" appears in 557 Wish vs 3,513 New Feature issues, "would be useful" in 133 vs 1,555. Same lexical cue, different declared commitment | CC BY 4.0 (anonymised snapshot; reporters are often developers, not end users) |
 | **Pan & Maalej app-review dataset** ([Mendeley Data 5fk732vkwr, v2](https://data.mendeley.com/datasets/5fk732vkwr/2)) | 5,081 labeled user reviews (Panichella 1,390 + Maalej 3,691); categories include *feature request* (~444 total). *Second-hand figures* | Natural wish-shaped stakeholder utterances, many explicitly weak ("it would be nice if…"); the weak-intent condition without the template scaffold | CC BY 4.0 (*second-hand*) |
 | **Dollmann & Geierhos user-generated requirements** ([EMNLP 2016, D16-1186](https://aclanthology.org/D16-1186/)) | User-generated requirements from a software community forum with semantic annotation, reported ~3,996 labeled elements over ~759 requirements (*second-hand figures*) | The closest existing thing to **modality-annotated** natural stakeholder requirements; their annotation scheme includes a modality role | Paper is open; dataset availability to be confirmed with the authors |
@@ -38,7 +38,7 @@ elicitation context.
 
 | TODO §B track | Best first candidates | Missing piece |
 | --- | --- | --- |
-| Context envelope (headings, status, neighbours around the item) | PURE (real documents with structure) — **done** as the two-arm `pure` ablation, see [`context_ablation.md`](context_ablation.md); then the Ferrari et al. package (documented user stories in context) | Marker-flipped arm and the remaining envelope factors (status, role, priority field, rationale) |
+| Context envelope (headings, status, neighbours around the item) | PURE (real documents with structure) — **done** as the two-arm `pure` ablation, see [`context_ablation.md`](../context_ablation.md); then the Ferrari et al. package (documented user stories in context) | Marker-flipped arm and the remaining envelope factors (status, role, priority field, rationale) |
 | Natural weak-intent statements | Public Jira Dataset (Apache **Wish** issues with declared priority), Pan & Maalej (wish-shaped reviews), Dollmann & Geierhos (modality-annotated; no public download found), StorySeek | Commitment-strength annotation to the paper's four-level scale, by two raters, reusing the construct-review protocol; for Jira, the reporter-declared type is a defensible but not human-annotated gold |
 | Elicitation transcripts | Bristol (real interviews), LLMREI (LLM-led, categorized turns) | Same annotation; plus utterance segmentation |
 

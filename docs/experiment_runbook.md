@@ -10,7 +10,7 @@ under run group `manuscript-final`; the weak-phrasing probe was extended to
 the whole cohort on 2026-09-16. The primary protocol is one item per request,
 using server concurrency for parallelism. Batch sizes 4 and 16, both grouped
 and sibling-separated, are ablations. This page remains the launch procedure
-for a rerun; [final-run readiness](final_run_readiness.md) records the
+for a rerun; [final-run readiness](internal/final_run_readiness.md) records the
 pre-launch gates that were applied.
 
 The commands below run from the checkout root on macOS with Apple Silicon

@@ -13,8 +13,8 @@ in addition to the deterministic answer.
 | Document context | 180 AI-reviewed corrected PURE capabilities; bare versus original heading, marker and neighbors plus the context instruction; deterministic Task 2, single-item requests | Outcomes and paired document-minus-bare changes, including strata where synthetic wording agrees/conflicts with original M/O markers. No claim of renewed human validation or isolated information-only effects. |
 | Weak phrasing | All 180 NICE capabilities × four weak templates; identical sampling and delivery settings within each model | Label and generated-text strengthening by template; readable and unresolved counts; paired deterministic text-strengthening changes against `useful_if`. |
 
-The detailed context proposal is in [context_ablation.md](context_ablation.md).
-The batching rationale and remaining extensions are in [TODO.md](../TODO.md).
+The detailed context proposal is in [context_ablation.md](../context_ablation.md).
+The batching rationale and remaining extensions are in [TODO.md](../../TODO.md).
 Marker flipping and additional context factors are proposed extensions,
 not part of the default two-arm context run. Commitment-specific fine-tuning
 remains a future research question, not an experiment this command runs.

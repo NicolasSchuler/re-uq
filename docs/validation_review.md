@@ -12,7 +12,7 @@ The author delegated the renewed PURE review to the assistant and an
 independent subagent. All 180 proposals were checked: 129 accepted and 51
 revised, followed by main-agent reconciliation. The accepted corrections are
 applied to the seed review and all 720 items have been rebuilt and checked.
-See [AI-assisted row-level review](pure_capability_ai_review.md) for decisions,
+See [AI-assisted row-level review](internal/pure_capability_ai_review.md) for decisions,
 source evidence and remaining underspecification. This is **not renewed human
 validation**, expert agreement, or validation of model outputs. Earlier inputs
 and exports are retained under `outputs/pure_before_capability_review/`.
