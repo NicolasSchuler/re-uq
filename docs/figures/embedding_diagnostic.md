@@ -68,7 +68,16 @@ but excluded from ranking summaries. Zero evaluable folds yields unavailable
 estimates. The HGB fit uses up to 300 boosting iterations and records its loss
 history with training-loss stopping (20 rounds without improvement, no separate
 internal validation subset). Logistic regression retains its 1,000-iteration
-limit. Limit hits, convergence warnings, no training-loss improvement, or too few
+limit. Full classifier parameters (`model_steps` in
+`scripts/probe_acse_embedding_separability.py`): fold-local PCA to 128
+components (randomized SVD; a fold-safe truncated SVD for the TF-IDF baseline),
+then `HistGradientBoostingClassifier(learning_rate=0.08, max_iter=300,
+early_stopping=True, validation_fraction=None, n_iter_no_change=20,
+max_leaf_nodes=31, min_samples_leaf=30, l2_regularization=0.05,
+class_weight="balanced")`; the logistic-regression alternative is
+`StandardScaler` + `LogisticRegression(max_iter=1000, class_weight="balanced",
+solver="lbfgs")`. Splits are three-fold `GroupKFold`-style by capability with
+the seeded grouped splitter; the manuscript reports the HGB run. Limit hits, convergence warnings, no training-loss improvement, or too few
 training samples for a tree split flag the summary and plot for fitting review. Training-loss stopping is not evidence of generalization or convergence;
 inspect the curves and limits before interpreting weak performance. No fitting
 budget extension or experimental comparison was run as part of implementation.
