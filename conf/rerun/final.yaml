@@ -49,10 +49,19 @@ ablations:
   weak_phrasing:
     dataset: nice
     variant: must
+    # Extended 2026-09-16 from three models to the whole cohort; the six added
+    # runs were generated through conf/rerun/final_phrasing_extension.yaml with
+    # the same protocol and merged into this plan's state file.
     models:
       - {profile: zai, model: glm-5.3}
+      - {profile: zai, model: glm-5.3-flash}
       - {profile: local_llama_cpp, model: qwen3.6-27b}
+      - {profile: local_llama_cpp, model: qwen3.8-27b}
+      - {profile: local_llama_cpp, model: qwen3.5-9b}
+      - {profile: local_llama_cpp, model: gemma4-31b-it}
+      - {profile: local_llama_cpp, model: gemma4-12b-it}
       - {profile: local_llama_cpp, model: muse-glimmer-30b}
+      - {profile: local_llama_cpp, model: gpt-oss-20b}
 
 task3:
   audit_mode: blind

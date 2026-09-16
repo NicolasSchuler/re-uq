@@ -40,7 +40,11 @@ The configuration checked on 2026-09-11 selects:
 | Analysis resampling | 1,000 bootstrap samples in the driver-controlled table/comparison/embedding-diagnostic commands |
 
 The final batching/context comparisons use `glm-5.3` and all seven local
-models. Weak phrasing uses `glm-5.3`, `qwen3.6-27b`, and `muse-glimmer-30b`.
+models. Weak phrasing covers all nine cohort models: `conf/rerun/final.yaml`
+selected `glm-5.3`, `qwen3.6-27b`, and `muse-glimmer-30b` at launch, and the
+other six were added on 2026-09-16 through
+`conf/rerun/final_phrasing_extension.yaml` with the same protocol and merged
+into the same state file.
 The single-item batching arm is a separate deterministic repeat, not a reuse
 of the main run. Alternative embedding models are available as configurations but
 are not automatically swept by this campaign.

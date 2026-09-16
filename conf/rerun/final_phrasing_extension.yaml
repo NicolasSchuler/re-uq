@@ -1,0 +1,46 @@
+# Extension of the manuscript-final campaign: the NICE weak-intent phrasing
+# probe for the six cohort models conf/rerun/final.yaml did not select
+# (2026-09-16). Same run group, same profiles, same single-item protocol and
+# sampling as the three existing final probe runs (glm-5.3, qwen3.6-27b,
+# muse-glimmer-30b), so the six new runs are protocol-compatible with them.
+#
+# This plan schedules ONLY the weak_phrasing ablation. Run it with
+# `--only ablations` and its own state file so no cohort, Task 3, batching or
+# context cell can be scheduled by accident:
+#
+#   .venv/bin/python -u scripts/rerun_all.py \
+#     --config conf/rerun/final_phrasing_extension.yaml \
+#     --state outputs/rerun/manuscript-final/phrasing_extension_state.json \
+#     --profile <zai|local_llama_cpp> --only ablations
+#
+# `pure` is listed so the generated run config is byte-identical to the final
+# campaign's (final.yaml adds it through the context ablation); nothing here
+# runs on it.
+run_group_id: manuscript-final
+embedding: qwen3_06b
+datasets: [mlm_tapt, nice, pure]
+variants: [must, shall]
+cohort_profiles: [zai]
+local_profiles: [local_llama_cpp]
+primary_protocol:
+  batch_size: 1
+  batch_order: grouped
+primary_sampling:
+  deterministic: 1
+  stochastic: 5
+
+ablations:
+  weak_phrasing:
+    dataset: nice
+    variant: must
+    models:
+      - {profile: zai, model: glm-5.3-flash}
+      - {profile: local_llama_cpp, model: qwen3.8-27b}
+      - {profile: local_llama_cpp, model: qwen3.5-9b}
+      - {profile: local_llama_cpp, model: gemma4-31b-it}
+      - {profile: local_llama_cpp, model: gemma4-12b-it}
+      - {profile: local_llama_cpp, model: gpt-oss-20b}
+
+analysis:
+  bootstrap_samples: 1000
+  numbers_output: outputs/paper_numbers.tex
