@@ -1,16 +1,15 @@
 # @package _global_
-# Official paper cohort: the z.ai GLM models over both datasets, both
-# benchmark variants, Task 1 + Task 2, full mode, deterministic + 5-sample
-# stochastic passes.
+# Hosted half of the paper cohort on the Hydra path: the z.ai GLM models over
+# both datasets, both benchmark variants, Task 1 + Task 2, full mode,
+# deterministic + 5-sample stochastic passes.
 #
 # Run:
 #   .venv/bin/python scripts/run.py --multirun +experiment=paper_cohort
 #
-# The sixth official model is not a GLM: it lives on the KIT endpoint and is
-# run separately (see conf/experiment/batching_ablation.yaml for the same
-# pattern):
-#   .venv/bin/python scripts/run.py --multirun +experiment=paper_cohort \
-#     profile=kit_toolbox model=kit.gemma4-31b-it
+# The reported campaign was driven by scripts/rerun_all.py with
+# conf/rerun/final.yaml, which covers the hosted and the local profile in one
+# command and records every run id; use this preset to repeat the hosted half
+# by itself.
 defaults:
   - override /profile: zai
   - override /variant: must

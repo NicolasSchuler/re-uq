@@ -4,7 +4,7 @@
 
 ## Repository Purpose
 
-This repository supports an Information and Software Technology short communication paper on uncertainty quantification for LLM-assisted requirements engineering.
+This repository supports a Journal of Systems and Software short paper (New Ideas and Trends) on uncertainty quantification for LLM-assisted requirements engineering.
 
 The core research question is whether LLM uncertainty estimates are sensitive to linguistic modality in requirements, especially cases where weak stakeholder intent such as "may", "should", or "nice to have" is transformed into mandatory language such as "must" or "shall".
 
@@ -21,7 +21,7 @@ Distinguish clearly between:
 - Recommendation: the next action justified by the current evidence.
 - Open question: uncertainty that could affect the paper's claims.
 
-Do not overclaim. The goal is credible, compact evidence suitable for a 2,500-word short communication.
+Do not overclaim. The goal is credible, compact evidence suitable for a short paper of about 3,500 words.
 
 ## Expected Evaluation Scope
 
@@ -46,7 +46,7 @@ Prefer:
 - cached raw model outputs;
 - exact model identifiers and run metadata;
 - simple metrics that directly support the paper's claims;
-- concise figures and tables suitable for the IST word limit.
+- concise figures and tables suitable for the JSS short-paper word limit.
 
 Avoid:
 

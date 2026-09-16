@@ -14,10 +14,17 @@ Frozen task prompt contracts used by the CLI runner and recorded in benchmark ma
 
 Prompts are content-addressed by SHA-256 in `outputs/benchmark_manifest*.json`. Changing a prompt without updating the manifest will be caught by the analysis gate.
 
-## These files are the contract, not the request body
+## Delivery: one item per request
 
-All reported runs sent **batched** prompts, not these single-item files. `batch_prompt_for_completion_jobs` in `scripts/eval_utils.py` builds one request carrying 16 benchmark items and asks for an array of results keyed by `request_index`. The batched wrapper restates the same task, the same label set, and the same `0.0-1.0` confidence contract in a different surface form; it does not read these `.txt` files.
+The reported campaign sent each benchmark item on its own, rendered from these
+files by `prompt_for_benchmark_task`; the prompt is the entire user message and
+no system message is sent. The files are therefore both the task contract and
+the request body.
 
-The files here remain authoritative for the task definition, they are what the manifest hashes, and they are what a `batch_size=1` run would send. The batched prompt bodies for Task 1, Task 2, and Task 3 are reproduced verbatim in [`docs/experimental_setup.md`](../docs/experimental_setup.md), together with the batching policy and its known confound.
-
-No system message is sent with any prompt. The prompt is the entire user message.
+`batch_prompt_for_completion_jobs` in `scripts/eval_utils.py` builds a request
+that carries several items and asks for an array of results keyed by
+`request_index`. That wrapper was the delivery mode of the archived May 2026
+campaign and is now the request-composition ablation (4 and 16 items per
+request, grouped or with the four conditions of a capability spread across
+requests). Its prompt bodies are reproduced in
+[`docs/experimental_setup.md`](../docs/experimental_setup.md).
