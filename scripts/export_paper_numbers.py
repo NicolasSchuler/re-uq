@@ -1908,7 +1908,7 @@ def _per_model_blocks(artifacts: Artifacts) -> tuple[list[Macro], list[Macro], s
 
 
 def modality_table_body(artifacts: Artifacts) -> str:
-    """Model/check rows with pooled counts and intervals for each source modality."""
+    """One model row with strict/broad subcolumns for each source modality."""
     source_rows = artifacts[MODALITY_TABLE]
     pooled_rows = artifacts[POOLED_MODALITY]
     models = order_models(
@@ -1918,10 +1918,9 @@ def modality_table_body(artifacts: Artifacts) -> str:
     local_models = set(artifacts.local_models)
 
     def model_rows(model: str, label: str) -> str:
-        rendered = []
-        for rule in ("strict", "broad"):
-            columns = [label if rule == "strict" else "", rule.title()]
-            for condition in ("recommended", "optional", "nice_to_have"):
+        columns = [label]
+        for condition in ("recommended", "optional", "nice_to_have"):
+            for rule in ("strict", "broad"):
                 row = _one(
                     [
                         candidate
@@ -1959,11 +1958,11 @@ def modality_table_body(artifacts: Artifacts) -> str:
                         f"{rule}_strengthening",
                         denominator=True,
                         centered=True,
+                        separate_interval=True,
                         source=POOLED_MODALITY,
                     )
                 )
-            rendered.append(" & ".join(columns) + r" \\")
-        return "\n".join(rendered)
+        return " & ".join(columns) + r" \\"
 
     hosted, local = [], []
     for model in models:
@@ -1971,7 +1970,7 @@ def modality_table_body(artifacts: Artifacts) -> str:
             model_rows(model, model_label(model))
         )
     return render_grouped_table_body(
-        hosted, local, model_rows("all", "All models"), 5, local_label="Local"
+        hosted, local, model_rows("all", "All models"), 7, local_label="Local"
     )
 
 

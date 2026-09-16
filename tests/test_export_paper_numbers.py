@@ -1000,13 +1000,12 @@ class ReportingCohortTest(ExporterFixtureTest):
             line for line in body.splitlines() if line.startswith("GLM-5.1 &")
         )
         cells = strict.split("&")
-        self.assertEqual(len(cells), 5)
-        self.assertEqual(cells[1].strip(), "Strict")
-        self.assertIn(r"10.0 [9.5, 10.5]\\340/3400", cells[2])
-        self.assertIn(r"7.6 [7.1, 8.1]\\260/3400", cells[3])
-        self.assertIn(r"27.6 [27.1, 28.1]\\940/3400", cells[4])
-        self.assertIn(" & Broad &", body)
-        self.assertIn("All models & Strict &", body)
+        self.assertEqual(len(cells), 7)
+        self.assertIn(r"10.0\\{}[9.5, 10.5]\\340/3400", cells[1])
+        self.assertIn(r"7.6\\{}[7.1, 8.1]\\260/3400", cells[3])
+        self.assertIn(r"27.6\\{}[27.1, 28.1]\\940/3400", cells[5])
+        self.assertNotIn(" & Broad &", body)
+        self.assertIn("All models &", body)
 
     def test_modality_table_rejects_stale_pooled_counts(self) -> None:
         path = self.outputs / exporter.POOLED_MODALITY
@@ -1191,7 +1190,7 @@ class RqTableMacroTest(ExporterFixtureTest):
         for name, rows_per_model in (
             ("numTableRqOneRows", 1),
             ("numTableRqTwoThreeRows", 1),
-            ("numTableModalityRows", 2),
+            ("numTableModalityRows", 1),
         ):
             with self.subTest(table=name):
                 rows = macros[name].splitlines()
