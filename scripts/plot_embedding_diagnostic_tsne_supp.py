@@ -87,11 +87,11 @@ def main() -> None:
         coords,
         sub_rows,
         "source_modality",
-        "(a) Colored by input strength",
+        "(a) Source modality",
         rng=rng,
     )
     panel_projection(
-        ax_b, coords, sub_rows, "drift", "(b) Colored by strength increase"
+        ax_b, coords, sub_rows, "drift", "(b) Wording-check result"
     )
     fig.suptitle(
         "Generated requirements (t-SNE of requirement-only embeddings)",

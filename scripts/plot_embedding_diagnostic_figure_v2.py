@@ -1,4 +1,4 @@
-"""Horizontal comparison of predictions from generated-requirement embeddings.
+"""Separate prediction tasks using generated-requirement embeddings.
 
 The primary input is sampled requirement text; the primary target is strict
 strengthening of the separate single-pass output for the same source.
@@ -227,126 +227,66 @@ def draw(
     output_path: Path,
 ) -> None:
     set_style()
-    fig, ax = plt.subplots(figsize=(9.0, 4.7))
-
-    # y positions: context on top, then the target group, then the additional-input comparison.
-    gap = 0.9
-    y_ctx, y_tgt, y_ctl = stack_positions(
-        [len(context), len(target), len(control)], gap
+    fig, axes = plt.subplots(
+        3, 1, figsize=(7.0, 4.5), sharex=True, gridspec_kw={"height_ratios": [2, 3, 2]}
     )
-    all_bars = [
-        *zip(context, y_ctx, [CONTEXT_COLOR] * len(context), strict=True),
-        *zip(target, y_tgt, [TARGET_COLOR] * len(target), strict=True),
-        *zip(control, y_ctl, [CONTROL_COLOR] * len(control), strict=True),
+    fig.subplots_adjust(left=0.29, right=0.98, top=0.93, bottom=0.18, hspace=0.66)
+
+    panels = [
+        (
+            axes[0],
+            [target[0], *control],
+            ["Text only", "Text + declared modality"],
+            "A  Does adding the label help detect strengthening?",
+            TARGET_COLOR,
+        ),
+        (
+            axes[1],
+            target[1:],
+            ["Recommended only", "Optional only", "Weak intent only"],
+            "B  Can text alone detect strengthening in each source group?",
+            TARGET_COLOR,
+        ),
+        (
+            axes[2],
+            context,
+            ["Commitment level", "Dataset and keyword"],
+            "C  What does text reveal about the source?",
+            CONTEXT_COLOR,
+        ),
     ]
-
-    for bar, y, color in all_bars:
-        val = bar["value"]
-        if not np.isfinite(val):
-            ax.text(
-                0.03,
-                y,
-                "×  unavailable: " + bar["unavailable_reason"],
-                va="center",
-                fontsize=8,
-                color=MUTED,
+    for panel_ax, bars, labels, heading, color in panels:
+        panel_ax.set_title(heading, loc="left", fontsize=9.5, fontweight="bold", pad=6)
+        for y, bar in enumerate(reversed(bars)):
+            val = bar["value"]
+            low, high = bar.get("ci_low", np.nan), bar.get("ci_high", np.nan)
+            if not np.isfinite(val):
+                panel_ax.text(0.3, y, "Unavailable", va="center", fontsize=10)
+                continue
+            panel_ax.plot(val, y, "o", color=color, ms=5, zorder=3)
+            if np.isfinite(low) and np.isfinite(high):
+                panel_ax.plot([low, high], [y, y], color=color, lw=1.5)
+                panel_ax.plot([low, high], [y, y], "|", color=color, ms=7)
+            panel_ax.text(
+                1.02, y, f"{val:.{bar['decimals']}f}", va="center", fontsize=10
             )
-            continue
-        ax.barh(
-            y,
-            val - CHANCE,
-            left=CHANCE,
-            height=0.62,
-            color=color,
-            edgecolor="white",
-            hatch="//" if color == CONTROL_COLOR else None,
-            linewidth=0.5,
-            zorder=3,
-        )
-        low, high = bar.get("ci_low", np.nan), bar.get("ci_high", np.nan)
-        if np.isfinite(low) and np.isfinite(high):
-            ax.plot([low, high], [y, y], color=INK, lw=1.2, zorder=5)
-            ax.plot([low, high], [y, y], "|", color=INK, ms=7, zorder=5)
-        suffix = " †" if bar.get("fit_review_required") else ""
-        if not np.isfinite(low):
-            suffix += " (CI unavailable)"
-        ax.text(
-            max(val, high if np.isfinite(high) else val) + 0.015,
-            y,
-            f"{val:.{bar['decimals']}f}{suffix}",
-            va="center",
-            ha="left",
-            fontsize=8.5,
-            color=INK,
-            zorder=4,
-        )
-
-    labels = [b["label"] for b, _, _ in all_bars]
-    ys = [y for _, y, _ in all_bars]
-    ax.set_yticks(ys)
-    ax.set_yticklabels(labels)
-
-    # Dashed "chance" reference line at 0.5, doubling as the left boundary; the
-    # 0.5 tick carries its "chance" label so nothing collides with the axis text.
-    ax.axvline(CHANCE, ls=(0, (4, 3)), lw=1.0, color=INK, zorder=2)
-    ax.set_xlim(0.0, 1.3)
-    ax.set_ylim(min(ys) - 0.7, max(ys) + 1.05)
-    ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1.0])
-    ax.set_xticklabels(["0.0", "0.25", "0.5\nchance", "0.75", "1.0"])
-    ax.set_xlabel(
-        "AUROC with 95% capability-bootstrap intervals (fixed held-out predictions)",
-        labelpad=4,
+        panel_ax.set_yticks(range(len(bars)))
+        panel_ax.set_yticklabels(list(reversed(labels)), fontsize=10)
+        panel_ax.set_ylim(-0.55, len(bars) - 0.45)
+        panel_ax.axvline(CHANCE, ls=(0, (4, 3)), lw=0.9, color=MUTED)
+        panel_ax.set_xlim(0.0, 1.16)
+        panel_ax.spines["bottom"].set_bounds(0.0, 1.0)
+        panel_ax.set_xticks([0.0, 0.5, 0.75, 1.0])
+        panel_ax.spines["left"].set_visible(False)
+        panel_ax.tick_params(axis="y", length=0)
+    axes[-1].set_xticklabels(
+        ["0.0", "0.5\nchance", "0.75", "1.0\nperfect ranking"], fontsize=10
     )
-    ax.spines["left"].set_visible(False)
-    ax.tick_params(axis="y", length=0)
-    ax.tick_params(axis="x", length=3)
-
-    # Group headers above each group.
-    ax.text(
-        CHANCE,
-        max(y_ctx) + 0.62,
-        "Auxiliary prediction targets",
-        fontsize=9.0,
-        fontweight="bold",
-        color=MUTED,
-        va="bottom",
-        ha="left",
-    )
-    ax.text(
-        CHANCE,
-        max(y_tgt) + 0.62,
-        "Strict strengthening in separate single-pass output",
-        fontsize=9.0,
-        fontweight="bold",
-        color="#B26F00",
-        va="bottom",
-        ha="left",
-    )
-    if control:
-        ax.text(
-            CHANCE,
-            max(y_ctl) + 0.62,
-            "Additional input: declared modality",
-            fontsize=9.0,
-            fontweight="bold",
-            color=MUTED,
-            va="bottom",
-            ha="left",
-        )
-
-    if any(b.get("fit_review_required") for b, _, _ in all_bars):
-        fig.text(
-            0.5,
-            0.005,
-            "† Fitting budget needs review; weak scores are not evidence against the method.",
-            ha="center",
-            fontsize=8,
-        )
-    fig.tight_layout(pad=0.6, rect=(0, 0.04, 1, 1))
+    fig.text(0.59, 0.025, "AUROC (higher is better)", ha="center", fontsize=10)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(output_path, bbox_inches="tight", pad_inches=0.06)
     fig.savefig(
-        output_path.with_suffix(".png"), dpi=300, bbox_inches="tight", pad_inches=0.02
+        output_path.with_suffix(".png"), dpi=300, bbox_inches="tight", pad_inches=0.06
     )
     plt.close(fig)
 

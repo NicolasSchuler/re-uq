@@ -293,9 +293,9 @@ def panel_projection(
     else:
         keys = np.asarray([drift_status(row) for row in rows], dtype=object)
         label_map = {
-            "clean": "preserved",
-            "broad_text_oc": "strengthened (implied)",
-            "strict_text_oc": "strengthened (explicit word)",
+            "clean": "Not flagged",
+            "broad_text_oc": "Strengthened: broad check only",
+            "strict_text_oc": "Strengthened: strict check",
         }
         for label in [
             "clean",
