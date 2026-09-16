@@ -10,6 +10,12 @@ tmp/
 .env
 .env.*
 !.env.example
+# Assistant/editor session state and local checkpoints (never part of the artifact).
+.pi/
+.claude/
+.code-review-graph/
+# Local pre-compaction backups of the raw store.
+data/processed.pre-final-*/
 
 # Local manuscript and assistant-orchestration scratch files. Promote a
 # manuscript deliberately with `git add -f` only when publication packaging
