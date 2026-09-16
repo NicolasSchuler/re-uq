@@ -7254,6 +7254,7 @@ def acse_semantic_cluster_analysis(
     embeddings: np.ndarray,
     semantic_embedding_backend: str,
     distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
+    dispersion_weight: float = ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT,
 ) -> AcseClusterAnalysis:
     """Cluster one item's sample embeddings and report the ACSE diagnostics.
 
@@ -7261,7 +7262,16 @@ def acse_semantic_cluster_analysis(
     once, the cosine distance matrix is built once, and ``fit_predict`` runs
     once. Labels are renamed by descending cluster size, ties broken by the raw
     scikit-learn label, so ``cluster_0`` is always the dominant cluster.
+
+    ``dispersion_weight`` is the weight of the dispersion component in the
+    score (entropy weight ``1 - dispersion_weight``). It defaults to the
+    reported setting and exists so an offline sensitivity analysis can vary
+    the mixture without touching the module constant.
     """
+    if not 0.0 <= float(dispersion_weight) <= 1.0:
+        raise ValueError(
+            f"dispersion_weight must be in [0, 1], got {dispersion_weight!r}."
+        )
     matrix = normalize_embedding_rows(embeddings)
     sample_count = int(matrix.shape[0])
     if sample_count == 0:
@@ -7326,11 +7336,11 @@ def acse_semantic_cluster_analysis(
         1.0,
         max(mean_pairwise_distance, dominant_mean_distance) / dispersion_denominator,
     )
-    entropy_weight = 1.0 - ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT
+    entropy_weight = 1.0 - float(dispersion_weight)
     uncertainty_score = min(
         1.0,
         entropy_weight * float(cluster_entropy)
-        + ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT * dispersion_component,
+        + float(dispersion_weight) * dispersion_component,
     )
     if abs(uncertainty_score) < 1e-12:
         uncertainty_score = 0.0
@@ -7363,10 +7373,14 @@ def acse_semantic_diagnostics_from_embeddings(
     embeddings: np.ndarray,
     semantic_embedding_backend: str,
     distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
+    dispersion_weight: float = ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT,
 ) -> dict[str, Any]:
     """Diagnostics only; see ``acse_semantic_cluster_analysis``."""
     return acse_semantic_cluster_analysis(
-        embeddings, semantic_embedding_backend, distance_threshold
+        embeddings,
+        semantic_embedding_backend,
+        distance_threshold,
+        dispersion_weight=dispersion_weight,
     ).diagnostics
 
 
