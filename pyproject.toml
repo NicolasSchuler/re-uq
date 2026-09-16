@@ -1,6 +1,6 @@
 [project]
 name = "re-uq"
-version = "1.0.0"
+version = "2.0.0"
 description = "Command-first evaluation artifact for modality-conditioned uncertainty in LLM-assisted requirements engineering."
 readme = "README.md"
 license = { text = "MIT" }

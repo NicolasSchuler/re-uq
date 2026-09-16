@@ -1,12 +1,22 @@
 cff-version: 1.2.0
-message: "If you use this artifact, please cite it using the metadata below."
-title: "When Weak Intent Becomes a Requirement — evaluation artifact"
+message: "If you use this artifact, please cite it using the metadata below; cite the paper once it is published."
+title: "When Weak Intent Becomes a Requirement: replication package"
 type: software
-version: 1.0.0
-date-released: 2026-06-19
+version: 2.0.0
+date-released: 2026-09-16
 license: MIT
 repository-code: "https://github.com/NicolasSchuler/re-uq"
 url: "https://github.com/NicolasSchuler/re-uq"
+abstract: >-
+  Replication package for a study of whether large language models preserve
+  the modal force of requirements when extracting them, whether lightweight
+  uncertainty signals expose strengthening of weak stakeholder intent, and
+  whether output-based checks detect it. Contains the frozen prompts, the
+  benchmark, the campaign configuration, the analysis code, the paper tables
+  with provenance, and the figures; raw model outputs are archived in a
+  separate Zenodo dataset record.
+# identifiers (concept DOI, version DOI, dataset DOI) are added with the
+# v2.0.0 release; see CHANGELOG.md.
 authors:
   - family-names: Schuler
     given-names: Nicolas
@@ -23,3 +33,16 @@ keywords:
   - uncertainty quantification
   - modality
   - natural language processing
+preferred-citation:
+  type: article
+  title: "When Weak Intent Becomes a Requirement: Limits of Uncertainty Signals in LLM-Assisted Requirements Engineering"
+  journal: "Journal of Systems and Software"
+  year: 2026
+  status: submitted
+  authors:
+    - family-names: Schuler
+      given-names: Nicolas
+    - family-names: Scotti
+      given-names: Vincenzo
+    - family-names: Mirandola
+      given-names: Raffaela

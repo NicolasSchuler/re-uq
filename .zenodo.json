@@ -1,0 +1,13 @@
+{
+  "title": "When Weak Intent Becomes a Requirement: replication package",
+  "upload_type": "software",
+  "license": "MIT",
+  "creators": [
+    {"name": "Schuler, Nicolas", "affiliation": "Karlsruhe Institute of Technology (KIT)"},
+    {"name": "Scotti, Vincenzo", "affiliation": "Karlsruhe Institute of Technology (KIT)"},
+    {"name": "Mirandola, Raffaela", "affiliation": "Karlsruhe Institute of Technology (KIT)"}
+  ],
+  "description": "Replication package for a study of whether large language models preserve the modal force of requirements when extracting them, whether lightweight uncertainty signals expose strengthening of weak stakeholder intent, and whether output-based checks detect it. Contains the frozen prompts, the benchmark, the campaign configuration, the analysis code, the paper tables with provenance, and the figures. Raw model outputs are archived in a separate Zenodo dataset record.",
+  "keywords": ["requirements engineering", "large language models", "uncertainty quantification", "modality", "natural language processing"],
+  "related_identifiers": []
+}
