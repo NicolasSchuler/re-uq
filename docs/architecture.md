@@ -59,6 +59,8 @@ seed datasets   ---> | seed candidates (raw)   |
                 paper-facing artifacts in outputs/evaluation_<dataset>_<variant>_<run_id>/
 ```
 
+The cross-cell paper tables (`outputs/paper_*`) are then written by `scripts/export_paper_tables.py`, the manuscript's macro file by `scripts/export_paper_numbers.py`, and the ablation comparisons and figures by their own scripts; `scripts/rerun_all.py` drives the whole chain from `conf/rerun/final.yaml`.
+
 ## Tasks
 
 | Task | Role | Prompt | Output contract |
@@ -78,7 +80,7 @@ All current v2 prompts (`v2-conf01`, `v2-instructor-conf01`) return `confidence`
 - `verbalized_confidence` — the model's own self-reported probability.
 - `label_self_consistency`, `modality_consistency` — agreement across stochastic samples.
 - `predictive_entropy`, `variation_ratio` — distributional UQ over the same stochastic samples.
-- `acse_semantic_entropy` — ACSE-inspired semantic clustering over stochastic answer texts, currently a five-sample triage signal rather than a conformal decision rule. The default backend is deterministic TF-IDF; Apple Silicon runs can opt into `mlx-embeddings` with `RE_UQ_ACSE_EMBEDDING_BACKEND=mlx`.
+- `acse_semantic_entropy` — ACSE-inspired semantic clustering over stochastic answer texts, currently a five-sample triage signal rather than a conformal decision rule. The reported campaign used `mlx-embeddings` (`mlx-community/Qwen3-Embedding-0.6B-8bit`, `RE_UQ_ACSE_EMBEDDING_BACKEND=mlx`); the deterministic TF-IDF backend is the fallback default on machines without MLX.
 - `model_ensemble_disagreement` — only when two deterministic model outputs exist for the same item.
 - `token_logprob_confidence` — optional, gated on a provider logprob capability probe.
 

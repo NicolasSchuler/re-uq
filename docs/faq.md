@@ -40,11 +40,11 @@ Human validation is complete, as confirmed by the author on 2026-09-04, and will
 
 ## Are the prompts in `README.md` what the models actually received?
 
-Not literally. The frozen files in `prompts/` define the task contract, the label set, and the confidence contract, and the README reproduces them. But every real run sent a **batched** prompt built by `batch_prompt_for_completion_jobs` in `scripts/eval_utils.py`: 16 benchmark items per request, asking for an array of results keyed by `request_index`. The batched wrapper restates the same task and the same contract in a different surface form. All three batched prompt bodies are reproduced verbatim in [`docs/experimental_setup.md`](experimental_setup.md).
+Yes. Every request of the reported campaign carries one benchmark item rendered from the frozen file in `prompts/`, with no system message, so the file is the request body. The batched wrapper built by `batch_prompt_for_completion_jobs` in `scripts/eval_utils.py` (several items per request, an array of results keyed by `request_index`) was the delivery mode of the archived May campaign and is the request-composition ablation; its prompt bodies are reproduced in [`docs/experimental_setup.md`](experimental_setup.md).
 
-## Does batching bias the results?
+## Does sending several items per request change the results?
 
-Possibly, and we say so. Batches are consecutive request indices without shuffling, and benchmark rows are ordered seed x variant, so each Task 2 batch of 16 contained all four modality variants of the same four seeds side by side. The prompt asks for independent evaluation, but the minimal-pair contrast was in the context window. Contrastive context plausibly makes modality preservation *easier*, which would make the reported strengthening rates conservative — but that direction is an assumption. The shuffled-batch and `batch_size=1` ablations that would settle it are [`TODO.md`](../TODO.md) section A.
+It does, and the paper measures by how much. The request-composition ablation repeats deterministic Task 2 on one cell at 4 and 16 items per request, with the four conditions of a capability kept together or spread across requests, against a single-item reference, for eight models. For most models, several items per request lower the weak-intent strengthening rate by tens of percentage points, so single-item results do not transfer to batched use. The table is `outputs/batching_ablation_summary.md`.
 
 ## Does surrounding document context change the result?
 
@@ -54,9 +54,9 @@ That is what the document-context ablation measures. The `pure` cell takes 180 r
 
 Because it is a convention, not evidence. 11.5% of successful Task 2 outputs contain no modal at all (17.6% in the MUST cells, 5.5% in the SHALL cells). A bare `The system exports reports.` reads as an obligation to most RE practitioners, so the broad measure defaults it to mandatory; the strict measure refuses to guess and requires an explicit modal or a weak phrase. Both are reported, and any single number must say which one it uses. See [`docs/evaluation.md`](evaluation.md).
 
-## Why is the model cohort mostly one family?
+## Is the model cohort mostly one family?
 
-Five of the six official models are GLM variants on the z.ai endpoint; `kit.gemma4-31b-it` on the KIT institutional endpoint is the only outside model. That is a real limitation and is stated as one. New example profiles for OpenAI, Mistral, Gemini, and Ollama exist so the cohort can be widened; provider support is deliberately limited to OpenAI-compatible chat-completions endpoints, so any provider exposing one is a profile file away. Running them is [`TODO.md`](../TODO.md) section C.
+It is not: the reported campaign evaluates nine models from five independently developed families, two hosted GLM models and seven open-weight models served locally (see [`docs/experimental_setup.md`](experimental_setup.md) §5.1). The two hosted models share a developer, so every result is reported per model and conclusions are restricted to the evaluated models. Example profiles for OpenAI, Mistral, Gemini, and Ollama exist so the cohort can be widened further; provider support is deliberately limited to OpenAI-compatible chat-completions endpoints, so any provider exposing one is a profile file away.
 
 ## Can I reproduce the exact requests of the reported runs?
 

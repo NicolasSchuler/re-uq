@@ -137,11 +137,11 @@ differences are the third instruction line and the `context` values.
 ## 4. Running it
 
 ```bash
-# both arms, GLM half of the cohort (720 requests per arm per model)
+# both arms, hosted profile (720 requests per arm per model)
 .venv/bin/python scripts/run.py --multirun +experiment=context_ablation
-# both arms, non-GLM half
+# both arms, one local model
 .venv/bin/python scripts/run.py --multirun +experiment=context_ablation \
-  profile=kit_toolbox model=kit.gemma4-31b-it
+  profile=local_llama_cpp model=qwen3.5-9b
 # offline dry run of the wiring
 .venv/bin/python scripts/run.py --multirun +experiment=context_ablation \
   mode=smoke fake_completion=true smoke_items=4
@@ -157,7 +157,11 @@ tables (`scripts/export_paper_tables.py` gates on the run group). Each
 Hydra run writes its resolved config next to the logs and its digest into the
 registry `notes` column.
 
-## 5. The table (implemented; experimental results pending)
+## 5. The table
+
+Results for the eight models of the reported campaign are in
+`outputs/context_ablation_summary.md` (deltas with intervals in
+`outputs/context_ablation_summary_deltas.csv`).
 
 `scripts/compare_context_ablation.py` selects the latest complete, fully covered
 MUST run per `(model, item_context)` in the PURE context run group. The rerun

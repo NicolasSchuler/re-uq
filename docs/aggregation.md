@@ -37,9 +37,10 @@ The scoring unit is **one model answer for one benchmark item**.
   `score_base` (`scripts/eval_utils.py`, Section 9).
 - `batch_id` is the provider **request** the answer was decided in, forwarded
   from the raw record (`<run_id>:<model>:<task>:<sample_kind>:<sample_index>:<min>-<max>`).
-  Every archived run sent 16 items per request — four whole seeds x four source
-  conditions — so a request contains whole seeds and clustering by request
-  nests clustering by seed. It is the default bootstrap cluster, see Section 6.
+  In the archived May runs a request carried 16 items (four whole seeds x
+  four source conditions), so clustering by request nested clustering by
+  seed. In the reported single-item campaign a request is one item; the
+  intervals the manuscript reports cluster on the capability (Section 6).
   `sample_batch_ids` lists every contributing request, semicolon-joined; it
   equals `batch_id` for a deterministic row and names all five sample requests
   for a collapsed stochastic row (whose `batch_id` is its representative
@@ -181,25 +182,25 @@ phrase. The strict metric excludes exactly that basis
 Within one cell the cohort models are pooled by **concatenating their score
 rows**: every deterministic Task 2 answer is one unit, so a model contributes in
 proportion to the items it answered. There is no per-model macro step, and no
-model weighting. With a complete cohort run each of the 6 models contributes 720
-items, giving `n = 4320` answers and a coverage-adjusted denominator of
-`n_denominator <= 4320`.
+model weighting. With a complete cohort run each of the 9 models contributes 720
+items per cell, giving `n = 6480` answers per cell before coverage adjustment
+(the reported cells have 6176 to 6226 readable answers).
 
 The cohort is whatever the selected run group contains, narrowed by
 `--models`; the models an export actually pooled are recorded in
 `outputs/paper_snapshot_provenance.json` (`models_cohort`, split into
-`models_hosted` / `models_local`). The archived 2026-05 cohort was
-`glm-4.5-air`, `glm-4.7`, `glm-5`, `glm-5-turbo`, `glm-5.1`,
-`kit.gemma4-31b-it` (`export_paper_tables.ARCHIVED_COHORT`). Private `azure.*`
-rows are excluded (`--exclude-model-prefix azure.`), as are smoke runs and
-incompatible registry rows. The default exporter pins
-`run_group_id=provider-matrix-v2-2026-05`, the group every current config
-writes; the archived runs are `provider-matrix-2026-05` and are re-exported
-with `--run-group-id provider-matrix-2026-05 --models <the six above>`. It also
-requires exact Task 1+2 membership, the full benchmark, five stochastic
-samples, complete deterministic/stochastic coverage, batch size 16, and grouped
-batching. Historical paper rows have a blank `batch_order` field; that legacy
-blank is accepted only inside the pinned group with the other constraints.
+`models_hosted` / `models_local`). The reported cohort is the nine models of
+`conf/rerun/final.yaml` under run group `manuscript-final`, which the driver
+passes to the exporter together with the expected batch size (1), batch order
+and sample count. The archived 2026-05 cohort
+(`export_paper_tables.ARCHIVED_COHORT`, run group `provider-matrix-2026-05`,
+batch size 16) can still be re-exported by naming that group and those
+models. Private `azure.*` rows are excluded (`--exclude-model-prefix azure.`),
+as are smoke runs and incompatible registry rows. The exporter requires exact
+Task 1+2 membership, the full benchmark, five stochastic samples, complete
+deterministic/stochastic coverage, and the expected batch size and order.
+Archived paper rows have a blank `batch_order` field; that legacy blank is
+accepted only inside the archived group with the other constraints.
 When a model has several compatible runs in a cell, the most recent wins; the
 resolved run ids and compatibility settings are written to
 `outputs/paper_snapshot_provenance.json` by `export_tables`
@@ -221,9 +222,9 @@ cells) by `per_model_row` (`scripts/export_paper_tables.py:410`).
 
 - **pooled (item-weighted)**: `sum(per-cell numerators) / sum(per-cell
   coverage-adjusted denominators)`. For strict text strengthening that is
-  `1412 / 16448 = 0.0858`; for broad, `2268 / 16448 = 0.1379`.
+  `6459 / 24828 = 0.2601`; for broad, `6923 / 24828 = 0.2788`.
 - **macro-of-cells (unweighted)**: the arithmetic mean of the four per-cell
-  rates. Strict `0.0860`, broad `0.1386`.
+  rates. Strict `0.2602`, broad `0.2788`.
 
 The revised manuscript's rates are pooled over all four cells and the selected
 models. In particular, `numWeakStrict` and its numerator/denominator use
@@ -253,10 +254,14 @@ with no valid answers retain rows with zero eligible counts.
 All confidence intervals are **clustered nonparametric bootstraps**
 (`bootstrap_seed_metric`, `scripts/eval_utils.py`, Section 7):
 
-1. Group the score rows by the cluster field. The default is the provider
-   **request** (`batch_id`, `DEFAULT_BOOTSTRAP_CLUSTER_FIELD`), not the seed:
-   every archived run sent 16 items per request, so one request carries four
-   whole seeds x four source conditions. The item is not independent of its
+1. Group the score rows by the cluster field. Every tracked CSV names the
+   field it used in `ci_cluster_field`. For the reported single-item campaign
+   the primary interval clusters on the item (a request is one item) and the
+   second on the capability; the manuscript reports the capability-clustered
+   intervals. The archived runs clustered on the provider **request**
+   (`batch_id`, `DEFAULT_BOOTSTRAP_CLUSTER_FIELD`), not the seed: every
+   archived run sent 16 items per request, so one request carried four whole
+   seeds x four source conditions. The item is not independent of its
    seed (the four source-modality variants share a capability) and the seed is
    not independent of its request — strict text strengthening is all-or-none
    within each `(request, source condition)` group, and unreadable text

@@ -45,12 +45,12 @@ The equivalent raw commands, for when you need to change a flag:
 ```bash
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
-  --profile zai --model glm-5.1 --dataset mlm_tapt \
+  --profile zai --model glm-5.3 --dataset mlm_tapt \
   --task both --mode smoke --fake-completion
 
 .venv/bin/python scripts/run_task3_verification_from_config.py \
   --config run_configs/current_run.json \
-  --profile zai --model glm-5.1 --dataset mlm_tapt \
+  --profile zai --model glm-5.3 --dataset mlm_tapt \
   --source-run-id SMOKE_RUN_ID --audit-mode blind \
   --mode smoke --fake-completion --allow-partial-source
 
@@ -67,7 +67,7 @@ source completeness is checked against the full 720-item benchmark, and a smoke
 run only covers `smoke_items` per cell. `scripts/reproduce.sh smoke-fake-task3`
 passes the flag for you.
 
-`zai` / `glm-5.1` / `mlm_tapt` is only the default cell; no provider is contacted on this path. Override with `RE_UQ_PROFILE`, `RE_UQ_MODEL`, `RE_UQ_DATASET` (see [`docs/reproduction.md`](reproduction.md)).
+`zai` / `glm-5.3` / `mlm_tapt` is only the default cell; no provider is contacted on this path. Override with `RE_UQ_PROFILE`, `RE_UQ_MODEL`, `RE_UQ_DATASET` (see [`docs/reproduction.md`](reproduction.md)).
 
 ## Smoke Runs Stay In The Smoke Namespace
 
@@ -94,7 +94,7 @@ If any of the above fail, the pipeline plumbing has regressed. If they succeed, 
 ## What This Does **Not** Verify
 
 - Real provider response parsing, network failures, rate limits, or structured-output enforcement.
-- Batch fallback against a real model. Fake completions always parse.
+- Retry, truncation and structured-output behaviour against a real model. Fake completions always parse.
 - The strict coverage and provenance gates relaxed for a truncated smoke run.
 - Any scientific result. Fake completions contain no evidence about model behavior.
 - Human semantic validation. The author has completed it and will repeat it; see [validation review](validation_review.md).

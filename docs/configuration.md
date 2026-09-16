@@ -21,11 +21,11 @@ functions.
 ```bash
 uv sync --group dev                      # installs hydra-core
 # one cell
-.venv/bin/python scripts/run.py profile=zai model=glm-5.1 dataset=nice variant=must mode=full
+.venv/bin/python scripts/run.py profile=zai model=glm-5.3 dataset=nice variant=must mode=full
 # no credentials needed: synthesize completions locally into data/processed/smoke/
-.venv/bin/python scripts/run.py profile=zai model=glm-5.1 mode=smoke fake_completion=true
+.venv/bin/python scripts/run.py profile=zai model=glm-5.3 mode=smoke fake_completion=true
 # what would run, without contacting a provider
-.venv/bin/python scripts/run.py profile=zai model=glm-5.1 dry_run=true
+.venv/bin/python scripts/run.py profile=zai model=glm-5.3 dry_run=true
 # print the composed config and exit
 .venv/bin/python scripts/run.py profile=openai --cfg job
 ```
@@ -115,7 +115,7 @@ mode=full  task=task2  log_level=DEBUG  smoke_items=4
 `model=` is validated against the selected profile. A model id the profile does
 not list is rejected up front, with the profile's valid ids in the error, rather
 than being sent to an endpoint that does not serve it. Select the profile that
-owns the model first — `profile=kit_toolbox model=kit.gemma4-31b-it` — or leave
+owns the model first — `profile=local_llama_cpp model=qwen3.5-9b` — or leave
 `model` at `null` to run every model of the profile.
 
 `profile.batch_order=shuffled` is a *constrained* shuffle: it never places two
@@ -128,7 +128,7 @@ Example — the batching ablation arm for one cell:
 
 ```bash
 .venv/bin/python scripts/run.py \
-  profile=zai model=glm-5.1 dataset=mlm_tapt variant=must \
+  profile=zai model=glm-5.3 dataset=mlm_tapt variant=must \
   task=task2 sampling=deterministic_only profile.batch_order=shuffled mode=full
 ```
 
@@ -140,7 +140,7 @@ against a rate-limited provider:
 
 ```bash
 .venv/bin/python scripts/run.py --multirun \
-  profile=zai model=glm-5.1,glm-4.7 dataset=nice,mlm_tapt variant=must,shall \
+  profile=zai model=glm-5.3,glm-5.3-flash dataset=nice,mlm_tapt variant=must,shall \
   fake_completion=true mode=smoke
 ```
 
@@ -169,7 +169,7 @@ applied last and opted into with a leading `+`:
 
 | Preset | What it pins |
 | --- | --- |
-| `paper_cohort` | Official cohort: `profile=zai`, all five GLM models (`glm-4.5-air,glm-4.7,glm-5,glm-5-turbo,glm-5.1`), datasets `nice,mlm_tapt`, both variants `must,shall`, Task 1 + Task 2, `mode=full`. The one non-GLM official model lives on `profile=kit_toolbox` and runs as a separate invocation (see the file header). |
+| `paper_cohort` | Hosted half of the reported cohort on the Hydra path: `profile=zai`, `glm-5.3,glm-5.3-flash`, datasets `nice,mlm_tapt`, both variants `must,shall`, Task 1 + Task 2, `mode=full`. The reported campaign itself was driven by `scripts/rerun_all.py` with `conf/rerun/final.yaml`, which also covers the seven local models. |
 | `batching_ablation` | `mlm_tapt`/`must`, deterministic Task 2. Grouped size sweep 1, 4, 16; the file header gives the separate sibling-separated sweep at sizes 4 and 16. `conf/rerun/final.yaml` schedules all five distinct arms. Single-item is the final reference; archive comparisons use `--baseline-arm grouped`. |
 | `context_ablation` | `pure`/`must`, deterministic Task 2, one item per request, sweeping `item_context=bare,document`. Separate group `context-manuscript-final`; old PURE outputs remain historical after capability corrections. See [`context_ablation.md`](context_ablation.md). |
 | `diverse_families` | [`TODO.md`](../TODO.md) section C: `openai`, `mistral`, `google_gemini`, `ollama_local`, every model of each profile, both datasets, variant `must`. All OpenAI-compatible endpoints; adding a family without one is out of scope. |

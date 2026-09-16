@@ -1,65 +1,96 @@
 # Results Mapping
 
-This document maps each generated analysis artifact to the paper element it backs. The intent is to give a reviewer a direct trail from any numeric or visual claim to the artifact, the run, the prompts, and the seeds that produced it.
+This page maps each element of the paper to the artifact behind it, the script
+that wrote it, and the inputs it was computed from, so a reviewer can follow
+any number or figure back to hashed inputs. All artifacts below are the
+`manuscript-final` campaign; run ids and input hashes are in
+`outputs/paper_snapshot_provenance.json` and `outputs/rerun/manuscript-final/state.json`.
 
-All paths below are relative to the analysis output directory `outputs/evaluation_<dataset>_<variant>_<run_id>/` produced by `scripts/generate_evaluation_analysis.py`. Cross-cell paper tables are written separately by `scripts/export_paper_tables.py` (see `outputs/README.md` and [`docs/aggregation.md`](aggregation.md)). By default that exporter also re-derives each per-cell snapshot next to the shipped one as `*_regenerated.csv`, so the two can be diffed without destroying the original; pass `--overwrite-snapshots` only when you intend to replace them. The shipped snapshots currently match their regenerated counterparts bit for bit.
+## Tracked cross-cell artifacts (the paper's numbers)
 
-`scripts/aggregate_paper_headline_metrics.py` re-derives the headline aggregates and accepts `--regenerate-snapshots`, `--models`, `--cell`, and `--bootstrap-samples` for scoping a check to one model or one dataset x variant cell.
-Checked root-level metric snapshots and legacy external-probe reports are diagnostic/stale unless `outputs/README.md` marks them paper-ready and their provenance checks pass.
+| Paper element | Artifact | Written by | Computed from |
+| --- | --- | --- | --- |
+| Every number the text prints (`\num...` macros) | `outputs/paper_numbers.tex` | `scripts/export_paper_numbers.py --strict` | the tables below; the file header lists their SHA-256 |
+| RQ1 to RQ3 tables, per model and pooled | `outputs/paper_per_model_rq_table.csv` / `.md` | `scripts/export_paper_tables.py` | deterministic and sampled Task 2 rows, Task 1 rows and blind Task 3 rows of the selected run ids |
+| Model x source-modality table | `outputs/paper_per_model_modality_pooled.csv` / `.md` (per cell: `paper_per_model_modality_table.csv` / `.md`) | `scripts/export_paper_tables.py` | same |
+| Per-model strict and broad strengthening with intervals | `outputs/paper_per_model_headline.csv` / `.md` | `scripts/export_paper_tables.py` | same |
+| Pooled headline rates and intervals | `outputs/paper_headline_metrics.csv`, `outputs/paper_headline_bootstrap_ci.csv` | `scripts/aggregate_paper_headline_metrics.py`, `scripts/export_paper_tables.py` | the per-cell snapshots `paper_task2_text_drift_metrics.csv` and `paper_text_drift_confidence_and_stability.csv` |
+| Commitment-transition figure (RQ1) | `outputs/rerun/figures/commitment_transitions.tex`; counts in `outputs/commitment_transition_counts.csv`, denominators in `commitment_transition_accounting.csv` | `scripts/export_commitment_transitions.py` | deterministic Task 2 rows of the frozen cells |
+| Request-composition ablation | `outputs/batching_ablation_summary.csv` / `.md`, deltas with intervals in `_deltas.csv`, provenance in `_provenance.json` | `scripts/compare_batching_ablation.py` | the arms' run ids recorded in the campaign state |
+| Document-context ablation | `outputs/context_ablation_summary.csv` / `.md`, `_deltas.csv`, `_provenance.json` | `scripts/compare_context_ablation.py` | same |
+| Phrasing ablation | `outputs/weak_modality_probe/<run>/weak_modality_probe_summary.csv` / `.md`, `weak_modality_text_deltas.csv` (nine runs) | `scripts/run_weak_modality_probe.py` | the probe runs' raw rows |
+| Ablation figure | `outputs/rerun/figures/ablation_deltas.pdf` / `.png` | `scripts/plot_ablation_deltas.py` | the two `_deltas.csv` files and the nine `weak_modality_text_deltas.csv` |
+| Embedding classifier (RQ3) and its figure | `outputs/embedding_diagnostic/probe_grid_summary.csv` / `.md`, folds in `probe_grid_folds.csv`; `outputs/rerun/figures/embedding_diagnostic.pdf`, supplement `embedding_diagnostic_tsne_supp.pdf` | `scripts/diagnose_embedding_separability.py`, `scripts/plot_embedding_diagnostic_figure_v2.py`, `scripts/plot_embedding_diagnostic_tsne_supp.py` | the embedding caches named in `outputs/rerun/acse_selected_manifest.csv` |
+| Meaning-variation sensitivity appendix | `outputs/meaning_variation_sensitivity/grid_auroc.csv`, `cluster_diagnostics.csv`, `reproduction_check.csv`, `cohort_accounting.csv`, `settings.json` | `scripts/meaning_variation_sensitivity.py` | the same embedding caches and `paper_per_model_rq_table.csv` |
+| Run selection and input hashes | `outputs/paper_snapshot_provenance.json` | `scripts/export_paper_tables.py` | registries, raw store, benchmark CSVs |
+| Modality template inventory | `outputs/modality_template_inventory.csv` / `.md` | `eval_utils.write_main_modality_template_inventory` | static; described in [`docs/experimental_setup.md`](experimental_setup.md) |
 
-## Headline Paper Elements
+## Per-cell analysis artifacts (regenerable; in the Zenodo dataset record)
 
-| Paper element | Backing artifact(s) | Backed by which UQ rows |
-| --- | --- | --- |
-| **Primary results table** (per-model × per-task × per-UQ-method metrics: accuracy, Brier, ECE, AUROC, weak-strengthening rate, generated-text over-commitment, and high-confidence over-commitment at p≥0.80 and p≥0.90) | `paper_results_table.md`, `metrics_summary.csv`, `metrics_summary.md` | `uq_scores.csv` |
-| **ACSE-inspired semantic triage calibration** (normalized semantic-dispersion scores plus empirical accepted-error/coverage thresholds) | `acse_semantic_normalized_scores.csv`, `acse_semantic_calibration.csv`, `acse_semantic_calibration.md` | `uq_scores.csv` rows where `uq_method=acse_semantic_entropy` |
-| **Modality-conditioned Task 1 figure** (Task 1 `p(yes)` by source modality) | `task1_p_yes_by_modality.svg` | `uq_scores.csv`, Task 1 subset |
-| **Bootstrap CIs around headline risks** (95% percentile CIs, per model × task × UQ method, for accuracy and Brier; plus, at p≥0.80 and p≥0.90: Task 1 unsupported-mandatory acceptance rate, and Task 2 high-confidence over-commitment, weak-strengthening, and label-correct text-overcommitment rates; `*_ci_*` cluster on the provider request, `*_seed_ci_*` on the seed) | `bootstrap_seed_ci.csv`, `bootstrap_seed_ci.md` | request-clustered resamples over `uq_scores.csv`, see [`aggregation.md`](aggregation.md) §6 |
-| **Qualitative over-commitment examples** (illustrative cases of high-confidence strengthening) | `qualitative_overcommitment_examples.csv`, `qualitative_overcommitment_examples.md` | Task 2 rows with label or generated-text strengthening and `confidence ≥ 0.80` |
-| **UQ method inventory** (compact table of UQ methods, their input signal, and where they apply) | `uq_method_inventory.csv`, `uq_method_inventory.md` | static — generated from the survey-aligned taxonomy in `eval_utils.py` |
-| **Reviewer trail** (which seeds, prompts, benchmark CSV, raw JSONL, registry rows produced these numbers) | `provenance_manifest.json` | SHA-256 of every input artifact |
-| **Modality template inventory** (all four main conditions, the `SHALL` swap, the four weak probe templates) | `outputs/modality_template_inventory.csv` / `.md` | static — generated by `eval_utils.write_main_modality_template_inventory`; described in [`docs/experimental_setup.md`](experimental_setup.md) |
-| **Per-model modality breakdown** (per model x cell x source condition: strict/broad strengthening, high-confidence share, coverage, answer length) | `outputs/paper_per_model_modality_table.csv` / `.md` | written by `scripts/export_paper_tables.py` |
-| **Manuscript Table 5** (model x source modality, strict and broad rows with counts and intervals) | `outputs/paper_per_model_modality_pooled.csv` / `.md` | pooled from the underlying answers by `scripts/export_paper_tables.py`; intervals are recomputed across cells |
-| **Per-model headline rates** (one row per model, with request-clustered 95% CIs on strict and broad strengthening and the seed-clustered pair as `*_seed_ci_*`) | `outputs/paper_per_model_headline.csv` / `.md` | written by `scripts/export_paper_tables.py` |
-| **Headline bootstrap CIs** (pooled strict/broad intervals behind the README numbers, request-clustered with `seed_ci_low` / `seed_ci_high` alongside) | `outputs/paper_headline_bootstrap_ci.csv` | written by `scripts/export_paper_tables.py` |
-| **Snapshot provenance** (contributing run ids, input SHA-256 hashes, aggregation mode, exporter version) | `outputs/paper_snapshot_provenance.json` | written by `scripts/export_paper_tables.py` |
-| **Manuscript number macros** (every value the paper prints, as `\newcommand{\num...}` lines, including the per-model Table 3 body) | `outputs/paper_numbers.tex`, or `manuscript/numbers.tex` with `--output` | written by `scripts/export_paper_numbers.py --strict` from the paper CSVs above; header records the generation time, exporter version and input SHA-256 hashes. Seed and item counts are cross-checked against `outputs/benchmark_manifest*.json`, so a seed missing from every model in every cell is reported instead of silently shrinking the reported totals |
-| **Result notes template** (paper observation/hypothesis/recommendation/open-question scaffolding) | `result_notes_template.md` | human-curated after artifact inspection |
+`scripts/generate_evaluation_analysis.py` writes one directory per cell and
+run, `outputs/evaluation_<dataset>_<variant>_<run_id>/`. These directories are
+not tracked; `scripts/rerun_all.py --config conf/rerun/final.yaml --only analysis`
+regenerates them from the raw store.
 
-## Robustness And Diagnostics
+| Artifact | Content |
+| --- | --- |
+| `uq_scores.csv` | One row per model, task, item and uncertainty method: the rows every table above is computed from |
+| `metrics_summary.csv` / `.md`, `paper_results_table.md` | Per model x task x method metrics of that cell |
+| `bootstrap_seed_ci.csv` / `.md` | Clustered bootstrap intervals of that cell |
+| `acse_semantic_calibration.csv` / `.md`, `acse_semantic_normalized_scores.csv` | Meaning-variation scores and calibration |
+| `task1_p_yes_by_modality.svg` | Task 1 acceptance by source modality |
+| `qualitative_overcommitment_examples.csv` / `.md` | Illustrative high-confidence strengthening cases |
+| `uq_method_inventory.csv` / `.md` | The uncertainty methods and their input signals |
+| `provenance_manifest.json` | SHA-256 of every input the cell analysis read |
+| `acse_semantic_mlx_*/` | The embedding cache the classifier and the sensitivity grid read |
+
+## Robustness and diagnostics
 
 | Element | Artifact | Notes |
 | --- | --- | --- |
-| Blind Task 3 text audit | rows tagged `task=task3` and `task3_audit_mode=blind` in `uq_scores.csv`; metrics rows in `metrics_summary.csv` | Diagnostic only; never replaces Task 2 outputs. Legacy declared-modality rows are anchored ablations, not official Task 3. |
-| `SHALL` robustness variant | regenerate analysis with `--variant shall`; outputs go to a parallel `outputs/evaluation_<dataset>_shall_<run_id>/` directory. | `SHALL` is not the headline; use only in robustness section. |
-| Prompt-sensitivity (Task 1 / Task 2) | `outputs/prompt_sensitivity_summary.csv`, `outputs/task2_prompt_sensitivity_summary.csv` | Pre-existing, written by the runner; not regenerated by the analysis script. |
-| Weak-modality robustness probe | `outputs/weak_modality_probe/<run_id>/weak_modality_probe_summary*.csv` / `.md` | One directory per probe run, written by `scripts/run_weak_modality_probe.py`. |
-| External AI service probe (blind, no API access required by reviewer) | `outputs/external_ai_service_probe/` | Diagnostic unless the individual report passes the current confidence-scale contract and is marked paper-ready. |
+| Blind Task 3 preservation check | rows tagged `task=task3` and `task3_audit_mode=blind` in `uq_scores.csv`; pooled in `paper_per_model_rq_table.csv` | Diagnostic; never replaces Task 2 outputs. Declared-modality rows are anchored ablations. |
+| `SHALL` wording variant | the `*_shall` cells of every table | Reported alongside `MUST` and pooled into the headline cells. |
+| Prompt-wording sensitivity (May pilot) | `outputs/archive/2026-05-grouped-cohort/prompt_sensitivity_summary.csv`, `task2_prompt_sensitivity_summary.csv` | Archived campaign; not cited by the revised manuscript. |
+| External chat-service probe (May) | `outputs/archive/2026-05-grouped-cohort/external_ai_service_probe/` | Archived campaign; not cited by the revised manuscript. |
 
-## Construct Validity Gate
+## Construct validity gate
 
-Weak-intent paper claims (`nice_to_have` results) are gated on a completed two-reviewer construct-validity table:
+Weak-intent paper claims (`nice_to_have` results) are gated on a completed
+construct-validity table:
 
 - Input: `docs/weak_modality_construct_review.csv`
 - Pass condition: every weak template is marked weaker than `SHOULD/recommended` by both reviewer slots.
 - The analysis script refuses to write paper-facing artifacts if this gate is incomplete unless `--skip-construct-review-check` is set (for diagnostic local runs only).
 
-Human validation is complete, as confirmed by the author on 2026-09-04, and will be repeated before submission. The original LLM-assisted judgments remain separately identified. See [validation review](validation_review.md) for the scope and the wording checks' limitations; no independent two-human agreement is claimed.
+Human validation is complete, as confirmed by the author on 2026-09-04, and
+will be repeated before submission. The original LLM-assisted judgments remain
+separately identified. See [validation review](validation_review.md) for the
+scope and the wording checks' limitations; no independent two-human agreement
+is claimed.
 
-## Confidence-Scale Contract
+## Confidence-scale contract
 
-Every paper-facing claim depends on the v2 confidence contract: `confidence ∈ [0.0, 1.0]`, prompt version in `{v2-conf01, v2-instructor-conf01}`, raw records tagged `confidence_scale=0_1`. The analysis script fails closed if it encounters mixed-scale rows.
+Every paper-facing claim depends on the v2 confidence contract:
+`confidence ∈ [0.0, 1.0]`, prompt version in `{v2-conf01, v2-instructor-conf01}`,
+raw records tagged `confidence_scale=0_1`. The analysis script fails closed if
+it encounters mixed-scale rows.
 
-## Tracing A Single Number Back To Its Source
+## Tracing a single number back to its source
 
-Given a cell in `paper_results_table.md`:
+Given a macro in `outputs/paper_numbers.tex`:
 
-1. Find the same `(model, task, uq_method)` row in `metrics_summary.csv`.
-2. Find the underlying per-item rows in `uq_scores.csv` with the matching `model` and `task`.
-3. From `uq_scores.csv`, each row references an `item_id` and a `run_id`. (The benchmark item key is named `item_id` everywhere in the code and the CSVs; there is no `benchmark_id` column.)
-4. The matching raw model output is the row in `data/processed/model_outputs_raw*.jsonl` with the same `item_id`, `run_id`, and `task`.
-5. The matching benchmark item (capability, source modality, prompt) is the row in `data/processed/benchmark_items*.csv` with the same `item_id`.
-6. The matching prompt SHA-256 and seed list are recorded in `provenance_manifest.json` (analysis dir) and `outputs/benchmark_manifest*.json` (benchmark construction).
+1. Its comment names the scope; the README's Source column names the CSV.
+   Open the row for the model and cell (`model=all`, `dataset=all` is the
+   pooled row) in `outputs/paper_per_model_rq_table.csv` or the CSV named.
+2. `outputs/paper_snapshot_provenance.json` lists, for that model and cell,
+   the `run_id` and the SHA-256 of the registry, raw store and benchmark CSV
+   that were read.
+3. In the Zenodo bundle, `data/processed/model_outputs_raw*.parquet` holds the
+   raw answers of that `run_id`, and `data/processed/logs/<run_id>.transcript.jsonl`
+   the exact request and response bodies.
+4. The benchmark item (capability, source condition, prompt) is the row in
+   `data/processed/benchmark_items*.csv` with the same `item_id`; its prompt
+   hash and seed list are in `outputs/benchmark_manifest*.json`.
 
-Every paper-facing number therefore has a short, verifiable chain back to a hashed input.
+Every paper-facing number therefore has a short, verifiable chain back to a
+hashed input.

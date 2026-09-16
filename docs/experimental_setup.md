@@ -2,17 +2,20 @@
 
 This page states the complete experimental setup. The setup is part of the
 result: the numbers in the paper hold for these items, these prompts, this
-batching policy, and this model cohort. Read it before citing any figure.
+request protocol, and this model cohort. Read it before citing any figure.
 
-**Protocol update, 2026-09-11:** numerical snapshots and archived-cohort sections
-below describe historical grouped runs. The new final campaign uses one item
-per request and five stochastic samples plus one deterministic answer, with
-sizes 4 and 16 as grouped/sibling-separated ablations. Revised PURE data has an
-AI-assisted source review. Local models now use task-specific JSON-schema
-decoding; reference-free extractions are audited but excluded from automatic
-audit correctness scores. The [generation qualification](internal/generation_qualification_2026-09-11.md)
-documents the formatting comparison and failure accounting. Current settings and launch gates are documented in
-[final-run readiness](internal/final_run_readiness.md); old results are not relabeled.
+**Which campaign this page describes.** The reported results are the
+`manuscript-final` campaign of 11 to 16 September 2026: nine models, one item
+per request, one deterministic and five sampled answers per item, request
+seeds sent and the served model recorded, task-specific JSON-schema decoding
+for the local models, and an AI-assisted source review of the PURE cell.
+Reference-free extractions are audited but excluded from automatic audit
+correctness scores. The original submission's campaign (May 2026, six models,
+sixteen items per request) is referred to below as the *archived* campaign;
+its summaries are under `outputs/archive/2026-05-grouped-cohort/` and are not
+relabelled. The [generation qualification](internal/generation_qualification_2026-09-11.md)
+documents the formatting comparison and failure accounting behind the local
+profile; the launch gates are in [final-run readiness](internal/final_run_readiness.md).
 
 Related pages: [`docs/evaluation.md`](evaluation.md) (metric definitions),
 [`docs/aggregation.md`](aggregation.md) (how per-cell numbers are pooled into
@@ -32,7 +35,8 @@ headline numbers), [`docs/reproduction.md`](reproduction.md) (commands),
 | Variants | `MUST` (main), `SHALL` (robustness). |
 | Tasks | Task 1 entailment control, Task 2 extraction (main), Task 3 blind audit (diagnostic). |
 | Sampling | 1 deterministic sample at temperature 0.0; 5 stochastic samples at temperature 0.7. |
-| Delivery | Batched prompts, 16 benchmark items per request (see §4). |
+| Delivery | One benchmark item per request; 4 and 16 items per request are the request-composition ablation (see §4). |
+| Provenance per response | Request seed sent; served model identifier, request and response bodies, and resolved settings recorded (§6). |
 
 ## 2. Benchmark Construction
 
@@ -137,14 +141,15 @@ There are two layers:
 
 | Layer | Where | Used by |
 | --- | --- | --- |
-| Single-item prompt | `prompts/*.txt`, rendered by `prompt_for_benchmark_task` | The frozen task contract; the wording the batched wrapper restates. |
-| Batched wrapper | `batch_prompt_for_completion_jobs` in `scripts/eval_utils.py` | **Every real run in this repository.** |
+| Single-item prompt | `prompts/*.txt`, rendered by `prompt_for_benchmark_task` | **Every request of the reported campaign**, and the single-item reference arm of the request-composition ablation. |
+| Batched wrapper | `batch_prompt_for_completion_jobs` in `scripts/eval_utils.py` | The 4- and 16-item arms of the request-composition ablation, and the archived May campaign. |
 
 The single-item files define the task contract, the label set, and the
-confidence contract. The batched wrapper is what was actually sent. The two
-agree on task, labels, and confidence scale; they differ in surface form,
-because the wrapper carries several items at once and asks for an array of
-results keyed by `request_index`.
+confidence contract, and they are the request body of the reported runs. The
+batched wrapper restates them for several items at once and asks for an array
+of results keyed by `request_index`; the two agree on task, labels, and
+confidence scale and differ in surface form. The wrapper bodies below are
+reproduced because the ablation and the archived campaign sent them.
 
 ### 3.1 Batched prompt, Task 2 (verbatim)
 
@@ -220,13 +225,26 @@ Items:
 In the declared-modality Task 3 ablations, each item additionally carries
 `declared_extracted_modality` or `declared_source_modality`.
 
-No system message is sent. The batch prompt is the entire user message.
+No system message is sent on either path; the prompt is the entire user message.
 
-## 4. Batching Policy And Its Confound
+## 4. Request Composition: The Reported Protocol And The Ablation
 
-| Property | Value in the reported runs |
+Every request of the reported campaign carries **one** benchmark item. The
+request-composition ablation repeats the deterministic Task 2 pass on the
+MLM-TAPT/MUST cell at 4 and 16 items per request, either keeping the four
+source conditions of a capability in one request (grouped) or spreading them
+across requests (sibling-separated), against a fresh single-item reference,
+for GLM-5.3 and the seven local models. The comparison table is
+`outputs/batching_ablation_summary.md`; the paper reports that several items
+per request lower the weak-intent strengthening rate by tens of percentage
+points for most models, so single-item results do not transfer to batched use.
+
+The rest of this section records the batching policy of the **archived** May
+2026 campaign, whose numbers are not the paper's.
+
+| Property | Value in the archived runs |
 | --- | --- |
-| Items per request | 16 (Task 1, Task 2, and Task 3) in every official-cohort run. A handful of early `glm-5.1` registry rows used 8; they are not part of the reported cells. |
+| Items per request | 16 (Task 1, Task 2, and Task 3) in every archived-cohort run. A handful of early registry rows used 8; they are not part of any reported cell. |
 | Batch membership | Consecutive `request_index` values, no shuffling. |
 | Benchmark row order | seed × variant: the four conditions of one seed are adjacent. |
 | Consequence | Every Task 2 batch of 16 contains all four modality variants (`MUST`, `SHOULD`, `MAY`, `It would be useful if …`) of the same four seeds, side by side. |
@@ -234,9 +252,9 @@ No system message is sent. The batch prompt is the entire user message.
 | Batch id | `run_id:model:task:sample_kind:sample_index:<min>-<max> request index`. |
 | Fallback | **None on the path the reported runs used** (see below). Single-item re-sends now exist on every path. |
 
-**The batch fallback did not exist for the reported runs.** Only the Instructor
+**The batch fallback did not exist for the archived runs.** Only the Instructor
 path re-sent the items of an unparsable batch as single-item requests. The raw
-`response_format: {"type": "json_object"}` path — the one every official run
+`response_format: {"type": "json_object"}` path — the one every archived run
 took — wrote a `missing_batch_result` row per affected item and never re-sent
 it. Across the four cells that is 1, 1, 0 and 16 Task 1 deterministic rows and
 48, 65, 60 and 51 Task 1 stochastic rows, plus 95 Task 2 stochastic rows in
@@ -246,21 +264,15 @@ stochastic stability metrics lose the listed items, which are excluded rather
 than counted (§7). The raw path now falls back to single-item requests as well,
 so from this change onward the fallback applies to every path.
 
-**This is a known confound.** The prompt instructs the model to evaluate each
-item independently, but the model can see the minimal-pair contrast inside its
-own context window. Contrastive context plausibly makes modality preservation
-*easier* (the four strengths are visible next to each other), so the reported
-strengthening rates are, if anything, conservative — but the direction is an
-assumption, not a measurement. Nothing in this repository isolates the
-per-item behaviour of a model that sees one statement at a time.
+**Why it mattered.** The prompt instructs the model to evaluate each item
+independently, but a batched model sees the minimal-pair contrast inside its
+own context window. The reported campaign removes the confound by sending one
+item per request; the ablation measures its size.
 
-`batch_order` is now a knob, settable per profile or run-wide, with values
-`grouped` (what every reported run used) and `shuffled`. Combined with
-`batch_size: 1`, that lets grouped, shuffled, and single-item delivery be
-compared on the same items (see [`TODO.md`](../TODO.md), section A). The
-resolved value is recorded in the run registry column `batch_order`. Until
-those ablations are run, every number in the paper must be read as "under
-grouped 16-item batching".
+`batch_order` is a knob, settable per profile or run-wide, with values
+`grouped` (the archived policy and one ablation arm) and `shuffled`; together
+with `batch_size` it defines the ablation arms. The resolved value is recorded
+in the run registry column `batch_order`.
 
 `shuffled` is a **constrained** shuffle: it never places two source variants of
 one seed in the same batch, and it is derived deterministically from the
@@ -276,22 +288,41 @@ protocol; see [final-run readiness](internal/final_run_readiness.md).
 
 ## 5. Model Cohort And Request Parameters
 
-### 5.1 Official cohort
+### 5.1 Cohort
 
-| Model | Endpoint | Notes |
-| --- | --- | --- |
-| `glm-4.5-air` | z.ai (`https://api.z.ai/api/...`) | |
-| `glm-4.7` | z.ai | |
-| `glm-5` | z.ai | |
-| `glm-5-turbo` | z.ai | |
-| `glm-5.1` | z.ai | Main model for smoke/first-pass documentation examples. |
-| `kit.gemma4-31b-it` | KIT institutional endpoint (`kit_toolbox` profile, `https://ki-toolbox.scc.kit.edu/api/v1`) | The only non-GLM model in the cohort, and the highest strict-strengthening rate at 16.9%. |
+Nine models from five independently developed families: two hosted GLM models
+on the Z.AI coding endpoint (`conf/profile/zai.yaml`) and seven open-weight
+models served by llama.cpp (`conf/profile/local_llama_cpp.yaml`; build b10900,
+Unsloth GGUF repositories, UD-Q4_K_XL quantisation, one NVIDIA RTX 6000 Pro).
+
+| Model | Request model id | Repository | Thinking |
+| --- | --- | --- | --- |
+| GLM-5.3 | `glm-5.3` | hosted | disabled |
+| GLM-5.3-Flash | `glm-5.3-flash` | hosted | disabled |
+| Qwen3.8-27B | `qwen3.8-27b` | `Qwen3.8-27B-GGUF` | off |
+| Qwen3.6-27B | `qwen3.6-27b` | `Qwen3.6-27B-GGUF` | off |
+| Qwen3.5-9B | `qwen3.5-9b` | `Qwen3.5-9B-GGUF` | off |
+| Gemma-4-31B | `gemma4-31b-it` | `gemma-4-31B-it-GGUF` | off |
+| Gemma-4-12B | `gemma4-12b-it` | `gemma-4-12B-it-qat-GGUF` | off |
+| Muse-Glimmer-30B | `muse-glimmer-30b` | `Muse-Glimmer-30B-GGUF` | low effort |
+| gpt-oss-20B | `gpt-oss-20b` | `gpt-oss-20b-GGUF` | low effort |
+
+The two hosted models share a developer, so every result is reported per model
+and conclusions are restricted to the evaluated models and conditions. The
+Z.AI coding endpoint answers requests for older GLM ids with these two served
+models (recorded in `served_model`), which is why only the two served ids are
+configured.
+
+What is recorded to identify the model and the request, as asked for in
+review: the served model identifier and `system_fingerprint` per response,
+the request seed, the full request and response bodies in the transcripts,
+the resolved profile settings, and the fact that no system prompt, tools,
+memory, or conversation history are used (§6). Recorded seeds do not make
+local outputs byte-identical under concurrent serving (§5.2.1).
 
 `azure.*` rows may exist in local registries. They are private-endpoint
 diagnostics and are excluded from every paper-facing aggregate
 (`--exclude-model-prefix azure.` in `scripts/compare_run_matrix.py`).
-
-Five of the six official models are from one family (GLM). See §11.
 
 ### 5.2 Request parameters
 
@@ -300,16 +331,16 @@ Five of the six official models are from one family (GLM). See §11.
 | `temperature` | 0.0 | 0.7 |
 | `top_p` | 1.0 | 1.0 |
 | Samples per item | 1 | 5 |
-| `max_tokens` | 256 per item, scaled by batch size | same |
-| JSON mode | `response_format: {"type": "json_object"}` | same |
+| `max_tokens` | 256 per item hosted, 1024 per item local | same |
+| Output format | hosted: `response_format: {"type": "json_object"}`; local: the task's JSON schema (`structured_output: json_schema`) | same |
 | System prompt | none | none |
-| `seed` | **not sent** in the reported runs | **not sent** |
-| Retries | the OpenAI SDK client's built-in default of 2 silent internal retries — up to 3 HTTP attempts per batch, none of them recorded | same |
+| `seed` | 20260518, sent (`send_seed: true`) | seed+1 to seed+5 for the five repetitions, sent |
+| Retries | `call_with_retries`: up to 3 attempts on 408/429/5xx, timeouts and connection errors, each recorded (`retry_count`); SDK-internal retries disabled | same |
 
-The reported runs had **no** application-level retry layer. The OpenAI SDK
+The archived runs had **no** application-level retry layer. The OpenAI SDK
 client was constructed with its default `max_retries=2`, which silently retries
 408/409/429/5xx responses and connection errors, so a batch could be sent up to
-three times without any record of it. Going forward the SDK's internal retries
+three times without any record of it. In the reported campaign the SDK's internal retries
 are disabled (`max_retries=0`) and `call_with_retries` is the only retry layer:
 3 attempts, retrying transient 408/429/5xx, timeouts and connection errors, and failing
 fast on 400/401/403/404/422 and every other 4xx. Native output-format HTTP 500
@@ -317,7 +348,7 @@ rejections are generated failures, not transient errors: they remain failed
 samples and are not replaced during ordinary resume. `retry_count` and
 `retry_total` are now recorded for batched rows as well (see §6).
 
-Going forward these are explicit profile knobs: `seed`, `send_seed`,
+These are explicit profile knobs: `seed`, `send_seed`,
 `max_retries`, and `batch_order`; `seed` and `batch_order` can also be set
 run-wide. `send_seed` exists because some OpenAI-compatible layers accept and
 silently ignore `seed` — the `google_gemini` example profile sets
@@ -330,9 +361,9 @@ such an endpoint are out of scope.
 
 The z.ai profile additionally sends
 `extra_body: {"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}}`.
-The `local_llama_cpp` example profile now uses `structured_output: json_schema`
-without the legacy `json_mode` flag; the institutional profile also uses
-`json_schema`. Historical unconstrained local runs keep their recorded settings.
+The `local_llama_cpp` profile uses `structured_output: json_schema` without the
+legacy `json_mode` flag, as the reported local runs did; the earlier
+unconstrained local smoke runs keep their recorded settings.
 
 ### 5.2.1 Local llama.cpp server (September 2026 cohort)
 
@@ -387,42 +418,24 @@ runs.
 
 ### 5.3 Configuration provenance
 
-The configs committed with the first release **could not have produced the
-cohort**. This is now fixed, and the discrepancies are recorded here so nobody
-reads the old files as the provenance record:
+The reported campaign is fully described by `conf/rerun/final.yaml` and the
+two profiles it names, as tracked, except that the local profile's endpoint
+address is a placeholder (`base_url`; see `outputs/README.md`).
+`outputs/rerun/manuscript-final/state.json` records the resolved configuration
+and every run id; `outputs/paper_snapshot_provenance.json` names the run each
+table pooled per model and cell.
 
-| What the committed configs said | What the runs actually used |
-| --- | --- |
-| `kit.gemma4-31b-it` under `institutional_llm` | registry profile `kit_toolbox`, base URL `https://ki-toolbox.scc.kit.edu/api/v1`, `json_object`, batch 16 |
-| `zai` listing 3 GLM models | all five GLM models of the cohort |
-| `batch_size: 8` on every profile | 16 in every official-cohort run (§4) |
-| `paper_cohort` preset sweeping 3 models, `must` only | all five GLM models and both benchmark variants |
-
-That repair restored the historical cohort settings at the time. Current
-`run_configs/full_matrix.example.json` and `conf/profile/` have since changed:
-all defaults use size 1, the hosted list contains two served IDs, and the local
-profile contains seven models. These files are not the archived run settings.
-
-**Labels differ from the archived runs; prompts do not.** The official raw rows
-carry `prompt_version "v1"` (under the output contract `prompt_v2_confidence_0_1`)
-and `run_group_id provider-matrix-2026-05`, whereas the current configs label
-runs `v2-conf01` and `provider-matrix-v2-2026-05`. The prompt text itself is
-unchanged: the batch prompt hashes recorded in the raw rows match the current
-`batch_prompt_for_completion_jobs` output for 45/45 `glm-5.1` Task 2
-deterministic batches in every one of the four cells. A rerun from the current
-configs no longer reproduces the archive's request composition or model list.
-The prompt-hash agreement above describes the inspected historical batched
-payloads, not a guarantee that current defaults send identical requests.
-
-Local registries also contain `complete` rows dated 2026-05-21 whose raw rows
-were later removed. They are stale bookkeeping, not results; the exporter now
-refuses a chosen run that has no raw rows, and the rows should be pruned
-([`TODO.md`](../TODO.md), section E).
+The archived May campaign (run group `provider-matrix-2026-05`, prompt
+version `v1` under the output contract `prompt_v2_confidence_0_1`) predates
+that discipline: the configs of the first release could not have produced it,
+its registries still hold `complete` rows whose raw rows were removed later,
+and its prompt text was verified only by hash against the batched builder. Its
+summaries are archived and not cited by the revised manuscript.
 
 ## 6. What Is Recorded Per Response
 
 Raw records are written to `data/processed/model_outputs_raw*.jsonl`
-(local-only; see [`docs/repository_hygiene.md`](repository_hygiene.md)).
+(local-only, archived in the Zenodo dataset record; see [`docs/repository_hygiene.md`](repository_hygiene.md)).
 
 | Field group | In the reported runs | Added after this change |
 | --- | --- | --- |
@@ -443,7 +456,7 @@ are written to `data/processed/logs/<run_id>.log`.
 
 **Batched-path caveat on the added fields.** The new provenance fields were at
 first written correctly only on the single-item path. On the batched path —
-which is every official run and every rerun at the default batch size — the
+the archived runs and the 4- and 16-item ablation arms — the
 writer dropped the driver's `retry_count`, `request_seed` and
 `request_payload_sha`, so `retry_count` read 0 on every batched row whatever
 had actually happened, and the `request_payload_sha` that was recorded came
@@ -453,9 +466,9 @@ seed, and `request_payload_sha` hashes the batch payload. As with everything
 else in this column, the fix applies to runs made from this change onward;
 already-written raw rows keep the old values.
 
-The gap that matters for reproducibility: the reported runs recorded the
+The gap that mattered for the archived campaign: those runs recorded the
 **requested** model string, not the **served** model version, and sent no
-request seed. Both are fixed going forward, but the existing raw outputs cannot
+request seed. Both are recorded in the reported campaign, but the archived raw outputs cannot
 be re-derived. Any rerun should therefore be treated as a new run, not as a
 verification of the old one (see [`TODO.md`](../TODO.md), section F).
 
@@ -570,14 +583,17 @@ strict strengthening — see `scripts/diagnose_embedding_separability.py`.
    [`context_ablation.md`](context_ablation.md)); its numbers are reported
    separately and never pooled into the headline cells. The fuller extension
    remains [`TODO.md`](../TODO.md), section B.
-3. **Grouped batching.** All reported numbers are under 16-item grouped batches
-   that contain the minimal-pair contrast (§4). The ablation that would bound
-   this effect has not been run.
-4. **Model-family concentration.** Five of the six official models are GLM
-   variants from one provider. `kit.gemma4-31b-it` is the only outside model.
-   Cross-family generalisation is not established.
-5. **Provenance gaps in the existing runs.** No request seed was sent and no
-   served model version was recorded, so an exact rerun cannot be verified.
+3. **Request composition.** The reported numbers are single-item. The
+   ablation (§4) shows that 4 and 16 items per request lower weak-intent
+   strengthening by tens of percentage points for most models, so they do not
+   transfer to batched use; batched deployments need their own measurement.
+4. **Model families.** Nine models from five families, two of them hosted by
+   one developer; every result is reported per model and conclusions are
+   restricted to the evaluated models and conditions.
+5. **Provenance of local generation.** Request seeds are sent and the served
+   model is recorded, but recorded seeds do not make local outputs
+   byte-identical under concurrent serving (§5.2.1); an exact replay is not
+   guaranteed.
 6. **Construct review completed by the author.** The original LLM-assisted
    judgments remain labelled separately; see `docs/validation_review.md`. The
    operational ordering still does not establish intent in arbitrary contexts.

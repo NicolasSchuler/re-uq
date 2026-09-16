@@ -2,7 +2,7 @@
 
 This repository supports a short empirical study of modality-conditioned uncertainty in LLM-assisted requirements engineering. The evaluation asks whether a model preserves stakeholder commitment when the functional capability is held constant and only the source modality changes.
 
-This page defines the constructs, tasks, signals, and metrics. The operational setup — seeds, filters, template inventory, prompts as actually sent, batching, model cohort, request parameters, and limitations — is in [`docs/experimental_setup.md`](experimental_setup.md). How per-cell metrics are pooled into headline numbers is in [`docs/aggregation.md`](aggregation.md).
+This page defines the constructs, tasks, signals, and metrics. The operational setup — seeds, filters, template inventory, prompts as sent, request protocol, model cohort, request parameters, and limitations — is in [`docs/experimental_setup.md`](experimental_setup.md). How per-cell metrics are pooled into headline numbers is in [`docs/aggregation.md`](aggregation.md).
 
 ## Research Focus
 
@@ -43,11 +43,9 @@ Human validation is complete, as confirmed by the author on 2026-09-04, and will
 
 The full template inventory, including the `SHALL` swap and the four weak-intent phrasing-probe templates, is exported to `outputs/modality_template_inventory.csv` / `.md` by `eval_utils.write_main_modality_template_inventory`.
 
-## Batching
+## Request composition
 
-All reported runs sent batched prompts: **16 benchmark items per request**, built by `batch_prompt_for_completion_jobs` in `scripts/eval_utils.py`, for Task 1, Task 2, and Task 3 alike. Batches are consecutive request indices with no shuffling, and benchmark rows are ordered seed x variant, so each Task 2 batch contained all four modality variants of the same four seeds side by side. The batch prompt instructs the model to evaluate each item independently, but the minimal-pair contrast was visible inside its context window.
-
-Treat this as a confound on every rate reported here, not as an implementation detail. `max_tokens` is 256 per item scaled by batch size; if a batch response fails to parse, the affected items are re-sent individually. The `batch_order: grouped|shuffled` knob and a `batch_size=1` run exist to bound the effect; see [`docs/experimental_setup.md`](experimental_setup.md) and [`TODO.md`](../TODO.md). A separate `item_context: bare|document` knob shows a Task 2 item inside its document context; it applies only to the `pure` ablation cell ([`context_ablation.md`](context_ablation.md)) and never to the numbers here. That ablation's `document − bare` deltas use a paired cluster bootstrap (`bootstrap_seed_metric_delta`): rows are paired by seed, one resample of *requests* is drawn per iteration, both arms are evaluated on the seeds those requests carry, then differenced. Because 16 items — four whole seeds — shared every request, the request is the coarser unit and the batching confound above is exactly what it clusters on; see [`aggregation.md`](aggregation.md) §6.
+Every request of the reported campaign carries one benchmark item (`batch_size: 1`), so a model never sees two conditions of the same capability together. The request-composition ablation repeats deterministic Task 2 at 4 and 16 items per request, grouped or sibling-separated, against a single-item reference; its table is `outputs/batching_ablation_summary.md` and its design is in [`docs/experimental_setup.md`](experimental_setup.md) §4. `max_tokens` is 256 per item on the hosted profile and 1024 on the local one; an answer that still fails to parse after the retry budget is a failed answer, reported separately. A separate `item_context: bare|document` knob shows a Task 2 item inside its document context; it applies only to the `pure` ablation cell ([`context_ablation.md`](context_ablation.md)) and never to the numbers here. That ablation's `document − bare` deltas use a paired cluster bootstrap (`bootstrap_seed_metric_delta`; see [`aggregation.md`](aggregation.md) §6).
 
 ## Tasks
 
@@ -157,19 +155,19 @@ Report bootstrap confidence intervals over seeds for accuracy, Brier score, unsu
 
 ### Agreement-metric guard
 
-Repeated-sample agreement and unanimity summaries are restricted to stochastic rows marked `stochastic_complete` (`valid_n == total_n`, i.e. all five samples parsed). Items with a partially parsed stochastic group are excluded, not counted as agreeing. Without this guard a run with parse failures would report inflated agreement, because a group that survived with a single valid sample is trivially unanimous. The reported 100% repeated-sample agreement is a statement about complete groups only.
+Repeated-sample agreement and unanimity summaries are restricted to stochastic rows marked `stochastic_complete` (`valid_n == total_n`, i.e. all five samples parsed). Items with a partially parsed stochastic group are excluded, not counted as agreeing. Without this guard a run with parse failures would report inflated agreement, because a group that survived with a single valid sample is trivially unanimous. The reported repeated-sample agreement is a statement about complete groups only.
 
 Aggregation across the four dataset x variant cells (pooled vs macro-of-cells, denominators, CI construction) is specified in [`docs/aggregation.md`](aggregation.md).
 
 ## Run Protocol
 
-Use the provider-aware CLI for reproducible Task 1 and Task 2 provider/model matrices. Examples use the canonical cell defined in [`docs/reproduction.md`](reproduction.md) (`zai` / `glm-5.1` / `mlm_tapt` / `must` / blind Task 3), which is also the default cell of `scripts/reproduce.sh`. Override it with `RE_UQ_PROFILE`, `RE_UQ_MODEL`, `RE_UQ_DATASET`, and `RE_UQ_VARIANT`; note that the default points at a paid endpoint.
+Use the provider-aware CLI for reproducible Task 1 and Task 2 provider/model matrices. Examples use the canonical cell defined in [`docs/reproduction.md`](reproduction.md) (`zai` / `glm-5.3` / `mlm_tapt` / `must` / blind Task 3), which is also the default cell of `scripts/reproduce.sh`. Override it with `RE_UQ_PROFILE`, `RE_UQ_MODEL`, `RE_UQ_DATASET`, and `RE_UQ_VARIANT`; note that the default points at a paid endpoint.
 
 ```bash
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-5.1 \
+  --model glm-5.3 \
   --dataset mlm_tapt \
   --mode smoke
 ```
@@ -182,7 +180,7 @@ Task 3 should run only after a complete Task 2 full run:
 .venv/bin/python scripts/run_task3_verification_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-5.1 \
+  --model glm-5.3 \
   --dataset mlm_tapt \
   --source-run-id RUN_ID \
   --audit-mode blind \
@@ -217,13 +215,13 @@ Old reports generated with `0-100` confidence are legacy diagnostics and should 
 
 ## Paper-Readiness Checklist
 
-Before using results in the IST manuscript:
+Before using results in the manuscript:
 
 - inspect the reviewed seed files and benchmark item CSVs;
 - verify the weak-intent construct review;
 - run smoke checks for every provider/profile;
 - run a clean full matrix after the confidence-scale fix;
-- confirm parse success, missing-batch handling, and run registry completeness;
+- confirm parse success, failed-answer accounting, and run registry completeness;
 - recompute metrics from the current raw outputs;
 - inspect bootstrap CIs, qualitative examples, and generated figures;
 - regenerate the paper tables with `scripts/export_paper_tables.py` and check that every quoted number matches the regenerated table and its stated aggregation scope.

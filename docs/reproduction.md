@@ -23,10 +23,11 @@ export ZAI_API_KEY=...            # 1. credentials
 export LLAMA_API_KEY=...
 $EDITOR conf/profile/local_llama_cpp.yaml   # 2. local base_url + models
 $EDITOR conf/profile/zai.yaml               #    hosted models
-.venv/bin/python scripts/rerun_all.py       # 3. run
+.venv/bin/python scripts/rerun_all.py --config conf/rerun/final.yaml   # 3. run
 ```
 
-`conf/rerun/default.yaml` says which profiles are the official cohort, which
+`conf/rerun/final.yaml` (the reported campaign; `default.yaml` is the driver's
+built-in default) says which profiles are the official cohort, which
 are reported separately as local, and which models carry the ablations.
 Everything else about a run stays in `conf/profile/<id>.yaml`.
 
@@ -82,7 +83,8 @@ embedding results. `--dry-run` needs no API keys and writes no state.
 | Goal | Command |
 | --- | --- |
 | One-time env setup | `uv sync --group dev --locked` |
-| Full rerun (everything) | `.venv/bin/python scripts/rerun_all.py` (see above) |
+| Full rerun (everything) | `.venv/bin/python scripts/rerun_all.py --config conf/rerun/final.yaml` (see above) |
+| Re-derive every table from the archived raw outputs | unpack the Zenodo dataset record at the repository root, then `.venv/bin/python scripts/rerun_all.py --config conf/rerun/final.yaml --only analysis` (Apple Silicon for the embedding steps) |
 | Sanity-check pipeline without API access | `bash scripts/reproduce.sh smoke-fake` (uses `--fake-completion`) |
 | Fake-completion Task 3 smoke | `bash scripts/reproduce.sh smoke-fake-task3` |
 | Fake-completion analysis smoke | `bash scripts/reproduce.sh smoke-fake-analysis` |
@@ -94,9 +96,9 @@ embedding results. `--dry-run` needs no API keys and writes no state.
 | Compare completed cells | `.venv/bin/python scripts/compare_run_matrix.py --config run_configs/current_run.json --dataset mlm_tapt` |
 | Document-context ablation table | `.venv/bin/python scripts/compare_context_ablation.py` (after `+experiment=context_ablation`; see [`context_ablation.md`](context_ablation.md)) |
 | Batching ablation table | `.venv/bin/python scripts/compare_batching_ablation.py` (after the three `+experiment=batching_ablation` arms) |
-| Weak-phrasing probe | `.venv/bin/python scripts/run_weak_modality_probe.py --config run_configs/current_run.json --profile zai --model glm-5.1 --dataset nice --mode full` |
+| Weak-phrasing probe | `.venv/bin/python scripts/run_weak_modality_probe.py --config run_configs/current_run.json --profile zai --model glm-5.3 --dataset nice --mode full` |
 | Resolve Task 3 source runs | `.venv/bin/python scripts/task3_sources.py --config run_configs/current_run.json` |
-| Export cross-cell paper tables | `.venv/bin/python scripts/export_paper_tables.py` (selects the rerun group `modality-rerun-2026-09`; add `--run-group-id provider-matrix-2026-05 --models glm-4.5-air glm-4.7 glm-5 glm-5-turbo glm-5.1 kit.gemma4-31b-it` for the archived runs) |
+| Export cross-cell paper tables | `.venv/bin/python scripts/export_paper_tables.py` (the driver passes `--run-group-id manuscript-final` and the nine models; the archived May runs are `--run-group-id provider-matrix-2026-05` with the six models in `export_paper_tables.ARCHIVED_COHORT`) |
 | Recompute request- and seed-clustered CIs without touching `outputs/` | `.venv/bin/python scripts/export_paper_tables.py --output-dir /tmp/reuq-cluster-ci` (see §6) |
 | Regenerate the manuscript's number macros | `.venv/bin/python scripts/export_paper_numbers.py --strict` (add `--output manuscript/numbers.tex` to write the paper; the default writes `outputs/paper_numbers.tex` and prints a macro-level diff). `--strict` refuses to write when a macro would carry a non-finite value or a consistency check disagrees, so the manuscript never receives a `nan` |
 | Print the Task 3 queue without running it | `TASK3_DRY_RUN=1 bash scripts/enqueue_task3_runs.sh` |
@@ -111,7 +113,7 @@ Every command example on this page and in [`docs/evaluation.md`](evaluation.md) 
 | Field | Value |
 | --- | --- |
 | Profile | `zai` |
-| Model | `glm-5.1` |
+| Model | `glm-5.3` |
 | Dataset | `mlm_tapt` |
 | Variant | `must` |
 | Task 3 audit mode | `blind` |
@@ -122,7 +124,7 @@ These are also the defaults built into `scripts/reproduce.sh`. **The default cel
 | --- | --- | --- |
 | `RE_UQ_CONFIG` | `run_configs/current_run.json` | Run config path. |
 | `RE_UQ_PROFILE` | `zai` | Provider profile id. |
-| `RE_UQ_MODEL` | `glm-5.1` | Model id. |
+| `RE_UQ_MODEL` | `glm-5.3` | Model id. |
 | `RE_UQ_DATASET` | `mlm_tapt` | `nice` or `mlm_tapt`. |
 | `RE_UQ_VARIANT` | `must` | `must` or `shall`. |
 
@@ -154,17 +156,14 @@ Edit `run_configs/current_run.json` for the provider, model, endpoint, concurren
 
 The tracked example configs define Task 1 and Task 2 as the primary benchmark tasks. Task 3 is run separately after a complete Task 2 run.
 
-**The rerun protocol differs from the archived runs.** The
-configs shipped with the first release could not have produced the cohort
-(`kit.gemma4-31b-it` ran under a `kit_toolbox` profile, not `institutional_llm`;
-the `zai` profile listed 3 of the 5 GLM models; every profile said
-`batch_size: 8` where the runs used 16). That is fixed, but the run labels still
-differ: the archived raw rows carry `prompt_version "v1"` and `run_group_id
-provider-matrix-2026-05`, while the current configs write `v2-conf01` and
-`modality-rerun-2026-09`. The prompt text is unchanged — the batch prompt
-hashes in the archived rows match the current builder — so treat the difference
-as bookkeeping for the old prompt-version change only. The new rerun also
-sends reproducible, distinct seeds for stochastic repetitions, persists
+**The reported campaign versus the archived runs.** The reported campaign
+(`manuscript-final`, September 2026) is fully described by
+`conf/rerun/final.yaml` and the two profiles it names, and every run id is in
+`outputs/rerun/manuscript-final/state.json`. The archived May runs (run group
+`provider-matrix-2026-05`, prompt version `v1`, sixteen items per request)
+were produced from configs the first release did not ship faithfully; their
+raw rows remain in the raw store for the record. The reported campaign sends
+reproducible, distinct seeds for stochastic repetitions, persists the
 embedding configuration, and records complete requests and responses.
 The deterministic request uses the configured seed; stochastic repetition
 indices 0–4 use seed+1 through seed+5. Provider support for seeds remains
@@ -179,7 +178,7 @@ Smoke test one provider/model/dataset cell:
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-5.1 \
+  --model glm-5.3 \
   --dataset mlm_tapt \
   --task both \
   --mode smoke
@@ -191,7 +190,7 @@ Run the full Task 1 + Task 2 cell after smoke checks pass:
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-5.1 \
+  --model glm-5.3 \
   --dataset mlm_tapt \
   --task both \
   --mode full
@@ -203,7 +202,7 @@ Run one task at a time when isolating failures:
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-5.1 \
+  --model glm-5.3 \
   --dataset mlm_tapt \
   --task task1 \
   --mode full
@@ -213,7 +212,7 @@ Run one task at a time when isolating failures:
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-5.1 \
+  --model glm-5.3 \
   --dataset mlm_tapt \
   --task task2 \
   --mode full
@@ -226,7 +225,7 @@ started with:
 .venv/bin/python scripts/run_experiment_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-5.1 \
+  --model glm-5.3 \
   --dataset mlm_tapt \
   --task task2 \
   --mode resume \
@@ -265,7 +264,7 @@ Monitor a live run:
 .venv/bin/python scripts/show_run_progress.py \
   --dataset mlm_tapt \
   --run-id RUN_ID \
-  --model glm-5.1 \
+  --model glm-5.3 \
   --profile zai \
   --watch 30
 ```
@@ -293,7 +292,7 @@ Smoke test Task 3 against a complete Task 2 source run:
 .venv/bin/python scripts/run_task3_verification_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-5.1 \
+  --model glm-5.3 \
   --dataset mlm_tapt \
   --source-run-id RUN_ID \
   --audit-mode blind \
@@ -306,7 +305,7 @@ Run the full Task 3 diagnostic:
 .venv/bin/python scripts/run_task3_verification_from_config.py \
   --config run_configs/current_run.json \
   --profile zai \
-  --model glm-5.1 \
+  --model glm-5.3 \
   --dataset mlm_tapt \
   --source-run-id RUN_ID \
   --audit-mode blind \
@@ -401,17 +400,23 @@ snapshots, point the exporter at a scratch directory:
 column -s, -t < /tmp/reuq-cluster-ci/paper_headline_bootstrap_ci.csv
 ```
 
-`paper_headline_bootstrap_ci.csv` carries `ci_low` / `ci_high`
-(request-clustered), `seed_ci_low` / `seed_ci_high`, and `ci_cluster_field`;
-`paper_per_model_headline.csv` carries the same pair per model. Both take about
-2.5 minutes over the four paper cells at 1000 resamples. On the archived cohort
-(6 models x 4 cells, 16448 readable Task 2 rows, 1080 request clusters,
-RNG seed `20260518`) the pooled strict strengthening reproduces as:
+`paper_headline_bootstrap_ci.csv` carries `ci_low` / `ci_high` (clustered on
+`ci_cluster_field`, the item under single-item requests), `seed_ci_low` /
+`seed_ci_high` (clustered on the capability, the intervals the manuscript
+reports), and `n_numerator` / `n_denominator`; `paper_per_model_headline.csv`
+carries the same pair per model. On the reported cohort (9 models x 4 cells,
+24,828 readable Task 2 answers, RNG seed `20260518`, 1000 resamples) the
+tracked file reads:
 
-| Metric | Point | Request-clustered 95% CI | Seed-clustered 95% CI |
+| Metric | Point | Item-clustered 95% CI | Capability-clustered 95% CI |
 | --- | --- | --- | --- |
-| Strict text strengthening | 8.58% (1412/16448) | [7.75%, 9.52%] | [8.17%, 9.00%] |
-| Broad text strengthening | 13.79% (2268/16448) | [12.43%, 15.21%] | [13.17%, 14.41%] |
+| Strict text strengthening | 26.01% (6459/24828) | [23.74%, 28.27%] | [25.88%, 26.17%] |
+| Broad text strengthening | 27.88% (6923/24828) | [25.65%, 30.05%] | [27.64%, 28.17%] |
+
+The archived May cohort (6 models x 4 cells, 16,448 readable rows, 1080
+request clusters) reproduced as strict 8.58% (1412/16448) and broad 13.79%
+(2268/16448) with request-clustered intervals [7.75%, 9.52%] and
+[12.43%, 15.21%]; see `outputs/archive/2026-05-grouped-cohort/`.
 
 Nothing is written under `outputs/`, so this is safe to run against a clean
 checkout. Drop `--output-dir` only when you intend to regenerate the shipped
@@ -450,8 +455,8 @@ Environment variables recognised by the runners and the wrapper:
 | `seed` | profile and run | Request seed for reproducibility. |
 | `send_seed` | profile | Whether the seed is actually put on the wire. Set `false` for providers whose OpenAI-compatible layer ignores it. |
 | `max_retries` | profile | Request retry budget. |
-| `batch_order` | profile and run | `grouped` (consecutive request indices, the policy of every reported run) or `shuffled` — a constrained shuffle that never places two source variants of one seed in the same batch, derived deterministically from the run seed and stable across resume (the ablation; see [`TODO.md`](../TODO.md) section A). |
-| `batch_size` | profile | Benchmark items per request. 16 in every official-cohort run; `1` gives true single-item delivery. |
+| `batch_order` | profile and run | `grouped` (consecutive request indices; the archived policy and one ablation arm) or `shuffled` — a constrained shuffle that never places two source variants of one seed in the same batch, derived deterministically from the run seed and stable across resume (the ablation; see [`TODO.md`](../TODO.md) section A). |
+| `batch_size` | profile | Benchmark items per request. `1` in the reported campaign; 4 and 16 in the request-composition ablation; 16 in the archived runs. |
 | `item_context` | run | `bare` (every reported run) or `document` — Task 2 items are shown with their document, section, author marker and neighbouring requirements. Only the `pure` dataset carries that context; see [`context_ablation.md`](context_ablation.md). |
 
 ### Example Provider Profiles
@@ -513,3 +518,44 @@ git diff --check
 CI runs the same suite and prints the coverage report without enforcing a threshold; treat a coverage drop as a review signal, not as a gate.
 
 Also inspect generated figures and tables manually. A figure or table is not paper-ready until its labels, clipping, row counts, and claim support have been checked.
+
+## 11. Script Index
+
+Every file under `scripts/`, in one line each; the docstring of each file says
+more.
+
+| Script | Role |
+| --- | --- |
+| `rerun_all.py` | The one-command driver: cohort generation, blind audits, ablations, then every analysis step, from a `conf/rerun/*.yaml` plan. |
+| `run.py` | Hydra entry point for the Task 1/2/3 runners (`conf/` composition). |
+| `run_experiment_from_config.py` | Task 1 and Task 2 provider-matrix runs from a JSON run config. |
+| `run_task3_verification_from_config.py` | The blind Task 3 preservation check over a completed Task 2 run. |
+| `run_weak_modality_probe.py` | The weak-phrasing probe: four weak templates over the benchmark capabilities. |
+| `runner_args.py`, `runner_lifecycle.py` | The argument contract and the execute-cell lifecycle the two runners share. |
+| `run_provenance.py` | Provenance helpers shared by the JSON and Hydra entry points. |
+| `run_transcripts.py` | Per-request transcripts: what was sent and what came back. |
+| `hydra_bridge.py` | Bridge between the Hydra `conf/` composition and the JSON run-config dictionary. |
+| `task3_sources.py` | Which Task 2 run each Task 3 audit should read. |
+| `enqueue_task3_runs.sh` | Queue blind Task 3 runs for completed Task 1/2 source runs. |
+| `show_run_progress.py` | Read-only progress reporter for a live run. |
+| `compact_raw_store.py` | Compact append-only raw JSONL into its Parquet sibling. |
+| `structured_outputs.py` | Pydantic response models for the strict structured-output paths. |
+| `build_pure_benchmark.py` | Build the `pure` document-context ablation dataset. |
+| `export_benchmark_ground_truth.py` | Write `docs/benchmark_ground_truth.md` from the template code. |
+| `populate_notebooks.py` | Generate the stripped companion notebooks. |
+| `generate_evaluation_analysis.py` | Per-cell analysis: UQ scores, metrics, intervals, examples, provenance manifest. |
+| `compute_acse_semantic_artifacts.py` | Compute and cache the sample embeddings and item-level meaning-variation rows per run. |
+| `export_paper_tables.py` | The cross-cell paper tables and the snapshot provenance. |
+| `aggregate_paper_headline_metrics.py` | The pooled headline rates the README quotes. |
+| `export_paper_numbers.py` | The manuscript's `numbers.tex` macro file from the paper tables. |
+| `export_commitment_transitions.py`, `commitment_transition_figure.py` | Commitment-transition counts and the TikZ figure that renders them. |
+| `compare_batching_ablation.py`, `compare_context_ablation.py` | The request-composition and document-context ablation tables with paired intervals. |
+| `compare_run_matrix.py` | Summarise completed runs of a run group (operational overview). |
+| `meaning_variation_sensitivity.py` | The threshold x weight sensitivity grid of the meaning-variation score (appendix). |
+| `diagnose_embedding_separability.py`, `probe_acse_embedding_separability.py` | The held-out embedding classifier grid and its baseline probe. |
+| `plot_embedding_diagnostic_figure_v2.py`, `plot_embedding_diagnostic_tsne_supp.py` | The embedding-diagnostic figure and its t-SNE supplement; `plot_embedding_diagnostic_figure.py` is the superseded first version. |
+| `plot_ablation_deltas.py` | The ablation-delta figure (batching, context, phrasing side by side). |
+| `plot_acse_embedding_visualizations.py`, `plot_acse_global_embedding_projection.py` | Inspection projections of the cached embeddings (not in the paper). |
+| `evaluate_external_ai_probe.py`, `export_external_ai_probe.py` | The archived May 2026 external chat-service probe: input bundle and scoring. |
+| `eval_utils.py` | The shared module behind all of the above (configuration, paths, prompts, parsing, scoring, exports). |
+| `reproduce.sh` | Thin wrapper with the canonical subcommands (`smoke-fake-all`, `full`, `task3`, `analysis`, `verify`). |

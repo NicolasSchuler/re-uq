@@ -12,6 +12,7 @@ This project is a research-engineering artifact: Git should preserve code, promp
 ## Artifact policy
 
 - Track durable inputs and curated artifacts: prompts, stripped notebooks, tests, benchmark item CSVs, selected/reviewed seed files, benchmark manifests, final seed documents, and compact paper-facing summaries.
+- Track the tables the manuscript's numbers are generated from (`outputs/paper_*`, the provenance JSON, ablation summaries, probe summaries, figures) under the explicit allow-list in `.gitignore`; promote a new campaign's files deliberately, run by run.
 - Keep raw and run-level outputs out of Git by default: `model_outputs_raw*.jsonl`, run registries/progress files, `uq_scores*.csv`, Task 3 item CSVs, provider matrix current-run configs, generated `outputs/evaluation_*` directories, and scratch files under `tmp/`.
 - If a generated output becomes paper-facing, promote it deliberately in a small commit whose message explains why it belongs in the repository.
 - Remove accidental tracked generated files with `git rm --cached <path>` so the local file is preserved.
@@ -43,9 +44,11 @@ The first command should be empty except for intentional tracked edits. The igno
 Before tagging or archiving a publication artifact:
 
 - Confirm `README.md`, `docs/experimental_setup.md`, `docs/evaluation.md`, `docs/reproduction.md`, and `docs/results_mapping.md` agree on Task 1/2 as the primary experiment and Task 3 as a diagnostic, and on the canonical example cell.
-- Confirm `docs/experimental_setup.md` still matches the code it describes: templates, batch size and order, request parameters, and recorded raw fields.
+- Confirm `docs/experimental_setup.md` still matches the code it describes: templates, request composition, request parameters, and recorded raw fields.
 - Run the command-first reproduction path in `docs/reproduction.md` or document exactly which provider cells could not be rerun.
 - Complete `docs/weak_modality_construct_review.csv` before making weak-intent paper claims.
 - Generate final analysis with `scripts/generate_evaluation_analysis.py` and inspect the exported table, figure, qualitative examples, and provenance manifest.
 - Audit tracked files with `git ls-files` and ignored local outputs with `git status --ignored --short` before committing curated artifacts.
 - Treat raw JSONL outputs as local reproducibility evidence unless there is a deliberate archival reason to promote them.
+- Run `tests/test_docs_links.py` and `tests/test_readme_numbers.py` (part of the suite): every relative link must resolve and every number in `README.md` must come from a tracked table.
+- Tag the release, let the Zenodo integration archive it, upload the raw bundle as a dataset record, and record both DOIs in `CITATION.cff` and `README.md`.
