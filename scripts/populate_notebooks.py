@@ -921,7 +921,7 @@ def notebook_03() -> list[nbf.NotebookNode]:
             print()
             print("Copy run_configs/full_matrix.example.json to run_configs/current_run.json and edit it for the provider/model matrix.")
             print("For llama.cpp, start the server with one model, then pass --model for that loaded model.")
-            print("Set batch_size in the selected provider profile to reduce API calls while preserving one JSONL row per item/sample.")
+            print("The final campaign sends one item per request (batch_size 1); larger batch sizes are the request-composition ablation, not a way to save API calls.")
             """
         ),
         md("## Configure Run"),
@@ -1499,7 +1499,7 @@ def notebook_05() -> list[nbf.NotebookNode]:
             """
             # 05 Analyze and Export Results
 
-            Objective: export the compact table, one figure, and a short observation template for the IST manuscript.
+            Objective: export the compact table, one figure, and a short observation template for the JSS manuscript.
             """
         ),
         code(COMMON_SETUP),
@@ -1596,7 +1596,7 @@ def notebook_05() -> list[nbf.NotebookNode]:
         code(
             r"""
             notes = [
-                "# Result Notes for IST Manuscript",
+                "# Result Notes for JSS Manuscript",
                 "",
                 "Fill this file after inspecting the metric table and figure.",
                 "",
