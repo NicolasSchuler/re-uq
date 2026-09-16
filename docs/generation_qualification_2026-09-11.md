@@ -148,7 +148,7 @@ by these diagnostics were closed on completion.
 
 Hosted qualification is pending: the approval guard blocked sending selected
 NICE/PURE prompts to `api.z.ai`. No hosted requests were made in this follow-up.
-The user supplied the remote `.zshenv` location for `ZAI_API_KEY`; credentials
+The author supplied the location of `ZAI_API_KEY` on the GPU host; credentials
 are read only in memory and are never included in transcripts or saved profiles.
 Explicit payload/destination approval remains necessary. The cap is 192 logical
 requests per hosted model. The full manuscript campaign has not been launched.

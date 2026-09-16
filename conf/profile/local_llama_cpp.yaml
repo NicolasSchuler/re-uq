@@ -4,7 +4,9 @@
 # environment variable that carries the key.
 profile_id: "local_llama_cpp"
 provider_id: "llama_cpp"
-base_url: "http://141.3.52.248:9292/v1"
+# Your llama.cpp / llama-swap server. The campaign used a lab GPU host; set
+# the address here or export RE_UQ_LOCAL_LLAMA_CPP_BASE_URL.
+base_url: ${oc.env:RE_UQ_LOCAL_LLAMA_CPP_BASE_URL,http://localhost:9292/v1}
 api_key_env: ${oc.env:RE_UQ_LOCAL_LLAMA_CPP_API_KEY_ENV,LLAMA_API_KEY}
 models:
   - "qwen3.6-27b"

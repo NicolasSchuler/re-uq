@@ -131,7 +131,8 @@ configuration modification was performed.
 
 Requests used an SSH tunnel to GPU host loopback port 9292, not the profile's
 unencrypted network address. The remote key was loaded only into process
-memory, without sourcing or displaying `.zshenv`; it was not saved into
+memory, without sourcing or displaying the host's shell environment file; it
+was not saved into
 configuration or diagnostic files. The temporary tunnels were closed. Their
 ephemeral local addresses remain in smoke provenance and are not reusable
 final-run endpoints. Use an appropriate encrypted route for a remote client

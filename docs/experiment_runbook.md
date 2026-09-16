@@ -5,20 +5,21 @@ entry point is `scripts/rerun_all.py --config conf/rerun/final.yaml`: it runs Ta
 with Task 3, runs the configured ablations, and produces the analysis exports.
 No notebook execution is required.
 
-**Final-run gate (2026-09-11): not yet launched.** The author changed the
-primary protocol to one item per request, using server concurrency for
-parallelism. Batch sizes 4 and 16, both grouped and sibling-separated, are
-prominent ablations. Use the explicit final configuration below, not the old
-exploratory campaign state. Follow
-[final-run readiness](final_run_readiness.md) before spending provider budget.
+**Campaign status.** The final campaign ran from 2026-09-11 to 2026-09-16
+under run group `manuscript-final`; the weak-phrasing probe was extended to
+the whole cohort on 2026-09-16. The primary protocol is one item per request,
+using server concurrency for parallelism. Batch sizes 4 and 16, both grouped
+and sibling-separated, are ablations. This page remains the launch procedure
+for a rerun; [final-run readiness](final_run_readiness.md) records the
+pre-launch gates that were applied.
 
-The commands below assume this checkout at `/Users/nicolas/re-uq` and macOS
-with Apple Silicon and Metal GPU access, as required by the configured MLX
-embedding backend. Adjust the initial `cd` if the checkout moves.
+The commands below run from the checkout root on macOS with Apple Silicon
+and Metal GPU access, as required by the configured MLX embedding backend.
 
 Generation itself goes over the network: the hosted profile calls Z.AI and the
-local profile calls the llama-swap server on the lab GPU box, so the driver
-runs on this Mac and nothing has to run on the box.
+local profile calls a llama.cpp/llama-swap server (the campaign used a lab GPU
+host), so the driver runs on the analysis machine and nothing has to run on
+the GPU host.
 
 ## 1. Know what will run
 
@@ -64,7 +65,7 @@ contribute to pooled estimates. PURE context results remain separate.
 ## 2. Prepare the environment and existing data
 
 ```bash
-cd /Users/nicolas/re-uq
+cd "$(git rev-parse --show-toplevel)"
 uv sync --group dev --locked
 .venv/bin/python -m unittest discover -s tests -v
 ```
@@ -122,22 +123,22 @@ client key accepted by your local chat server. It is not an embedding-model
 credential. Store only the variable **names** in YAML; the repository does
 not automatically load a `.env` file for this workflow.
 
-The local profile points at the llama-swap server on the lab GPU box
-(`ssh GPU`), published at `http://141.3.52.248:9292/v1` and reachable from
-this Mac. It loads a model on the first request that names it and unloads it
-after 15 idle minutes, so the first request of a run (and the first after a
-pause) waits for the load; the profile's 300 s timeout covers a reload from
-the box's cache. The exact request model ID is `qwen3.6-27b`; `GET /v1/models`
-with the key lists what the box currently offers. If you list several local
+The local profile points at a llama-swap server: set `base_url` in
+`conf/profile/local_llama_cpp.yaml` or export `RE_UQ_LOCAL_LLAMA_CPP_BASE_URL`
+(the campaign used a lab GPU host reachable from the analysis machine). The
+server loads a model on the first request that names it and unloads it after
+15 idle minutes, so the first request of a run (and the first after a pause)
+waits for the load; the profile's 300 s timeout covers a reload from the
+server's cache. The exact request model ID is `qwen3.6-27b`; `GET /v1/models`
+with the key lists what the server currently offers. If you list several local
 models, the router loads them by request model name without manual
 intervention.
 
-Both keys are kept in `~/.zshenv` on the box. To use them from this Mac
-without typing them, pull them into the launching shell:
+Export both keys in the launching shell before starting the driver:
 
 ```zsh
-export LLAMA_API_KEY="$(ssh GPU 'source ~/.zshenv; printf %s "$LLAMA_API_KEY"')"
-export ZAI_API_KEY="$(ssh GPU 'source ~/.zshenv; printf %s "$ZAI_API_KEY"')"
+export LLAMA_API_KEY="..."
+export ZAI_API_KEY="..."
 ```
 
 ## 4. Review and freeze the configuration
@@ -159,7 +160,7 @@ leave the prepared protocol settings in place:
 
 | Request setting | Z.AI | Local |
 | --- | --- | --- |
-| `base_url` | `https://api.z.ai/api/coding/paas/v4` | `http://141.3.52.248:9292/v1` |
+| `base_url` | `https://api.z.ai/api/coding/paas/v4` | your server, e.g. `http://localhost:9292/v1` |
 | `api_key_env` | `ZAI_API_KEY` | `LLAMA_API_KEY` |
 | `concurrency` | 2 | 8 (headline runs used 2 workers on 4 server slots) |
 | `batch_size` / `batch_order` | 1 / `grouped` | 1 / `grouped` |
@@ -288,7 +289,7 @@ Once smoke checks pass and the configuration is fixed:
 .venv/bin/python -u scripts/rerun_all.py --config conf/rerun/final.yaml
 ```
 
-On this Mac, you can instead keep the machine awake while the command runs:
+On macOS, you can instead keep the machine awake while the command runs:
 
 ```bash
 caffeinate -i .venv/bin/python -u scripts/rerun_all.py --config conf/rerun/final.yaml
@@ -317,7 +318,7 @@ box from a synced copy of this checkout (`~/projects/re-uq-rerun`, built with
 `uv sync --group dev --locked --python /usr/bin/python3.13`) inside `tmux`.
 The 2026-09 campaign was started that way. Afterwards copy
 `data/processed/` (without `smoke/`), `data/processed/logs/` and
-`outputs/rerun/<run_group_id>/state.json` back to this Mac and run the
+`outputs/rerun/<run_group_id>/state.json` back to the analysis machine and run the
 analysis command here.
 
 The hosted and the local endpoint are independent, so their generation can
@@ -361,7 +362,7 @@ The driver prints its current model/cell and appends stage output to
 second terminal:
 
 ```bash
-cd /Users/nicolas/re-uq
+cd "$(git rev-parse --show-toplevel)"
 .venv/bin/python - <<'PY'
 import json
 from pathlib import Path

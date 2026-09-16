@@ -39,7 +39,7 @@
     {
       "profile_id": "local_llama_cpp",
       "provider_id": "llama_cpp",
-      "base_url": "http://141.3.52.248:9292/v1",
+      "base_url": "http://localhost:9292/v1",
       "api_key_env": "LLAMA_API_KEY",
       "models": [
         "qwen3.6-27b",
