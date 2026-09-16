@@ -14,7 +14,7 @@ strengthening with 95% intervals and a zero-change reference:
 
 Values come from the comparison exports only (``compare_batching_ablation.py``,
 ``compare_context_ablation.py``, ``run_weak_modality_probe.py``); nothing is
-typed in. Matched pair counts are printed next to each row.
+typed in. Exact matched pair counts remain available in the comparison exports.
 """
 
 from __future__ import annotations
@@ -87,8 +87,8 @@ def set_style() -> None:
             "font.family": "serif",
             "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
             "mathtext.fontset": "stix",
-            # The figure is 7 in wide and is printed at about 5.4 in, so sizes
-            # here are about 1.3x the size they appear in the manuscript.
+            # The figure is reduced to the manuscript's text width. Inspect
+            # the compiled page as well as the standalone export for legibility.
             "font.size": 11.5,
             "axes.labelsize": 12.0,
             "xtick.labelsize": 11.0,
@@ -178,11 +178,7 @@ def draw_panel(
     labels = []
     for i, model in enumerate(models):
         y0 = len(models) - 1 - i
-        pairs = [points[model][key].pairs for key, *_ in series if key in points[model]]
-        n_text = (
-            f"{min(pairs)}" if min(pairs) == max(pairs) else f"{min(pairs)} to {max(pairs)}"
-        )
-        labels.append(f"{MODEL_LABELS.get(model, model)}  ($n$={n_text})")
+        labels.append(MODEL_LABELS.get(model, model))
         for j, (key, _label, color_key, filled) in enumerate(series):
             point = points[model].get(key)
             if point is None:
@@ -194,7 +190,7 @@ def draw_panel(
                 point.delta,
                 y,
                 marker="o",
-                ms=4.6,
+                ms=5.0,
                 mfc=color if filled else "white",
                 mec=color,
                 mew=1.1,
@@ -204,7 +200,7 @@ def draw_panel(
     ax.axvline(0, color=INK, lw=0.9, ls=(0, (4, 3)), zorder=2)
     ax.set_yticks([len(models) - 1 - i for i in range(len(models))])
     ax.set_yticklabels(labels)
-    ax.set_ylim(-0.6, len(models) - 0.4)
+    ax.set_ylim(-0.5, max(len(models), 1) - 0.5)
     ax.set_xlim(-105, 105)
     ax.set_xticks([-100, -75, -50, -25, 0, 25, 50, 75, 100])
     ax.set_xticklabels(["−100", "−75", "−50", "−25", "0", "+25", "+50", "+75", "+100"])
@@ -217,7 +213,7 @@ def draw_panel(
             [0],
             [0],
             marker="o",
-            ms=4.6,
+            ms=5.0,
             mfc=COLORS[color_key] if filled else "white",
             mec=COLORS[color_key],
             mew=1.1,
@@ -243,18 +239,34 @@ def build_figure(
     context: dict[str, dict[str, Point]],
     phrasing: dict[str, dict[str, Point]],
 ) -> plt.Figure:
-    heights = [max(len(batching), 1), max(len(context), 1), max(len(phrasing), 1)]
+    heights = [
+        max(len(points), 1) * len(series)
+        for points, series in (
+            (batching, BATCH_ARMS),
+            (context, CONTEXT_STRATA),
+            (phrasing, PHRASING_TEMPLATES),
+        )
+    ]
     fig, axes = plt.subplots(
         3,
         1,
-        figsize=(7.0, 0.42 * sum(heights) + 2.4),
-        gridspec_kw={"height_ratios": heights, "hspace": 0.42},
+        # 0.08 in per model-series row keeps the nine-model phrasing panel on one
+        # manuscript page (0.105 overflowed the float by 74 pt).
+        figsize=(7.0, 0.08 * sum(heights) + 1.3),
+        gridspec_kw={
+            "height_ratios": heights,
+            "left": 0.24,
+            "right": 0.99,
+            "bottom": 0.07,
+            "top": 0.95,
+            "hspace": 0.18,
+        },
     )
     draw_panel(
         axes[0],
         batching,
         [(arm, label, key, filled) for arm, label, key, filled in BATCH_ARMS],
-        "Batching versus one item per request (weak-intent sources)",
+        "Batching versus one item per request\n(weak-intent sources)",
         legend_loc="center right",
     )
     draw_panel(
@@ -276,11 +288,11 @@ def build_figure(
         "Alternative versus original weak-intent phrasing",
         legend_loc="center right",
     )
-    axes[2].set_xlabel(
-        "Change in strengthened outputs (percentage points)\n"
-        "Fewer strengthened  ←  0 = no change  →  More strengthened\n"
-        "$n$ = matched items"
-    )
+    # All panels use the same effect scale. Show it once to leave room for
+    # panel headings without compressing the comparison rows.
+    for ax in axes[:2]:
+        ax.tick_params(axis="x", bottom=False, labelbottom=False)
+    axes[2].set_xlabel("Change in strengthening (percentage points)")
     return fig
 
 

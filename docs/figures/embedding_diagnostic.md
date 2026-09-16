@@ -1,14 +1,21 @@
 # Embedding diagnostic figure
 
-Status: the manuscript contains an explicit rerun placeholder. The existing
-PDFs are archived diagnostics and must not be presented as revised results.
+Status: the manuscript includes the current held-out diagnostic results from
+`outputs/embedding_diagnostic/probe_grid_summary.csv`. Its included figure is
+`manuscript/figures/embedding_diagnostic.pdf`, with a PNG preview beside it.
 
-Figure 2 retains a horizontal comparison with three separate groups:
+Figure 2 presents three dot-and-interval panels:
 
-- Requirement-only predictions of strict strengthening in the corresponding
-  single-pass output, overall and within each nonmandatory source modality.
-- The same prediction with the sampled declared modality added to the text.
-- Auxiliary predictions of source modality and dataset-by-keyword origin.
+- A compares strengthening detection across all source modalities, using sampled
+  requirement text alone or with the sampled answer's declared modality label.
+- B shows text-only strengthening detection within recommended, optional, and
+  weak-intent sources. Mandatory sources cannot be strengthened further on the
+  ordered commitment scale and therefore have no within-modality binary AUROC.
+- C separately predicts source commitment level and the joint dataset × keyword
+  variant. Its macro one-vs-rest AUROC answers different questions from the
+  binary strengthening AUROC in A/B. Recoverable source information may help
+  explain the overall/within-modality difference, but does not establish which
+  information drove strengthening predictions.
 
 The classifier reads sampled requirement text. The primary strengthening target
 belongs to the separate single-pass output, not to the text being embedded.
@@ -19,7 +26,7 @@ The plotting selectors and manuscript macros use capability grouping. Compare
 input representations on the same target, eligible observations, and capability
 splits. All preprocessing is fitted within the training split.
 
-Analysis/export support is implemented; experimental evidence is pending.
+The current diagnostic exports held-out predictions, folds, and summary intervals.
 `diagnose_embedding_separability.py` writes:
 
 - `probe_grid_predictions.jsonl`: identity of each held-out sampled text, original capability
@@ -82,18 +89,43 @@ training samples for a tree split flag the summary and plot for fitting review. 
 inspect the curves and limits before interpreting weak performance. No fitting
 budget extension or experimental comparison was run as part of implementation.
 
-The horizontal figure reads estimates and interval bounds from the current summary,
-separates prediction targets, displays unavailable scores/intervals explicitly, and
-marks fitting-review flags. `export_paper_numbers.py` reads the same summary and
-exports intervals, baseline, sample/capability/fold counts as additional macros.
-`numEmbAddedLabel` names the added-input comparison; `numEmbLeakControl` is retained
-only as a legacy macro alias, without a leakage claim. No historical score constants
-are used. The standalone `probe_acse_embedding_separability.py` also exports held-out
-predictions and the same summary convention.
+The figure reads estimates and interval bounds from the current summary without
+changing their values. All seven scores use three decimal places. Six selected
+intervals have finite, unequal bounds. Smaller outlined markers and interval
+caps distinguish narrow intervals from missing ones. A dagger marks an
+unavailable interval, while a double dagger identifies identical exported bounds
+if a future result has a collapsed interval.
 
-Before publication, run the configured cohort, inspect actual fitting diagnostics
-and exclusions, check intervals and class balance, and regenerate the figure.
-The manuscript's result placeholders and stale archived figures remain unchanged.
+The optional-source AUROC is available, but its interval is not: only 859 of
+1,000 capability-bootstrap draws retain all target classes in every evaluated
+fold, below the required 90%. The estimate remains visible with a dagger and the brief note "CI unavailable".
+The detailed reason is reported here and in the plotting command output. Its evaluated cohort contains 30,600 negative and 60 positive
+samples. No interval is invented, widened, or omitted for visual convenience.
+
+All 21 folds for the seven displayed conditions reached the 300-step limit.
+The plotting command reports this qualification from the selected fold exports
+and otherwise reports a generic fitting-review note when the summary flags a concern.
+Training-budget and interval-method details stay outside the compact graphic. The
+manuscript retains its training-budget qualification. These results do not
+establish convergence, and the intervals do not describe budget sensitivity.
+
+`export_paper_numbers.py` reads the same summary and exports intervals, baseline,
+sample/capability/fold counts as additional macros. `numEmbAddedLabel` names the
+added-input comparison. `numEmbLeakControl` remains a legacy alias without a
+leakage claim. No historical score constants are used.
+
+To regenerate only this figure from the existing results, without fitting or
+calling a model, run from the repository root:
+
+```bash
+.venv/bin/python scripts/plot_embedding_diagnostic_figure_v2.py --diagnostic-dir outputs/embedding_diagnostic --output outputs/rerun/figures/embedding_diagnostic.pdf
+cp outputs/rerun/figures/embedding_diagnostic.pdf manuscript/figures/embedding_diagnostic.pdf
+cp outputs/rerun/figures/embedding_diagnostic.png manuscript/figures/embedding_diagnostic.png
+```
+
+Inspect the standalone figure and its compiled manuscript page before treating
+an updated rendering as ready. Historical numbered figures and documentation
+previews are not the manuscript's included artifact.
 
 Figure 3 is reserved for paired ablation changes with intervals, matched counts,
 and a zero-change reference. Keep document-context results separate from the
