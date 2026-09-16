@@ -23,7 +23,7 @@ Formatting conventions (matching the hand-written file)
 * AUROC / AUPRC: three decimals (``0.764``).
 * Counts: thousands separators from five digits up (``16,448``), none below
   (``1412``) -- the typographic convention the submitted draft used.
-* Ranges: ``a--b`` (LaTeX en dash), always min then max.
+* Ranges: ``a to b``, always min then max.
 
 Aggregation
 -----------
@@ -102,8 +102,8 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     HEADLINE_BOOTSTRAP_CI: (
         "headline_key",
         "value",
-        "ci_low",
-        "ci_high",
+        "seed_ci_low",
+        "seed_ci_high",
         "n_numerator",
         "n_denominator",
     ),
@@ -138,7 +138,7 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         *(
             f"{rule}_strengthening_{field}"
             for rule in ("strict", "broad")
-            for field in ("n", "denominator", "rate", "ci_low", "ci_high")
+            for field in ("n", "denominator", "rate", "seed_ci_low", "seed_ci_high")
         ),
     ),
     TASK2_TEXT_DRIFT: (
@@ -191,6 +191,21 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "task2_verbalized_confidence_auroc",
         "task3_strict_flagged_rate",
         "task3_strict_called_preserved_rate",
+        *(
+            f"{metric}_seed_ci_{bound}"
+            for metric in (
+                "task1_unsupported_acceptance_90",
+                "task2_weak_strict_escalation",
+                "task2_weak_strict_frame_only",
+                "task2_strict_strengthening",
+                "task2_strict_high_conf_90",
+                "task2_strict_agreement",
+                "task2_meaning_variation_auroc",
+                "task3_strict_flagged",
+                "task3_strict_called_preserved",
+            )
+            for bound in ("low", "high")
+        ),
     ),
     PROBE_GRID: (
         "feature_backend",
@@ -410,8 +425,8 @@ def fmt_percent(value: float) -> str:
 
 
 def fmt_available_percent(value: float) -> str:
-    """A percentage or a dash when a particular cohort has no eligible answers."""
-    return fmt_percent(value) if math.isfinite(value) else "---"
+    """A percentage or n/a when a particular cohort has no eligible answers."""
+    return fmt_percent(value) if math.isfinite(value) else "n/a"
 
 
 def fmt_auroc(value: float) -> str:
@@ -451,7 +466,7 @@ def fmt_range(values: Sequence[float], formatter: Any, label: str) -> str:
     usable = [value for value in values if math.isfinite(value)]
     if not usable:
         raise PaperNumbersError(f"{label}: no finite values to build a range from")
-    return f"{formatter(min(usable))}--{formatter(max(usable))}"
+    return f"{formatter(min(usable))} to {formatter(max(usable))}"
 
 
 # --- Numeric helpers ---------------------------------------------------------
@@ -849,7 +864,7 @@ def _benchmark_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
 CLUSTER_LABEL = {
     eu.DEFAULT_BOOTSTRAP_CLUSTER_FIELD: "request-clustered",
     eu.BOOTSTRAP_ITEM_CLUSTER_FIELD: "item-clustered",
-    eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD: "seed-clustered",
+    eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD: "capability-clustered",
 }
 
 
@@ -866,7 +881,7 @@ def cluster_note(cluster_field: str) -> str:
 
 
 class HeadlineRate(NamedTuple):
-    """One pooled headline rate, both cluster bootstraps, and the unit used."""
+    """One pooled headline rate and its selected capability bootstrap bounds."""
 
     value: float
     ci_low: float
@@ -893,15 +908,12 @@ def _headline_rate(artifacts: Artifacts, key: str) -> HeadlineRate:
             seed_ci = (low, high)
     return HeadlineRate(
         value=_number(row, "value", HEADLINE_BOOTSTRAP_CI),
-        ci_low=_number(row, "ci_low", HEADLINE_BOOTSTRAP_CI),
-        ci_high=_number(row, "ci_high", HEADLINE_BOOTSTRAP_CI),
+        ci_low=_number(row, "seed_ci_low", HEADLINE_BOOTSTRAP_CI),
+        ci_high=_number(row, "seed_ci_high", HEADLINE_BOOTSTRAP_CI),
         n_numerator=round(_number(row, "n_numerator", HEADLINE_BOOTSTRAP_CI)),
         n_denominator=round(_number(row, "n_denominator", HEADLINE_BOOTSTRAP_CI)),
         seed_ci=seed_ci,
-        # Snapshots written before the migration have no such column.
-        cluster_field=str(row.get("ci_cluster_field", "")).strip()
-        if "ci_cluster_field" in columns
-        else "",
+        cluster_field=eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
     )
 
 
@@ -1045,9 +1057,9 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         ),
         Macro(
             "numTaskOneUpgradeCI",
-            f"{fmt_percent(rq.pooled('task1_unsupported_acceptance_90_ci_low'))}--"
-            f"{fmt_percent(rq.pooled('task1_unsupported_acceptance_90_ci_high'))}",
-            cluster_note(str(rq.grand.get("task1_ci_cluster_field", ""))),
+            f"{fmt_percent(rq.pooled('task1_unsupported_acceptance_90_seed_ci_low'))} to "
+            f"{fmt_percent(rq.pooled('task1_unsupported_acceptance_90_seed_ci_high'))}",
+            cluster_note(eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD),
         ),
         Macro(
             "numTaskOneUpgradeRange",
@@ -1076,15 +1088,15 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
         ),
         Macro(
             "numStrictOverallCI",
-            f"{fmt_percent(strict_low)}--{fmt_percent(strict_high)}",
+            f"{fmt_percent(strict_low)} to {fmt_percent(strict_high)}",
         ),
     ]
     if strict_seed is not None:
         macros.append(
             Macro(
                 "numStrictOverallSeedCI",
-                f"{fmt_percent(strict_seed[0])}--{fmt_percent(strict_seed[1])}",
-                "secondary, seed-clustered",
+                f"{fmt_percent(strict_seed[0])} to {fmt_percent(strict_seed[1])}",
+                "alias of the primary capability interval",
             )
         )
     macros += [
@@ -1114,15 +1126,16 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
             cluster_note(broad.cluster_field),
         ),
         Macro(
-            "numBroadOverallCI", f"{fmt_percent(broad_low)}--{fmt_percent(broad_high)}"
+            "numBroadOverallCI",
+            f"{fmt_percent(broad_low)} to {fmt_percent(broad_high)}",
         ),
     ]
     if broad_seed is not None:
         macros.append(
             Macro(
                 "numBroadOverallSeedCI",
-                f"{fmt_percent(broad_seed[0])}--{fmt_percent(broad_seed[1])}",
-                "secondary, seed-clustered",
+                f"{fmt_percent(broad_seed[0])} to {fmt_percent(broad_seed[1])}",
+                "alias of the primary capability interval",
             )
         )
     macros += [
@@ -1224,6 +1237,18 @@ def _rq1_block(artifacts: Artifacts, warnings: list[str]) -> list[Macro]:
                 "no-cue share over models",
             ),
             "over models",
+        ),
+        Macro(
+            "numTaskTwoUnclassified",
+            fmt_count(
+                sum(stats.valid - stats.denominator for stats in cell_stats.values())
+            ),
+            "valid Task 2 answers whose wording the checks cannot classify",
+        ),
+        Macro(
+            "numTaskTwoFailures",
+            fmt_count(sum(stats.items - stats.valid for stats in cell_stats.values())),
+            "planned Task 2 answers with no valid response after retries",
         ),
         Macro(
             "numNoModalShare",
@@ -1334,7 +1359,7 @@ def _rq2_block(artifacts: Artifacts) -> list[Macro]:
     resamples, so the pooled value and the range beside it share a denominator.
     """
     rq = RqTable(artifacts[PER_MODEL_RQ])
-    cluster = cluster_note(str(rq.grand.get("task2_ci_cluster_field", "")))
+    cluster = cluster_note(eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD)
     return [
         Macro(
             "numHighConfShare",
@@ -1343,8 +1368,8 @@ def _rq2_block(artifacts: Artifacts) -> list[Macro]:
         ),
         Macro(
             "numHighConfShareCI",
-            f"{fmt_percent(rq.pooled('task2_strict_high_conf_90_ci_low'))}--"
-            f"{fmt_percent(rq.pooled('task2_strict_high_conf_90_ci_high'))}",
+            f"{fmt_percent(rq.pooled('task2_strict_high_conf_90_seed_ci_low'))} to "
+            f"{fmt_percent(rq.pooled('task2_strict_high_conf_90_seed_ci_high'))}",
         ),
         Macro(
             "numHighConfShareRange",
@@ -1376,8 +1401,8 @@ def _rq2_block(artifacts: Artifacts) -> list[Macro]:
         ),
         Macro(
             "numMeaningVarAUROCCI",
-            f"{fmt_auroc(rq.pooled('task2_meaning_variation_auroc_ci_low'))}--"
-            f"{fmt_auroc(rq.pooled('task2_meaning_variation_auroc_ci_high'))}",
+            f"{fmt_auroc(rq.pooled('task2_meaning_variation_auroc_seed_ci_low'))} to "
+            f"{fmt_auroc(rq.pooled('task2_meaning_variation_auroc_seed_ci_high'))}",
         ),
         Macro(
             "numMeaningVarAUROCRange",
@@ -1458,12 +1483,12 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
 
     def auroc(row: Mapping[str, Any]) -> str:
         if row.get("auroc_mean", "") == "" and row.get("unavailable_reason"):
-            return "N/A"
+            return "n/a"
         return fmt_auroc(_number(row, "auroc_mean", PROBE_GRID))
 
     def auprc(row: Mapping[str, Any]) -> str:
         if row.get("auprc_mean", "") == "" and row.get("unavailable_reason"):
-            return "N/A"
+            return "n/a"
         return fmt_auroc(_number(row, "auprc_mean", PROBE_GRID))
 
     interval_macros = []
@@ -1491,9 +1516,9 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
                 row.get(f"{metric}_ci_high", ""),
             )
             value = (
-                f"{fmt_auroc(float(low))}--{fmt_auroc(float(high))}"
+                f"{fmt_auroc(float(low))} to {fmt_auroc(float(high))}"
                 if low != "" and high != ""
-                else "N/A"
+                else ""
             )
             interval_macros.append(
                 Macro(
@@ -1511,9 +1536,14 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
             ("Folds", "folds"),
         ):
             value = row.get(field, "")
-            interval_macros.append(
-                Macro(f"numEmb{name}{suffix}", str(value) if value != "" else "N/A")
-            )
+            if value == "":
+                text = "n/a"
+            elif suffix == "APBaseline":
+                # The positive rate the AP is judged against, on the AP scale.
+                text = fmt_auroc(float(value))
+            else:
+                text = str(value)
+            interval_macros.append(Macro(f"numEmb{name}{suffix}", text))
 
     return [
         *interval_macros,
@@ -1543,12 +1573,12 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
         Macro(
             "numBlindRecall",
             fmt_percent(rq.pooled("task3_strict_flagged_rate")),
-            cluster_note(str(rq.grand.get("task3_ci_cluster_field", ""))),
+            cluster_note(eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD),
         ),
         Macro(
             "numBlindRecallCI",
-            f"{fmt_percent(rq.pooled('task3_strict_flagged_ci_low'))}--"
-            f"{fmt_percent(rq.pooled('task3_strict_flagged_ci_high'))}",
+            f"{fmt_percent(rq.pooled('task3_strict_flagged_seed_ci_low'))} to "
+            f"{fmt_percent(rq.pooled('task3_strict_flagged_seed_ci_high'))}",
         ),
         Macro(
             "numBlindRecallRange",
@@ -1586,19 +1616,19 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
 
 
 def fmt_pct_ci(rate: float, low: float, high: float) -> str:
-    """``8.6 [7.6, 9.6]``, or ``8.6 ---`` for an unavailable interval.
+    """``8.6 [7.6, 9.6]``, or just ``8.6`` for an unavailable interval.
 
-    A rate that does not exist at all (no rows) prints a bare dash. An
+    A rate that does not exist at all (no rows) prints n/a. An
     interval whose bounds coincide exactly is a percentile-bootstrap artifact
     (one cluster, or a rate that is 0 or 1 in every cluster), not a measured
     width, so it prints as unavailable too; bounds that merely coincide after
     rounding are kept.
     """
     if not math.isfinite(rate):
-        return "---"
+        return "n/a"
     value = fmt_percent(rate)
     if not (math.isfinite(low) and math.isfinite(high)) or low == high:
-        return f"{value} ---"
+        return value
     low_text, high_text = fmt_percent(low), fmt_percent(high)
     return f"{value} [{low_text}, {high_text}]"
 
@@ -1606,10 +1636,10 @@ def fmt_pct_ci(rate: float, low: float, high: float) -> str:
 def fmt_auroc_ci(value: float, low: float, high: float) -> str:
     """``0.768 [0.742, 0.791]``; a zero-width interval prints as unavailable."""
     if not math.isfinite(value):
-        return "---"
+        return "n/a"
     text = fmt_auroc(value)
     if not (math.isfinite(low) and math.isfinite(high)) or low == high:
-        return f"{text} ---"
+        return text
     low_text, high_text = fmt_auroc(low), fmt_auroc(high)
     return f"{text} [{low_text}, {high_text}]"
 
@@ -1632,11 +1662,23 @@ def render_grouped_table_body(
     placeholder = " & ".join(
         [r"\placeholder{model}"] + [r"\placeholder{}"] * (n_columns - 1)
     )
-    lines = [f"{group}{{\\textit{{Hosted}}}} \\\\", *hosted_rows]
+
+    def shaded_blocks(blocks: Sequence[str]) -> list[str]:
+        # Each block is one model, possibly spanning both check rows.
+        # Explicit outer-row colors avoid affecting nested estimate tables.
+        return [
+            "\n".join(
+                (r"\rowcolor{tableShade} " if index % 2 else "") + row
+                for row in block.splitlines()
+            )
+            for index, block in enumerate(blocks)
+        ]
+
+    lines = [f"{group}{{\\tabgroup{{Hosted}}}} \\\\", *shaded_blocks(hosted_rows)]
     lines += [
         r"\addlinespace[0.3em]",
-        f"{group}{{\\textit{{{local_label}}}}} \\\\",
-        *(local_rows or [placeholder + r" \\"]),
+        f"{group}{{\\tabgroup{{{local_label}}}}} \\\\",
+        *(shaded_blocks(local_rows) or [placeholder + r" \\"]),
         r"\midrule",
         all_row,
     ]
@@ -1663,17 +1705,17 @@ def _counted_estimate_cell(
     centered: bool = False,
     separate_interval: bool = False,
 ) -> str:
-    """Stack counts above an estimate, optionally putting its interval below."""
+    """Stack the estimate and interval above the eligible case counts."""
     if separate_interval:
-        # A bare "---" is a missing estimate: one dash, not a dash per row.
+        # A missing estimate needs only one unavailable marker.
         point, _, interval = estimate.partition(" ")
-        if point == "---":
+        if point == "n/a":
             interval = ""
         # An empty group keeps a leading '[' from becoming a row-spacing option.
         estimate = point + r"\\{}" + interval
     if centered:
-        return rf"\begin{{tabular}}[t]{{@{{}}c@{{}}}}{count}\\{estimate}\end{{tabular}}"
-    return rf"\shortstack[l]{{{count}\\{estimate}}}"
+        return rf"\begin{{tabular}}[t]{{@{{}}c@{{}}}}{estimate}\\{count}\end{{tabular}}"
+    return rf"\shortstack[l]{{{estimate}\\{count}}}"
 
 
 def _rate_cell(
@@ -1687,8 +1729,8 @@ def _rate_cell(
 ) -> str:
     rate = fmt_pct_ci(
         _number(row, f"{name}_rate", source),
-        _number(row, f"{name}_ci_low", source),
-        _number(row, f"{name}_ci_high", source),
+        _number(row, f"{name}_seed_ci_low", source),
+        _number(row, f"{name}_seed_ci_high", source),
     )
     count = fmt_count(_number(row, f"{name}_n", source))
     if denominator:
@@ -1749,8 +1791,10 @@ def _rq_two_three_row(label: str, row: Mapping[str, Any]) -> str:
             auroc_counts,
             fmt_auroc_ci(
                 _number(row, "task2_meaning_variation_auroc", PER_MODEL_RQ),
-                _number(row, "task2_meaning_variation_auroc_ci_low", PER_MODEL_RQ),
-                _number(row, "task2_meaning_variation_auroc_ci_high", PER_MODEL_RQ),
+                _number(row, "task2_meaning_variation_auroc_seed_ci_low", PER_MODEL_RQ),
+                _number(
+                    row, "task2_meaning_variation_auroc_seed_ci_high", PER_MODEL_RQ
+                ),
             ),
             centered=True,
             separate_interval=True,
@@ -1997,7 +2041,7 @@ def render(
         "%%",
         "%% Naming: \\num<What><Scope>. Percentages are given without the percent",
         "%% sign, with one decimal. AUROC/AUPRC use three decimals. Counts carry a",
-        "%% thousands separator from five digits up. Ranges are min--max.",
+        "%% thousands separator from five digits up. Ranges are min to max.",
         "%% Aggregation conventions: docs/aggregation.md.",
         "%%",
         "%% Source artifacts (SHA-256):",

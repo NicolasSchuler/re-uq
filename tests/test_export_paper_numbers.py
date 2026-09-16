@@ -221,6 +221,8 @@ def _pooled_modality_rows(models: list[str]) -> list[dict[str, object]]:
                         f"{name}_rate": rate,
                         f"{name}_ci_low": max(0, rate - 0.01),
                         f"{name}_ci_high": min(1, rate + 0.01),
+                        f"{name}_seed_ci_low": max(0, rate - 0.005),
+                        f"{name}_seed_ci_high": min(1, rate + 0.005),
                     }
                 )
             output.append(pooled)
@@ -445,6 +447,8 @@ def write_fixture(outputs_dir: Path, models: list[str] | None = None) -> None:
                 "value": 3440 / 29600,
                 "ci_low": 0.11,
                 "ci_high": 0.122,
+                "seed_ci_low": 0.112,
+                "seed_ci_high": 0.12,
                 "n_numerator": 3440,
                 "n_denominator": 29600,
             },
@@ -453,6 +457,8 @@ def write_fixture(outputs_dir: Path, models: list[str] | None = None) -> None:
                 "value": 6000 / 29600,
                 "ci_low": 0.19,
                 "ci_high": 0.215,
+                "seed_ci_low": 0.195,
+                "seed_ci_high": 0.21,
                 "n_numerator": 6000,
                 "n_denominator": 29600,
             },
@@ -589,8 +595,8 @@ class HeadlineMacroTest(ExporterFixtureTest):
         # 3440 / 29600 = 11.62%, 6000 / 29600 = 20.27%.
         self.assertEqual(macros["numStrictOverall"], "11.6")
         self.assertEqual(macros["numBroadOverall"], "20.3")
-        self.assertEqual(macros["numStrictOverallCI"], "11.0--12.2")
-        self.assertEqual(macros["numBroadOverallCI"], "19.0--21.5")
+        self.assertEqual(macros["numStrictOverallCI"], "11.2 to 12.0")
+        self.assertEqual(macros["numBroadOverallCI"], "19.5 to 21.0")
 
     def test_counts_use_the_manuscript_thousands_convention(self) -> None:
         macros, _ = self.export()
@@ -605,29 +611,32 @@ class HeadlineMacroTest(ExporterFixtureTest):
     def test_cell_and_model_ranges(self) -> None:
         macros, _ = self.export()
         # Cells: 1940/14400 = 13.5% and 1500/15200 = 9.9%.
-        self.assertEqual(macros["numStrictOverallRange"], "9.9--13.5")
-        self.assertEqual(macros["numBroadOverallRange"], "18.7--21.9")
+        self.assertEqual(macros["numStrictOverallRange"], "9.9 to 13.5")
+        self.assertEqual(macros["numBroadOverallRange"], "18.7 to 21.9")
         # Models: 1540/13600 = 11.3% and 1900/16000 = 11.9%.
-        self.assertEqual(macros["numStrictModelsRange"], "11.3--11.9")
-        self.assertEqual(macros["numBroadModelsRange"], "20.0--20.6")
+        self.assertEqual(macros["numStrictModelsRange"], "11.3 to 11.9")
+        self.assertEqual(macros["numBroadModelsRange"], "20.0 to 20.6")
 
     def test_no_cue_share_pooled_cells_and_models(self) -> None:
         macros, _ = self.export()
         # (32000 - 29600) / 32000 = 7.5%.
         self.assertEqual(macros["numNoCueShare"], "7.5")
-        self.assertEqual(macros["numNoCueShareRange"], "5.0--10.0")
-        self.assertEqual(macros["numNoCueShareModels"], "0.0--15.0")
+        self.assertEqual(macros["numNoCueShareRange"], "5.0 to 10.0")
+        self.assertEqual(macros["numNoCueShareModels"], "0.0 to 15.0")
+        # Counts behind the share: 32000 planned, all valid, 29600 classifiable.
+        self.assertEqual(macros["numTaskTwoUnclassified"], "2400")
+        self.assertEqual(macros["numTaskTwoFailures"], "0")
         # Deprecated alias kept for the submitted draft's macro name.
         self.assertEqual(macros["numNoModalShare"], macros["numNoCueShare"])
 
     def test_task1_control_and_per_model_upgrade_range(self) -> None:
         macros, _ = self.export()
         self.assertEqual(macros["numTaskOneAcc"], "98.0")
-        self.assertEqual(macros["numTaskOneAccRange"], "97.0--99.0")
+        self.assertEqual(macros["numTaskOneAccRange"], "97.0 to 99.0")
         self.assertEqual(macros["numTaskOneUpgrade"], "1.5")
-        self.assertEqual(macros["numTaskOneUpgradeCI"], "0.5--2.5")
-        self.assertEqual(macros["numTaskOneUpgradeRange"], "1.0--2.0")
-        self.assertEqual(macros["numTaskOneUpgradeModels"], "0.0--3.0")
+        self.assertEqual(macros["numTaskOneUpgradeCI"], "1.0 to 2.0")
+        self.assertEqual(macros["numTaskOneUpgradeRange"], "1.0 to 2.0")
+        self.assertEqual(macros["numTaskOneUpgradeModels"], "0.0 to 3.0")
         self.assertEqual(macros["numLabelAcc"], "100.0")
         self.assertEqual(macros["numLabelStrengthening"], "0.0")
 
@@ -643,22 +652,22 @@ class HeadlineMacroTest(ExporterFixtureTest):
         eu.write_csv_rows(path, rows)
         macros, _ = self.export()
         self.assertEqual(macros["numWeakStrict"], "34.3")
-        self.assertEqual(macros["numWeakStrictRange"], "30.0--38.9")
+        self.assertEqual(macros["numWeakStrictRange"], "30.0 to 38.9")
         self.assertEqual(macros["numWeakStrictDen"], "7400")
         self.assertEqual(macros["numWeakStrictNum"], "2540")
         # Per model, pooled over cells by the readable weak denominator.
-        self.assertEqual(macros["numWeakStrictModelsRange"], "27.6--40.0")
+        self.assertEqual(macros["numWeakStrictModelsRange"], "27.6 to 40.0")
 
     def test_uncertainty_and_detector_macros(self) -> None:
         macros, _ = self.export()
         # Pooled over the rows the bootstrap resamples, not a macro over cells.
         self.assertEqual(macros["numHighConfShare"], "98.1")
-        self.assertEqual(macros["numHighConfShareRange"], "97.0--99.0")
-        self.assertEqual(macros["numHighConfModelsRange"], "97.8--98.4")
+        self.assertEqual(macros["numHighConfShareRange"], "97.0 to 99.0")
+        self.assertEqual(macros["numHighConfModelsRange"], "97.8 to 98.4")
         self.assertEqual(macros["numSampleAgreement"], "63.3")
         self.assertEqual(macros["numMeaningVarAUROC"], "0.751")
-        self.assertEqual(macros["numMeaningVarAUROCRange"], "0.700--0.800")
-        self.assertEqual(macros["numMeaningVarAUROCModels"], "0.750--0.753")
+        self.assertEqual(macros["numMeaningVarAUROCRange"], "0.700 to 0.800")
+        self.assertEqual(macros["numMeaningVarAUROCModels"], "0.750 to 0.753")
         self.assertEqual(macros["numVerbConfAUROC"], "0.791")
         self.assertEqual(macros["numEmbGlobalAUROC"], "0.700")
         self.assertEqual(macros["numEmbGlobalAUPRC"], "0.170")
@@ -674,11 +683,11 @@ class HeadlineMacroTest(ExporterFixtureTest):
     def test_blind_audit_macros(self) -> None:
         macros, _ = self.export()
         self.assertEqual(macros["numBlindRecall"], "61.9")
-        self.assertEqual(macros["numBlindRecallCI"], "60.9--62.9")
-        self.assertEqual(macros["numBlindRecallRange"], "60.0--63.4")
+        self.assertEqual(macros["numBlindRecallCI"], "61.4 to 62.4")
+        self.assertEqual(macros["numBlindRecallRange"], "60.0 to 63.4")
         self.assertEqual(macros["numBlindMissed"], "45.7")
-        self.assertEqual(macros["numBlindMissedRange"], "44.0--48.0")
-        self.assertEqual(macros["numBlindRecallModelsRange"], "44.2--76.3")
+        self.assertEqual(macros["numBlindMissedRange"], "44.0 to 48.0")
+        self.assertEqual(macros["numBlindRecallModelsRange"], "44.2 to 76.3")
 
     def test_requirement_word_counts(self) -> None:
         macros, _ = self.export()
@@ -796,9 +805,9 @@ class OutputShapeTest(ExporterFixtureTest):
         text = self.output.read_text(encoding="utf-8")
         self.assertEqual(text.count("\\newcommand{"), len(macros))
 
-    def test_seed_clustered_cis_are_optional(self) -> None:
+    def test_capability_intervals_replace_differing_request_intervals(self) -> None:
         macros, _ = self.export()
-        self.assertNotIn("numStrictOverallSeedCI", macros)
+        self.assertEqual(macros["numStrictOverallSeedCI"], macros["numStrictOverallCI"])
 
         path = self.outputs / exporter.HEADLINE_BOOTSTRAP_CI
         rows = eu.read_csv_rows(path)
@@ -807,8 +816,29 @@ class OutputShapeTest(ExporterFixtureTest):
             row["seed_ci_high"] = "0.13"
         eu.write_csv_rows(path, rows)
         macros, _ = self.export()
-        self.assertEqual(macros["numStrictOverallSeedCI"], "10.0--13.0")
-        self.assertEqual(macros["numBroadOverallSeedCI"], "10.0--13.0")
+        self.assertEqual(macros["numStrictOverallSeedCI"], "10.0 to 13.0")
+        self.assertEqual(macros["numBroadOverallSeedCI"], "10.0 to 13.0")
+        self.assertEqual(macros["numStrictOverallCI"], "10.0 to 13.0")
+        self.assertEqual(macros["numBroadOverallCI"], "10.0 to 13.0")
+
+    def test_missing_capability_bounds_do_not_fall_back_to_request_bounds(self) -> None:
+        for artifact in (
+            exporter.HEADLINE_BOOTSTRAP_CI,
+            exporter.PER_MODEL_RQ,
+            exporter.POOLED_MODALITY,
+        ):
+            with self.subTest(artifact=artifact):
+                write_fixture(self.outputs)
+                path = self.outputs / artifact
+                rows = eu.read_csv_rows(path)
+                for row in rows:
+                    for key in list(row):
+                        if "seed_ci_" in key:
+                            del row[key]
+                eu.write_csv_rows(path, rows)
+                with self.assertRaises(SystemExit) as caught:
+                    self.run_exporter("--strict")
+                self.assertIn("seed_ci_", str(caught.exception))
 
     def test_diff_summary_reports_added_changed_and_removed(self) -> None:
         self.export()
@@ -922,7 +952,7 @@ class FormatterGuardTest(unittest.TestCase):
         found = exporter.nan_macros(
             {
                 "numA": "11.6",
-                "numB": "nan--nan",
+                "numB": "nan to nan",
                 "numC": "NaN",
                 "numD": "0.707",
                 "numE": "kit.nanogpt & 12 & 3.4",
@@ -960,6 +990,8 @@ class ReportingCohortTest(ExporterFixtureTest):
 
         self.assertEqual(macros["numNoCueShare"], "0.0")
         self.assertEqual(macros["numNoCueGlmFiveOne"], "0.0")
+        self.assertEqual(macros["numTaskTwoUnclassified"], "0")
+        self.assertEqual(macros["numTaskTwoFailures"], "2400")
 
     def test_modality_table_keeps_raw_counts_and_pooled_intervals(self) -> None:
         macros, _ = self.export()
@@ -970,9 +1002,9 @@ class ReportingCohortTest(ExporterFixtureTest):
         cells = strict.split("&")
         self.assertEqual(len(cells), 5)
         self.assertEqual(cells[1].strip(), "Strict")
-        self.assertIn(r"340/3400\\10.0 [9.0, 11.0]", cells[2])
-        self.assertIn(r"260/3400\\7.6 [6.6, 8.6]", cells[3])
-        self.assertIn(r"940/3400\\27.6 [26.6, 28.6]", cells[4])
+        self.assertIn(r"10.0 [9.5, 10.5]\\340/3400", cells[2])
+        self.assertIn(r"7.6 [7.1, 8.1]\\260/3400", cells[3])
+        self.assertIn(r"27.6 [27.1, 28.1]\\940/3400", cells[4])
         self.assertIn(" & Broad &", body)
         self.assertIn("All models & Strict &", body)
 
@@ -994,7 +1026,7 @@ class ReportingCohortTest(ExporterFixtureTest):
 
 
 class ClusterProvenanceTest(ExporterFixtureTest):
-    """The annotation must come from the artifact, never from a fixed string."""
+    """Annotations describe the selected capability fields, not other bounds."""
 
     def _set_cluster_field(self, value: str | None) -> None:
         path = self.outputs / exporter.HEADLINE_BOOTSTRAP_CI
@@ -1012,35 +1044,39 @@ class ClusterProvenanceTest(ExporterFixtureTest):
                 return line.split("%", 1)[1].strip() if "%" in line else ""
         raise AssertionError(f"{macro} not found")
 
-    def test_a_request_clustered_snapshot_says_so(self) -> None:
+    def test_request_bounds_do_not_label_the_selected_capability_bounds(self) -> None:
         self._set_cluster_field(eu.DEFAULT_BOOTSTRAP_CLUSTER_FIELD)
         self.export()
         self.assertEqual(
-            self._annotation("numStrictOverall"), "pooled, request-clustered CI"
+            self._annotation("numStrictOverall"), "pooled, capability-clustered CI"
         )
         self.assertEqual(
-            self._annotation("numBroadOverall"), "pooled, request-clustered CI"
+            self._annotation("numBroadOverall"), "pooled, capability-clustered CI"
         )
 
     def test_a_slice_that_fell_back_to_the_seed_is_not_mislabelled(self) -> None:
         self._set_cluster_field(eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD)
         self.export()
         self.assertEqual(
-            self._annotation("numStrictOverall"), "pooled, seed-clustered CI"
+            self._annotation("numStrictOverall"), "pooled, capability-clustered CI"
         )
 
-    def test_a_snapshot_without_the_column_claims_nothing(self) -> None:
+    def test_missing_request_unit_does_not_change_the_selected_capability_unit(
+        self,
+    ) -> None:
         self._set_cluster_field(None)
         self.export()
         self.assertEqual(
-            self._annotation("numStrictOverall"), "pooled, resampling unit not recorded"
+            self._annotation("numStrictOverall"), "pooled, capability-clustered CI"
         )
 
-    def test_an_unknown_unit_is_reported_verbatim(self) -> None:
+    def test_an_unrelated_unit_does_not_override_the_selected_capability_unit(
+        self,
+    ) -> None:
         self._set_cluster_field("run_id")
         self.export()
         self.assertEqual(
-            self._annotation("numStrictOverall"), "pooled, run_id-clustered CI"
+            self._annotation("numStrictOverall"), "pooled, capability-clustered CI"
         )
 
 
@@ -1051,8 +1087,8 @@ class StrictModeTest(ExporterFixtureTest):
         path = self.outputs / exporter.HEADLINE_BOOTSTRAP_CI
         rows = eu.read_csv_rows(path)
         for row in rows:
-            row["ci_low"] = ""
-            row["ci_high"] = ""
+            row["seed_ci_low"] = ""
+            row["seed_ci_high"] = ""
         eu.write_csv_rows(path, rows)
 
     def test_a_blank_ci_column_reaches_numbers_tex_as_nan_by_default(self) -> None:
@@ -1061,7 +1097,7 @@ class StrictModeTest(ExporterFixtureTest):
         code, printed = self.run_exporter()
         self.assertEqual(code, 0, printed)
         macros = exporter.parse_macros(self.output.read_text(encoding="utf-8"))
-        self.assertEqual(macros["numStrictOverallCI"], "nan--nan")
+        self.assertEqual(macros["numStrictOverallCI"], "nan to nan")
         self.assertIn("numStrictOverallCI", printed)
         self.assertIn("non-finite", printed)
 
@@ -1144,13 +1180,44 @@ class RqTableMacroTest(ExporterFixtureTest):
     """`\\numTableRqOneRows` / `\\numTableRqTwoThreeRows`: the two table bodies."""
 
     def _rows(self, body: str) -> list[str]:
-        return [line.strip() for line in body.splitlines() if line.strip()]
+        return [
+            line.strip().removeprefix(r"\rowcolor{tableShade} ")
+            for line in body.splitlines()
+            if line.strip()
+        ]
+
+    def test_shading_alternates_model_blocks_and_leaves_headers_clear(self) -> None:
+        macros, _ = self.export()
+        for name, rows_per_model in (
+            ("numTableRqOneRows", 1),
+            ("numTableRqTwoThreeRows", 1),
+            ("numTableModalityRows", 2),
+        ):
+            with self.subTest(table=name):
+                rows = macros[name].splitlines()
+                self.assertNotIn(r"\rowcolor", rows[0])
+                self.assertTrue(
+                    all(r"\rowcolor" not in row for row in rows[1 : 1 + rows_per_model])
+                )
+                self.assertTrue(
+                    all(
+                        row.startswith(r"\rowcolor{tableShade} ")
+                        for row in rows[1 + rows_per_model : 1 + 2 * rows_per_model]
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        r"\rowcolor" not in row
+                        for row in rows
+                        if r"\multicolumn" in row or row.startswith("All models")
+                    )
+                )
 
     def test_rq_one_body_has_the_manuscript_column_order(self) -> None:
         macros, _ = self.export()
         rows = self._rows(macros["numTableRqOneRows"])
 
-        self.assertEqual(rows[0], r"\multicolumn{5}{@{}l}{\textit{Hosted}} \\")
+        self.assertEqual(rows[0], r"\multicolumn{5}{@{}l}{\tabgroup{Hosted}} \\")
         cells = [cell.strip() for cell in rows[1].split("&")]
         self.assertEqual(cells[0], "GLM-5.1")
         # Weak-intent escalation and frame-only partition the weak strict
@@ -1159,14 +1226,14 @@ class RqTableMacroTest(ExporterFixtureTest):
             cells[1:],
             ("60/2000", "705/3400", "235/3400", "1540/13,600"),
             (
-                "3.0 [2.0, 4.0]",
-                "20.7 [19.7, 21.7]",
-                "6.9 [5.9, 7.9]",
-                "11.3 [10.3, 12.3]",
+                "3.0 [2.5, 3.5]",
+                "20.7 [20.2, 21.2]",
+                "6.9 [6.4, 7.4]",
+                "11.3 [10.8, 11.8]",
             ),
             strict=True,
         ):
-            self.assertIn(counts + r"\\" + rate, cell)
+            self.assertIn(rate + r"\\" + counts, cell)
             self.assertTrue(cell.startswith(r"\begin{tabular}[t]{@{}c@{}}"))
         # Model and four outcomes, with the denominator in each result cell.
         for row in rows[1:2] + rows[-1:]:
@@ -1178,24 +1245,24 @@ class RqTableMacroTest(ExporterFixtureTest):
         macros, _ = self.export()
         rows = self._rows(macros["numTableRqTwoThreeRows"])
 
-        self.assertEqual(rows[0], r"\multicolumn{6}{@{}l}{\textit{Hosted}} \\")
+        self.assertEqual(rows[0], r"\multicolumn{6}{@{}l}{\tabgroup{Hosted}} \\")
         # Model, confidence, agreement, AUROC, called strengthened/preserved.
         cells = [cell.strip() for cell in rows[1].split("&")]
         self.assertEqual(cells[0], "GLM-5.1")
         for cell, content in zip(
             cells[1:],
             (
-                r"1507/1540\\97.8\\{}[96.8, 98.8]",
-                r"965/1540\\62.7\\{}[61.7, 63.7]",
-                r"1540/13,600\\0.753\\{}[0.723, 0.783]",
-                r"680/1540\\44.2\\{}[43.2, 45.2]",
-                r"714/1540\\46.3\\{}[45.3, 47.3]",
+                r"97.8\\{}[97.3, 98.3]\\1507/1540",
+                r"62.7\\{}[62.2, 63.2]\\965/1540",
+                r"0.753\\{}[0.733, 0.773]\\1540/13,600",
+                r"44.2\\{}[43.7, 44.7]\\680/1540",
+                r"46.3\\{}[45.8, 46.8]\\714/1540",
             ),
             strict=True,
         ):
             self.assertIn(content, cell)
             self.assertTrue(cell.startswith(r"\begin{tabular}[t]{@{}c@{}}"))
-        self.assertIn(r"\multicolumn{6}{@{}l}{\textit{Local}} \\", rows)
+        self.assertIn(r"\multicolumn{6}{@{}l}{\tabgroup{Local}} \\", rows)
         self.assertTrue(rows[-1].startswith("All models &"))
         self.assertEqual(rows[-1].count("&"), 5)
 
@@ -1214,8 +1281,8 @@ class RqTableMacroTest(ExporterFixtureTest):
                 "task2_strict_agreement_n": 7,
                 "task2_strict_agreement_denominator": 10,
                 "task2_strict_agreement_rate": 0.7,
-                "task2_strict_agreement_ci_low": 0.6,
-                "task2_strict_agreement_ci_high": 0.8,
+                "task2_strict_agreement_seed_ci_low": 0.6,
+                "task2_strict_agreement_seed_ci_high": 0.8,
                 "task2_meaning_variation_auroc_n_positive": 13,
                 "task2_meaning_variation_auroc_n": 20,
                 "task3_strict_flagged_n": 3,
@@ -1240,8 +1307,8 @@ class RqTableMacroTest(ExporterFixtureTest):
             ("1507/1540", "7/10", "13/20", "3/8", "4/8"),
             strict=True,
         ):
-            self.assertIn(expected + r"\\", cell)
-        self.assertIn(r"7/10\\70.0\\{}[60.0, 80.0]", cells[2])
+            self.assertIn(r"\\" + expected, cell)
+        self.assertIn(r"70.0\\{}[60.0, 80.0]\\7/10", cells[2])
 
     def test_rq_two_three_keeps_class_counts_when_auroc_is_unavailable(self) -> None:
         path = self.outputs / exporter.PER_MODEL_RQ
@@ -1271,9 +1338,9 @@ class RqTableMacroTest(ExporterFixtureTest):
         macros, _ = self.export()
         cells = self._rows(macros["numTableRqTwoThreeRows"])[1].split("&")
 
-        self.assertIn(r"0/0\\---\\{}", cells[2])
-        self.assertNotIn(r"---\\{}---", cells[2])
-        self.assertIn(r"4/4\\---\\{}", cells[3])
+        self.assertIn(r"n/a\\{}\\0/0", cells[2])
+        self.assertNotIn(r"n/a\\{}n/a", cells[2])
+        self.assertIn(r"n/a\\{}\\4/4", cells[3])
 
     def test_hosted_order_follows_the_recorded_cohort(self) -> None:
         write_fixture(self.outputs, models=["kit.gemma4-31b-it", "glm-5.1"])
@@ -1299,7 +1366,7 @@ class RqTableMacroTest(ExporterFixtureTest):
         rows = self._rows(macros["numTableRqOneRows"])
 
         self.assertTrue(rows[1].startswith("GLM-5.1 &"))
-        self.assertEqual(rows[3], r"\multicolumn{5}{@{}l}{\textit{Local}} \\")
+        self.assertEqual(rows[3], r"\multicolumn{5}{@{}l}{\tabgroup{Local}} \\")
         self.assertTrue(rows[4].startswith("qwen/qwen3.5-9b &"), rows[4])
         self.assertNotIn(r"\placeholder", macros["numTableRqOneRows"])
 
@@ -1313,8 +1380,8 @@ class RqTableMacroTest(ExporterFixtureTest):
 
     def test_available_intervals_keep_their_bounds(self) -> None:
         self.assertEqual(exporter.fmt_pct_ci(0.086, 0.076, 0.096), "8.6 [7.6, 9.6]")
-        self.assertEqual(exporter.fmt_pct_ci(0.0, 0.0, 0.0), "0.0 ---")
-        self.assertEqual(exporter.fmt_pct_ci(1.0, 1.0, 1.0), "100.0 ---")
+        self.assertEqual(exporter.fmt_pct_ci(0.0, 0.0, 0.0), "0.0")
+        self.assertEqual(exporter.fmt_pct_ci(1.0, 1.0, 1.0), "100.0")
         # Rounding must not make an available interval look unavailable.
         self.assertEqual(
             exporter.fmt_pct_ci(0.5, 0.49999, 0.50004), "50.0 [50.0, 50.0]"
@@ -1322,20 +1389,22 @@ class RqTableMacroTest(ExporterFixtureTest):
         self.assertEqual(
             exporter.fmt_auroc_ci(0.7685, 0.742, 0.791), "0.768 [0.742, 0.791]"
         )
-        self.assertEqual(exporter.fmt_auroc_ci(1.0, 1.0, 1.0), "1.000 ---")
+        self.assertEqual(exporter.fmt_auroc_ci(1.0, 1.0, 1.0), "1.000")
         self.assertEqual(
             exporter.fmt_auroc_ci(0.7, 0.69999, 0.70004), "0.700 [0.700, 0.700]"
         )
 
-    def test_only_unavailable_estimates_or_intervals_render_a_dash(self) -> None:
+    def test_unavailable_intervals_are_blank_and_missing_estimates_keep_a_marker(
+        self,
+    ) -> None:
         for formatter, point in (
             (exporter.fmt_pct_ci, "50.0"),
             (exporter.fmt_auroc_ci, "0.500"),
         ):
             with self.subTest(formatter=formatter.__name__):
-                self.assertEqual(formatter(float("nan"), 0.0, 1.0), "---")
-                self.assertEqual(formatter(0.5, float("nan"), 0.8), point + " ---")
-                self.assertEqual(formatter(0.5, 0.2, float("nan")), point + " ---")
+                self.assertEqual(formatter(float("nan"), 0.0, 1.0), "n/a")
+                self.assertEqual(formatter(0.5, float("nan"), 0.8), point)
+                self.assertEqual(formatter(0.5, 0.2, float("nan")), point)
 
     def test_pooled_rates_are_cross_checked_against_the_headline_snapshot(self) -> None:
         path = self.outputs / exporter.PER_MODEL_RQ
@@ -1381,12 +1450,12 @@ class HeldOutFigureExportsTest(ExporterFixtureTest):
                 )
         eu.write_csv_rows(path, rows)
         macros, _ = self.export("--strict")
-        self.assertEqual(macros["numEmbGlobalAUROCCI"], "0.610--0.870")
+        self.assertEqual(macros["numEmbGlobalAUROCCI"], "0.610 to 0.870")
         self.assertEqual(macros["numEmbGlobalAPBaseline"], "0.125")
         self.assertEqual(macros["numEmbGlobalSamples"], "96")
         self.assertEqual(macros["numEmbGlobalFitReview"], "required")
-        self.assertEqual(macros["numEmbWithinOptional"], "N/A")
-        self.assertEqual(macros["numEmbWithinOptionalAUROCCI"], "N/A")
+        self.assertEqual(macros["numEmbWithinOptional"], "n/a")
+        self.assertEqual(macros["numEmbWithinOptionalAUROCCI"], "")
         bars = figure.resolve_bars(eu.read_csv_rows(path), figure.TARGET_BARS)
         self.assertEqual((bars[0]["ci_low"], bars[0]["ci_high"]), (0.61, 0.87))
         self.assertEqual(
