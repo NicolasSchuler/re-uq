@@ -29,8 +29,8 @@ from typing import Any
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.lines import Line2D  # noqa: E402
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -299,10 +299,14 @@ def build_figure(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--batching", type=Path, default=REPO / "outputs/batching_ablation_summary_deltas.csv"
+        "--batching",
+        type=Path,
+        default=REPO / "outputs/batching_ablation_summary_deltas.csv",
     )
     parser.add_argument(
-        "--context", type=Path, default=REPO / "outputs/context_ablation_summary_deltas.csv"
+        "--context",
+        type=Path,
+        default=REPO / "outputs/context_ablation_summary_deltas.csv",
     )
     parser.add_argument(
         "--weak-probe-dir",
@@ -317,7 +321,9 @@ def main(argv: list[str] | None = None) -> int:
         help="rerun state file used to locate the weak probe runs when --weak-probe-dir is absent",
     )
     parser.add_argument(
-        "--output", type=Path, default=REPO / "outputs/rerun/figures/ablation_deltas.pdf"
+        "--output",
+        type=Path,
+        default=REPO / "outputs/rerun/figures/ablation_deltas.pdf",
     )
     args = parser.parse_args(argv)
 
@@ -325,11 +331,17 @@ def main(argv: list[str] | None = None) -> int:
     if not probe_dirs:
         state = json.loads(args.state.read_text(encoding="utf-8"))
         probe_dirs = [
-            REPO / "outputs/weak_modality_probe" / cell["run_id"].replace("weak-probe-must-", "weak_probe_must_").replace("-", "_")
+            REPO
+            / "outputs/weak_modality_probe"
+            / cell["run_id"]
+            .replace("weak-probe-must-", "weak_probe_must_")
+            .replace("-", "_")
             for name, cell in state["cells"].items()
             if name.startswith("weak_phrasing:") and cell.get("status") == "complete"
         ]
-    missing = [p for p in probe_dirs if not (p / "weak_modality_text_deltas.csv").exists()]
+    missing = [
+        p for p in probe_dirs if not (p / "weak_modality_text_deltas.csv").exists()
+    ]
     if missing:
         raise SystemExit("missing weak probe deltas: " + ", ".join(map(str, missing)))
 

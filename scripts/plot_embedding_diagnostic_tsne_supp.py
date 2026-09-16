@@ -90,9 +90,7 @@ def main() -> None:
         "(a) Source modality",
         rng=rng,
     )
-    panel_projection(
-        ax_b, coords, sub_rows, "drift", "(b) Wording-check result"
-    )
+    panel_projection(ax_b, coords, sub_rows, "drift", "(b) Wording-check result")
     fig.suptitle(
         "Generated requirements (t-SNE of requirement-only embeddings)",
         fontsize=12.5,
