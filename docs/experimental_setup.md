@@ -416,6 +416,27 @@ of the sampling configuration and the served model file, not byte identity of
 individual answers; the 2026-09-10 byte-identical repeats were obtained on an
 otherwise idle server.
 
+The model files, as recorded in the served-model identifier of every local
+response of the final campaign (61,200 per model; all Unsloth dynamic 4-bit
+quantisations, `UD-Q4_K_XL`):
+
+| Model id | Served model (Hugging Face repository : quantisation) |
+| --- | --- |
+| `qwen3.8-27b` | `unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL` |
+| `qwen3.6-27b` | `unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL:Q4_K_XL` (recorded with the quantisation type appended) |
+| `qwen3.5-9b` | `unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL` |
+| `gemma4-31b-it` | `unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL` |
+| `gemma4-12b-it` | `unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL` (quantisation-aware-trained base) |
+| `muse-glimmer-30b` | `unsloth/Muse-Glimmer-30B-GGUF:UD-Q4_K_XL` |
+| `gpt-oss-20b` | `unsloth/gpt-oss-20b-GGUF:UD-Q4_K_XL` |
+
+To serve them yourself, load these files in any OpenAI-compatible llama.cpp
+server (llama-swap routes by the request's `model` field), name them with the
+ids above, and point `conf/profile/local_llama_cpp.yaml` at it via
+`RE_UQ_LOCAL_LLAMA_CPP_BASE_URL`. The server configuration of the authors'
+machine is not part of the package; the settings above are the ones that
+matter for the outputs.
+
 Intervals from the saved generations are conditional on those outputs; they
 do not measure variability across repeated server executions.
 
@@ -423,6 +444,18 @@ Temperature 0.0 is treated as deterministic. It is not guaranteed to be
 deterministic on a hosted endpoint, and without a request seed and a recorded
 served-model version this cannot be checked after the fact for the existing
 runs.
+
+### 5.2.2 Adding your own model
+
+Any OpenAI-compatible chat-completions endpoint works. Add a profile under
+`conf/profile/` (copy `local_llama_cpp.yaml` or `zai.yaml`: endpoint, the name
+of the environment variable that holds your key, model ids, concurrency,
+output format, thinking switch), then copy `conf/rerun/final.yaml` with its own
+`run_group_id` and your profile and models, and start
+`scripts/rerun_all.py --config <your copy>`. Nothing downstream is specific to
+the nine models: the analysis, the tables and
+`scripts/verify_paper_numbers.py` take the model ids from the state file. A new
+`run_group_id` keeps your runs out of the reported campaign.
 
 ### 5.3 Configuration provenance
 

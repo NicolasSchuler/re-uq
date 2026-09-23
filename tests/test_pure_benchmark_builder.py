@@ -271,11 +271,11 @@ class PureBenchmarkBuilderTest(unittest.TestCase):
             "proposed_capability": "export a revised report",
         }
         eu.write_csv_rows(proposal_path, [proposal])
-        with self.assertRaisesRegex(ValueError, "explicit accepted_ai_review"):
+        with self.assertRaisesRegex(ValueError, "explicit accepted decision"):
             pure_builder.apply_capability_revisions(self.root)
         self.assertEqual(path.read_bytes(), original)
         eu.write_csv_rows(
-            proposal_path, [{**proposal, "review_decision": "accepted_ai_review"}]
+            proposal_path, [{**proposal, "review_decision": "accepted"}]
         )
         with mock.patch.object(
             pure_builder.eu,
@@ -308,7 +308,7 @@ class PureBenchmarkBuilderTest(unittest.TestCase):
                 {
                     "seed_id": seed["seed_id"],
                     "proposed_capability": "must export a report",
-                    "review_decision": "accepted_ai_review",
+                    "review_decision": "accepted",
                 }
             ],
         )

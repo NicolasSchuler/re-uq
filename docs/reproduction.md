@@ -8,7 +8,7 @@ resume and result review. This page is the detailed command reference.
 
 The final campaign is explicitly `--config conf/rerun/final.yaml`: size 1,
 five stochastic samples plus one deterministic answer, and the corrected
-AI-reviewed PURE inputs. Older commands and snapshots on this page document
+reviewed PURE inputs. Older commands and snapshots on this page document
 historical campaigns; do not resume them under changed profiles or treat their
 grouped outputs as single-item evidence.
 

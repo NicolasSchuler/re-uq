@@ -213,10 +213,10 @@ def validated_inputs(root: Path) -> tuple[list[dict], list[dict]]:
 
 
 def apply_capability_revisions(root: Path) -> dict[str, object]:
-    """Apply explicitly AI-reviewed clauses, preserving old benchmark inputs.
+    """Apply the reviewed capability clauses, preserving old benchmark inputs.
 
-    Review decisions are AI-assisted, never evidence of human validation.
-    Original source/context fields and every raw response remain unchanged.
+    Every proposal needs an explicit ``accepted`` review decision. Original
+    source/context fields and every raw response remain unchanged.
     """
     path = seeds_review_path(root)
     rows = eu.read_csv_rows(path)
@@ -225,9 +225,9 @@ def apply_capability_revisions(root: Path) -> dict[str, object]:
     by_id = {r["seed_id"]: r for r in proposals}
     if len(by_id) != len(proposals) or set(by_id) != {r["seed_id"] for r in selected}:
         raise ValueError("Reviewed PURE revisions must match selected IDs exactly once")
-    if any(r.get("review_decision") != "accepted_ai_review" for r in proposals):
+    if any(r.get("review_decision") != "accepted" for r in proposals):
         raise ValueError(
-            "Every PURE proposal needs an explicit accepted_ai_review decision"
+            "Every PURE proposal needs an explicit accepted decision"
         )
     revised = [
         {**r, "capability_text_final": by_id[r["seed_id"]]["proposed_capability"]}
@@ -270,7 +270,7 @@ def apply_capability_revisions(root: Path) -> dict[str, object]:
                 shutil.copy2(source, dest)
     eu.write_csv_rows(path, revised, fieldnames=list(rows[0]))
     print(
-        f"Applied {len(proposals)} AI-reviewed PURE capabilities; originals kept at {backup}"
+        f"Applied {len(proposals)} reviewed PURE capabilities; originals kept at {backup}"
     )
     return {"status": "applied", "path": path, "backup": backup}
 

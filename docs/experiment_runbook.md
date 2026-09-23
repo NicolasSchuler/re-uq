@@ -53,9 +53,22 @@ are not automatically swept by this campaign.
 There are 36 main Task 1/2 runs for the current nine models. Each plans 8,640 item answers
 (`720 × 2 tasks × 6 answers`), or 311,040 across the main matrix. At batch size
 1 that is 311,040 main-generation requests before provider probes, retries,
-single-item fallbacks, audits, and ablations. This is a workload count, not a
-price or duration estimate; use live smoke timings and provider usage to plan
-the run.
+single-item fallbacks, audits, and ablations.
+
+What the reported campaign used (raw-store rows including retries, and the
+driver logs), as a planning reference rather than a promise:
+
+| Part | Requests | Prompt tokens | Completion tokens | Wall clock |
+| --- | --- | --- | --- | --- |
+| Hosted, 2 models (cohort, audits, batching arm) | 116,621 | 28.5 M | 7.1 M | 36.4 h (2026-09-11 21:52 to 09-13 10:17) |
+| Local, 7 models (cohort, audits, batching arms) | 418,320 | 91.3 M | 43.4 M | 30.7 h (2026-09-11 21:52 to 09-13 04:32), in parallel with the hosted driver |
+| Document-context ablation, 8 models | 11,520 | 2.8 M | 0.9 M | included above |
+| Analysis stage (`--only analysis`) | none | none | none | about 5 h on an Apple M4 with 32 GB |
+
+The hosted models ran on a Z.AI subscription plan without per-token billing,
+so no price is given; the token counts let you estimate one for your provider.
+The local models ran on one NVIDIA RTX PRO 6000 (96 GB). The phrasing probe
+(nine models, 720 requests each) is not included in the table.
 
 For each model, the driver finishes its four main cells, their audits, and
 its selected ablations before moving to the next model. Analysis follows all
