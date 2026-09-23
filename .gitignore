@@ -62,6 +62,7 @@ outputs/*
 # Benchmark construction (paper-ready inputs)
 !outputs/benchmark_manifest*.json
 !outputs/benchmark_statements_review*
+!outputs/benchmark_grammar_check.*
 !outputs/included_capabilities_review*
 !outputs/modality_template_inventory.*
 !outputs/weak_modality_template_sanity_check.*

@@ -63,8 +63,16 @@ headline numbers), [`docs/reproduction.md`](reproduction.md) (commands),
 | `no_requirement_cue`, `table_or_figure_reference`, `colon_structure`, `list_or_heading_marker`, `note_text`, `symbol_heavy`, `excluded_source` | Additional `mlm_tapt` corpus-hygiene filters. |
 
 4. Review the surviving candidates manually. Grammatical coherence of the
-   generated statements was checked by manual review and additionally with AI
-   grammar tools. Review tables are tracked in
+   generated statements was checked by manual review and additionally with
+   LanguageTool 6.8 at its default rule level
+   (`uv run --with language-tool-python python scripts/check_benchmark_grammar.py`;
+   results in `outputs/benchmark_grammar_check.{csv,md}`). Of 3,060 distinct
+   sentences (540 capability clauses, including PURE and the phrasing probe), it
+   flags grammar in 7 clauses and never in the template wording. All 7 keep
+   wording copied verbatim from the source requirement: two are false positives
+   ("transfer to Shunting", "on/off key"), four are hyphenation or article
+   conventions, and one is a repeated word ("vehicle vehicle", S0240). Review
+   tables are tracked in
    `outputs/included_capabilities_review*.csv` and
    `outputs/benchmark_statements_review*.csv`.
 5. Keep 180 reviewed seeds per dataset.
