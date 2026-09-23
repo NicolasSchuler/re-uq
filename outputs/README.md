@@ -35,7 +35,8 @@ Per-cell analysis directories `evaluation_<dataset>_<variant>_<run_id>/`
 `embedding_diagnostic/probe_grid_predictions.jsonl` and the requirement-only
 embedding cache, `rerun/logs/`, and the `smoke/` tree. All of it regenerates
 from the raw store with
-`scripts/rerun_all.py --config conf/rerun/final.yaml --only analysis`.
+`scripts/rerun_all.py --only analysis --refresh-analysis --state outputs/rerun/manuscript-final/state.json`
+(README, tier 2).
 
 ## Provenance redactions in the tracked copies
 

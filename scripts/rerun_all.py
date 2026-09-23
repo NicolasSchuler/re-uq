@@ -1300,9 +1300,11 @@ def stage_analysis(
         # ordinary resume must not skip stale downstream artifacts as complete.
         for key, _ in steps:
             state.record(key, "pending")
+    skipped = 0
     for key, argv in steps:
         if state.done(key) and not refresh:
             print(f"[skip] {key} already complete")
+            skipped += 1
             continue
         code = runner.run(argv, label=key)
         state.record(key, "complete" if code == 0 else "failed")
@@ -1311,6 +1313,14 @@ def stage_analysis(
                 f"{key} failed (exit {code}); the later analysis steps read its "
                 "output, so the stage stops here."
             )
+    if steps and skipped == len(steps):
+        # A tracked state marks every step complete, so a plain `--only analysis`
+        # on a fresh clone recomputes nothing; say how to recompute instead.
+        print(
+            f"\nEvery analysis step is recorded as complete in {state.path}. To "
+            "recompute them from the raw outputs, add "
+            f"--refresh-analysis --state {state.path}."
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -10,8 +10,10 @@ to describe an incomplete cohort.
 
 from __future__ import annotations
 
+import io
 import sys
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -480,8 +482,12 @@ class AnalysisGateTest(unittest.TestCase):
             rerun_all.stage_analysis(runner, state, config, [("zai", "glm")], [])
             first = list(runner.commands)
             runner.commands.clear()
-            rerun_all.stage_analysis(runner, state, config, [("zai", "glm")], [])
+            printed = io.StringIO()
+            with redirect_stdout(printed):
+                rerun_all.stage_analysis(runner, state, config, [("zai", "glm")], [])
             self.assertEqual(runner.commands, [])
+            # Nothing recomputed, so the driver names the refresh flags.
+            self.assertIn("--refresh-analysis --state", printed.getvalue())
             rerun_all.stage_analysis(
                 runner, state, config, [("zai", "glm")], [], refresh=True
             )

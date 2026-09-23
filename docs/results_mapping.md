@@ -29,8 +29,8 @@ any number or figure back to hashed inputs. All artifacts below are the
 
 `scripts/generate_evaluation_analysis.py` writes one directory per cell and
 run, `outputs/evaluation_<dataset>_<variant>_<run_id>/`. These directories are
-not tracked; `scripts/rerun_all.py --config conf/rerun/final.yaml --only analysis`
-regenerates them from the raw store.
+not tracked; `scripts/rerun_all.py --only analysis --refresh-analysis --state outputs/rerun/manuscript-final/state.json`
+regenerates them from the raw store (README, tier 2).
 
 | Artifact | Content |
 | --- | --- |

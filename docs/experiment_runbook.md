@@ -422,8 +422,9 @@ A new group/state starts fresh work and can repeat provider usage; it is not
 a resume shortcut. Do not delete raw outputs or edit state entries to make a
 failed cell appear complete. Completed analysis steps are also skipped on
 resume: `--only analysis` continues pending work, not a forced recomputation
-of already completed exports. Use the exact per-step command recorded in
-the stage log if you deliberately need to regenerate an existing analysis.
+of already completed exports. To recompute every analysis step of a completed
+campaign, add `--refresh-analysis --state <state.json>`; generation is never
+repeated. For a single step, use the exact command recorded in the stage log.
 
 ## 9. Find and check the results
 

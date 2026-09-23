@@ -152,20 +152,32 @@ The fake-completion smoke path exercises the runner, parser, audit and
 analysis stages without contacting a provider; see
 [`docs/reproduction_smoke.md`](docs/reproduction_smoke.md).
 
-**2. Re-derive every table from the archived raw outputs.** Download the
-Zenodo dataset record (link added with the release), unpack it at the
-repository root, and run the analysis stage of the campaign driver:
+**2. Re-derive every table from the archived raw outputs.** Download both
+archives and `SHA256SUMS.txt` from the Zenodo dataset record
+([doi:10.5281/zenodo.22802294](https://doi.org/10.5281/zenodo.22802294)),
+unpack them into the repository, and recompute the analysis stage of the
+campaign driver:
 
 ```bash
-.venv/bin/python scripts/rerun_all.py --config conf/rerun/final.yaml --only analysis
+shasum -a 256 -c SHA256SUMS.txt
+tar --zstd -xf re-uq-raw-manuscript-final-v2.0.0.tar.zst --strip-components=1 \
+    re-uq-raw-v2.0.0/data re-uq-raw-v2.0.0/outputs
+tar --zstd -xf re-uq-embeddings-manuscript-final-v2.0.0.tar.zst --strip-components=1 \
+    re-uq-embeddings-v2.0.0/outputs
+.venv/bin/python scripts/rerun_all.py --only analysis --refresh-analysis \
+    --state outputs/rerun/manuscript-final/state.json
+git diff --stat outputs/    # the regenerated tables should match the tracked ones
 ```
 
-The driver reads the recorded run ids from
+The driver reads the recorded run ids and settings from
 `outputs/rerun/manuscript-final/state.json`, regenerates the per-cell
 analyses, the paper tables, the macro file, the ablation comparisons and the
-figures, and refuses to run on an incomplete cohort. The embedding steps need
-Apple Silicon with MLX (`mlx-embeddings` is installed there by `uv sync`);
-the archived embedding caches let them reproduce the reported values.
+figures, and refuses to run on an incomplete cohort. Without
+`--refresh-analysis` it skips every step, because the tracked state records
+them as complete; add `--dry-run` to preview the 48 steps. The refresh needs
+an Apple Silicon Mac with MLX (`mlx-embeddings` is installed there by
+`uv sync`), because the table export re-embeds the sampled answers, and takes
+several hours.
 
 **3. Rerun the campaign.** This needs your own model access; the authors'
 keys and infrastructure are not shared. Export your own `ZAI_API_KEY` and
