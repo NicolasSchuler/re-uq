@@ -85,6 +85,7 @@ embedding results. `--dry-run` needs no API keys and writes no state.
 | One-time env setup | `uv sync --group dev --locked` |
 | Full rerun (everything) | `.venv/bin/python scripts/rerun_all.py --config conf/rerun/final.yaml` (see above) |
 | Re-derive every table from the archived raw outputs | unpack both archives of the Zenodo dataset record into the repository (commands in the README, tier 2), then `.venv/bin/python scripts/rerun_all.py --only analysis --refresh-analysis --state outputs/rerun/manuscript-final/state.json` (Apple Silicon with MLX; several hours) |
+| Check the result tables without MLX (any OS) | after unpacking the raw archive, `.venv/bin/python scripts/verify_paper_numbers.py --raw-check` |
 | Sanity-check pipeline without API access | `bash scripts/reproduce.sh smoke-fake` (uses `--fake-completion`) |
 | Fake-completion Task 3 smoke | `bash scripts/reproduce.sh smoke-fake-task3` |
 | Fake-completion analysis smoke | `bash scripts/reproduce.sh smoke-fake-analysis` |

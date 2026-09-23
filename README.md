@@ -179,6 +179,19 @@ an Apple Silicon Mac with MLX (`mlx-embeddings` is installed there by
 `uv sync`), because the table export re-embeds the sampled answers, and takes
 several hours.
 
+Without a Mac, the unpacked raw archive still lets you check every number in
+the result tables on any OS in under a minute:
+
+```bash
+.venv/bin/python scripts/verify_paper_numbers.py --raw-check
+```
+
+It recomputes the counts, rates and AUROCs behind Tables 4-6 from the
+per-item score rows with its own code and compares them with the tracked
+tables; `--raw-check` also re-applies the wording rules to the models' raw
+Task 2 answers. Confidence intervals and the embedding classifier need the
+refresh above.
+
 **3. Rerun the campaign.** This needs your own model access; the authors'
 keys and infrastructure are not shared. Export your own `ZAI_API_KEY` and
 `LLAMA_API_KEY`, point `conf/profile/local_llama_cpp.yaml` at your llama.cpp
