@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## v2.0.1 (2026-09-23): replication-package fixes before resubmission
 
-- Exporter: per-model table cells use `\estcell` (estimate, interval, n/N);
-  `outputs/paper_numbers.tex` regenerated, values unchanged.
+Every reported number is unchanged.
+
+- Exporter: per-model table cells use `\estcell` (estimate, interval, n/N),
+  and the Z.AI group is labelled "Commercial"; `outputs/paper_numbers.tex`
+  regenerated.
 - Benchmark grammar check with LanguageTool 6.8
   (`scripts/check_benchmark_grammar.py`, `outputs/benchmark_grammar_check.*`).
 - Tier 1 works on a fresh clone: the fake smoke run falls back to the example
@@ -14,6 +17,14 @@
 - `seeds_review_mlm_tapt.csv` keeps the source text only for the 180 selected
   requirements.
 - DOIs in the README, `CITATION.cff` and `.zenodo.json`.
+- Docs aligned with the final campaign: capability-clustered intervals,
+  final answer-length figures, seeds and served models, current cohort and
+  configuration, the authors' review of the benchmark; the PURE revision
+  decisions are labelled `accepted`.
+- `docs/experimental_setup.md` lists the served model file of every local
+  model and how to add your own model; `docs/experiment_runbook.md` gives the
+  requests, tokens, wall clock and hardware of the reported campaign.
+- The t-SNE figure's wording-check panel draws its points in shuffled order.
 
 ## v2.0.0 (2026-09-16): revision for the Journal of Systems and Software
 
