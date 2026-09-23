@@ -15,8 +15,17 @@ abstract: >-
   benchmark, the campaign configuration, the analysis code, the paper tables
   with provenance, and the figures; raw model outputs are archived in a
   separate Zenodo dataset record.
-# identifiers (concept DOI, version DOI, dataset DOI) are added with the
-# v2.0.0 release; see CHANGELOG.md.
+doi: 10.5281/zenodo.22802187
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22802187
+    description: "Replication package, all versions (concept DOI)"
+  - type: doi
+    value: 10.5281/zenodo.22802188
+    description: "Replication package v2.0.0"
+  - type: doi
+    value: 10.5281/zenodo.22802294
+    description: "Dataset v2.0.0: raw model outputs, transcripts, run logs and embedding caches"
 authors:
   - family-names: Schuler
     given-names: Nicolas

@@ -1,6 +1,21 @@
 # Changelog
 
-## v2.0.0 (unreleased, September 2026): revision for the Journal of Systems and Software
+## Unreleased
+
+- Exporter: per-model table cells use `\estcell` (estimate, interval, n/N);
+  `outputs/paper_numbers.tex` regenerated, values unchanged.
+- Benchmark grammar check with LanguageTool 6.8
+  (`scripts/check_benchmark_grammar.py`, `outputs/benchmark_grammar_check.*`).
+- Tier 1 works on a fresh clone: the fake smoke run falls back to the example
+  run config, and the number exporter no longer warns about checkout mtimes.
+- Tier 2: working refresh command and unpacking instructions for the Zenodo
+  archives, and `scripts/verify_paper_numbers.py` to check the result tables
+  without MLX.
+- `seeds_review_mlm_tapt.csv` keeps the source text only for the 180 selected
+  requirements.
+- DOIs in the README, `CITATION.cff` and `.zenodo.json`.
+
+## v2.0.0 (2026-09-16): revision for the Journal of Systems and Software
 
 - Final campaign `manuscript-final` (2026-09-11 to 2026-09-16): nine models
   from five families, one item per request, one deterministic and five sampled

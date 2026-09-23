@@ -9,5 +9,7 @@
   ],
   "description": "Replication package for a study of whether large language models preserve the modal force of requirements when extracting them, whether lightweight uncertainty signals expose strengthening of weak stakeholder intent, and whether output-based checks detect it. Contains the frozen prompts, the benchmark, the campaign configuration, the analysis code, the paper tables with provenance, and the figures. Raw model outputs are archived in a separate Zenodo dataset record.",
   "keywords": ["requirements engineering", "large language models", "uncertainty quantification", "modality", "natural language processing"],
-  "related_identifiers": []
+  "related_identifiers": [
+    {"identifier": "10.5281/zenodo.22802293", "relation": "isSupplementedBy", "resource_type": "dataset", "scheme": "doi"}
+  ]
 }

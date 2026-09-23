@@ -41,8 +41,10 @@ no independent two-human agreement is claimed.
 
 ## C. Archive links into the manuscript
 
-Once the Zenodo records exist, the manuscript's data-availability statement
-should name the code and dataset DOIs; it currently points at GitHub only.
+The Zenodo records exist: software 10.5281/zenodo.22802187 (concept; v2.0.0
+is 10.5281/zenodo.22802188) and dataset 10.5281/zenodo.22802294. The
+manuscript's data-availability statement still has to name them; it currently
+points at GitHub only.
 
 ## D. Small loose ends
 

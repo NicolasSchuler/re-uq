@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/NicolasSchuler/re-uq/actions/workflows/ci.yml/badge.svg)](https://github.com/NicolasSchuler/re-uq/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-<!-- The Zenodo DOI badge is added with the v2.0.0 release. -->
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22802187.svg)](https://doi.org/10.5281/zenodo.22802187)
 
 Replication package for the paper **"When Weak Intent Becomes a Requirement:
 Limits of Uncertainty Signals in LLM-Assisted Requirements Engineering"**
@@ -19,8 +19,8 @@ uncertainty signals notice, and whether output-based checks catch it.
 Everything the paper's numbers are generated from is tracked here: the frozen
 prompts, the benchmark, the campaign configuration, the analysis code, the
 tables and figures, and the provenance that names every run. The raw model
-outputs (about one gigabyte) are archived separately on Zenodo; see
-[Reproduce](#reproduce).
+outputs (about one gigabyte) are archived separately on Zenodo
+([doi:10.5281/zenodo.22802294](https://doi.org/10.5281/zenodo.22802294)); see [Reproduce](#reproduce).
 
 ## Results at a glance
 
@@ -219,7 +219,8 @@ holds a key (`conf/profile/*.yaml`, `run_configs/full_matrix.example.json`).
 The reviewed seed tables, the benchmark items and the manifests that hash
 every input are under `data/processed/` and `outputs/`; see
 [`data/README.md`](data/README.md). Raw model outputs, run registries,
-per-request transcripts and embedding caches are in the Zenodo dataset record.
+per-request transcripts and embedding caches are in the Zenodo dataset record
+([doi:10.5281/zenodo.22802294](https://doi.org/10.5281/zenodo.22802294)).
 
 ## Repository map
 

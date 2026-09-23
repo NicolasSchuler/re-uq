@@ -27,6 +27,8 @@ and compares, and checks the README table against it.
 
 ## Local only, shipped in the Zenodo dataset record
 
+Archived at [doi:10.5281/zenodo.22802294](https://doi.org/10.5281/zenodo.22802294).
+
 Per-cell analysis directories `evaluation_<dataset>_<variant>_<run_id>/`
 (`uq_scores.csv`, `metrics_summary.csv`, `bootstrap_seed_ci.csv`,
 `provenance_manifest.json`, qualitative examples, the ACSE embedding caches),
