@@ -233,11 +233,10 @@ DRIFT_PALETTE = {
     "broad_text_oc": "#E69F00",
     "strict_text_oc": "#C1121F",
 }
-# per-class (size, alpha, edge width, zorder) for the drift panel
-DRIFT_STYLE = {
-    "clean": (9.0, 0.70, 0.0, 1),
-    "broad_text_oc": (10.0, 0.92, 0.2, 3),
-    "strict_text_oc": (11.0, 0.92, 0.3, 4),
+DRIFT_LABEL = {
+    "clean": "Not flagged",
+    "broad_text_oc": "Strengthened: broad check only",
+    "strict_text_oc": "Strengthened: strict check",
 }
 SOURCE_LEGEND_ORDER = ["mandatory", "recommended", "optional", "nice_to_have"]
 
@@ -292,42 +291,45 @@ def panel_projection(
         )
     else:
         keys = np.asarray([drift_status(row) for row in rows], dtype=object)
-        label_map = {
-            "clean": "Not flagged",
-            "broad_text_oc": "Strengthened: broad check only",
-            "strict_text_oc": "Strengthened: strict check",
-        }
-        for label in [
-            "clean",
-            "broad_text_oc",
-            "strict_text_oc",
-        ]:  # rare classes last (on top)
-            mask = keys == label
-            if not mask.any():
-                continue
-            size, alpha, edge_w, zorder = DRIFT_STYLE[label]
-            ax.scatter(
-                coords[mask, 0],
-                coords[mask, 1],
-                s=size,
-                c=DRIFT_PALETTE[label],
-                alpha=alpha,
-                linewidths=edge_w,
-                edgecolors="#0f172a" if edge_w > 0 else "none",
-                zorder=zorder,
-                label=label_map[label],
-                rasterized=True,
+        # One scatter in shuffled order, as in the source panel: strengthened
+        # outputs are about a quarter of the points and sit next to their
+        # capability's other variants, so drawing them last would hide the rest.
+        colors = np.asarray(
+            [DRIFT_PALETTE.get(k, "#94a3b8") for k in keys], dtype=object
+        )
+        order = np.arange(len(rows))
+        (rng if rng is not None else np.random.default_rng(0)).shuffle(order)
+        ax.scatter(
+            coords[order, 0],
+            coords[order, 1],
+            s=9.5,
+            c=list(colors[order]),
+            alpha=0.72,
+            linewidths=0.0,
+            zorder=2,
+            rasterized=True,
+        )
+        handles = [
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="none",
+                markersize=4.5,
+                markerfacecolor=DRIFT_PALETTE[name],
+                markeredgecolor="none",
+                label=DRIFT_LABEL[name],
             )
-        leg = ax.legend(
+            for name in DRIFT_LABEL
+        ]
+        ax.legend(
+            handles=handles,
             loc="upper right",
             handletextpad=0.2,
             borderpad=0.25,
             labelspacing=0.25,
             framealpha=0.85,
         )
-        for handle in leg.legend_handles:
-            handle.set_alpha(1.0)
-            handle.set_sizes([16])
     ax.set_title(title, fontsize=12.5)
     ax.set_xticks([])
     ax.set_yticks([])
@@ -530,7 +532,7 @@ def main() -> None:
         rng=rng,
     )
     panel_projection(
-        ax_b, coords, sub_rows, "drift", "(b) Colored by strength increase"
+        ax_b, coords, sub_rows, "drift", "(b) Colored by strength increase", rng=rng
     )
     panel_readout(ax_c, summary, args.group_mode, args.model)
     fig.suptitle("Generated requirements", fontsize=14.0, fontweight="bold")

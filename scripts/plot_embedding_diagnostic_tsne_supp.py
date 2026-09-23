@@ -1,12 +1,11 @@
-"""Supplementary figure: the two t-SNE projections dropped from the paper figure.
+"""The manuscript's t-SNE figure of the generated requirements.
 
-The main paper figure (``plot_embedding_diagnostic_figure_v2.py``) is now a
-single AUROC bar chart. The two 2-D t-SNE maps of the requirement-only MLX
-embeddings -- colored by input strength (a) and by strength increase (b) -- are
-kept here for the replication package only, not the paper.
+Two 2-D t-SNE maps of the requirement-only MLX embeddings, colored by source
+modality (a) and by wording-check result (b). The AUROC figure is
+``plot_embedding_diagnostic_figure_v2.py``.
 
-Reuses the projection helpers from the original three-panel script so the maps
-are pixel-identical to the earlier panels (a)/(b).
+Reuses the projection helpers of the three-panel script, so both use the same
+subsample and projection.
 """
 
 from __future__ import annotations
@@ -90,7 +89,9 @@ def main() -> None:
         "(a) Source modality",
         rng=rng,
     )
-    panel_projection(ax_b, coords, sub_rows, "drift", "(b) Wording-check result")
+    panel_projection(
+        ax_b, coords, sub_rows, "drift", "(b) Wording-check result", rng=rng
+    )
     fig.suptitle(
         "Generated requirements (t-SNE of requirement-only embeddings)",
         fontsize=12.5,
