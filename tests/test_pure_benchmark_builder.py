@@ -274,9 +274,7 @@ class PureBenchmarkBuilderTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "explicit accepted decision"):
             pure_builder.apply_capability_revisions(self.root)
         self.assertEqual(path.read_bytes(), original)
-        eu.write_csv_rows(
-            proposal_path, [{**proposal, "review_decision": "accepted"}]
-        )
+        eu.write_csv_rows(proposal_path, [{**proposal, "review_decision": "accepted"}])
         with mock.patch.object(
             pure_builder.eu,
             "load_config",

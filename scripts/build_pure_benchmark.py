@@ -226,9 +226,7 @@ def apply_capability_revisions(root: Path) -> dict[str, object]:
     if len(by_id) != len(proposals) or set(by_id) != {r["seed_id"] for r in selected}:
         raise ValueError("Reviewed PURE revisions must match selected IDs exactly once")
     if any(r.get("review_decision") != "accepted" for r in proposals):
-        raise ValueError(
-            "Every PURE proposal needs an explicit accepted decision"
-        )
+        raise ValueError("Every PURE proposal needs an explicit accepted decision")
     revised = [
         {**r, "capability_text_final": by_id[r["seed_id"]]["proposed_capability"]}
         if eu.is_truthy(r.get("include"))
