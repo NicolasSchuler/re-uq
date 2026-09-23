@@ -1710,7 +1710,7 @@ def render_grouped_table_body(
             lines.append(block)
         return lines
 
-    lines = [f"{group}{{\\tabgroup{{Hosted}}}} \\\\", *spaced(hosted_rows)]
+    lines = [f"{group}{{\\tabgroup{{Commercial}}}} \\\\", *spaced(hosted_rows)]
     lines += [
         r"\addlinespace[0.3em]",
         f"{group}{{\\tabgroup{{{local_label}}}}} \\\\",

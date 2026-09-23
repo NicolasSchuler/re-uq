@@ -1268,7 +1268,7 @@ class RqTableMacroTest(ExporterFixtureTest):
         macros, _ = self.export()
         rows = self._rows(macros["numTableRqOneRows"])
 
-        self.assertEqual(rows[0], r"\multicolumn{5}{@{}l}{\tabgroup{Hosted}} \\")
+        self.assertEqual(rows[0], r"\multicolumn{5}{@{}l}{\tabgroup{Commercial}} \\")
         cells = [cell.strip() for cell in rows[1].split("&")]
         self.assertEqual(cells[0], "GLM-5.1")
         # Weak-intent escalation and frame-only partition the weak strict
@@ -1297,7 +1297,7 @@ class RqTableMacroTest(ExporterFixtureTest):
         macros, _ = self.export()
         rows = self._rows(macros["numTableRqTwoThreeRows"])
 
-        self.assertEqual(rows[0], r"\multicolumn{6}{@{}l}{\tabgroup{Hosted}} \\")
+        self.assertEqual(rows[0], r"\multicolumn{6}{@{}l}{\tabgroup{Commercial}} \\")
         # Model, confidence, agreement, AUROC, called strengthened/preserved.
         cells = [cell.strip() for cell in rows[1].split("&")]
         self.assertEqual(cells[0], "GLM-5.1")
