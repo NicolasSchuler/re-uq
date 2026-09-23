@@ -493,6 +493,61 @@ class ReproductionWrapperContractTest(unittest.TestCase):
             variant_index = captured.index("--variant")
             self.assertEqual(captured[variant_index + 1], "shall")
 
+    def _fresh_clone_tree(self, root: Path) -> dict[str, str]:
+        """A tree with only the tracked example config and a capturing python."""
+        (root / "scripts").mkdir()
+        (root / "run_configs").mkdir()
+        (root / ".venv/bin").mkdir(parents=True)
+        shutil.copyfile(
+            REPO_ROOT / "scripts/reproduce.sh", root / "scripts/reproduce.sh"
+        )
+        (root / "run_configs/full_matrix.example.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+        fake_python = root / ".venv/bin/python"
+        fake_python.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE_PATH"\n', encoding="utf-8"
+        )
+        fake_python.chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("RE_UQ_")}
+        return {**env, "CAPTURE_PATH": str(root / "captured_args.txt")}
+
+    def test_fake_smoke_falls_back_to_the_example_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env = self._fresh_clone_tree(root)
+            completed = subprocess.run(
+                ["bash", "scripts/reproduce.sh", "smoke-fake"],
+                cwd=root,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            captured = (root / "captured_args.txt").read_text().splitlines()
+            config = captured[captured.index("--config") + 1]
+            self.assertEqual(config, "run_configs/full_matrix.example.json")
+            self.assertIn("--fake-completion", captured)
+
+    def test_real_run_without_own_config_refuses_to_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env = self._fresh_clone_tree(root)
+            completed = subprocess.run(
+                ["bash", "scripts/reproduce.sh", "full"],
+                cwd=root,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("your own run config", completed.stderr)
+            self.assertFalse((root / "captured_args.txt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

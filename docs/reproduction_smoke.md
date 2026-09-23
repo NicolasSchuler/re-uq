@@ -25,11 +25,9 @@ The three stages are chained: Task 3 needs a Task 2 run, and the analysis needs 
 uv sync --group dev --locked
 .venv/bin/python -m unittest discover -s tests -v
 
-# 1. Copy the example config. Credentials are not required for the
-#    fake-completion path, but the file structure must exist.
-cp run_configs/full_matrix.example.json run_configs/current_run.json
-
-# 2-4. All three stages in one command.
+# 1. All three stages in one command. Without run_configs/current_run.json
+#    the fake runs use run_configs/full_matrix.example.json; no credentials
+#    are read and no provider is contacted.
 bash scripts/reproduce.sh smoke-fake-all
 
 # ... or one stage at a time:

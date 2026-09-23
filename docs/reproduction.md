@@ -152,7 +152,7 @@ For a no-credentials sanity check before configuring a provider, see [`docs/repr
 cp run_configs/full_matrix.example.json run_configs/current_run.json
 ```
 
-Edit `run_configs/current_run.json` for the provider, model, endpoint, concurrency, and structured-output mode. This file is ignored by Git because it is machine- and credential-specific.
+Edit `run_configs/current_run.json` for the provider, model, endpoint, concurrency, and structured-output mode. This file is ignored by Git because it is machine- and credential-specific. Real runs need your own model access: an API key for a hosted provider or your own OpenAI-compatible server. The authors' keys and infrastructure are not part of the package.
 
 The tracked example configs define Task 1 and Task 2 as the primary benchmark tasks. Task 3 is run separately after a complete Task 2 run.
 

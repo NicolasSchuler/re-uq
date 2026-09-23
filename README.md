@@ -167,10 +167,11 @@ figures, and refuses to run on an incomplete cohort. The embedding steps need
 Apple Silicon with MLX (`mlx-embeddings` is installed there by `uv sync`);
 the archived embedding caches let them reproduce the reported values.
 
-**3. Rerun the campaign.** Export `ZAI_API_KEY` and `LLAMA_API_KEY`, point
-`conf/profile/local_llama_cpp.yaml` at your llama.cpp server (or export
-`RE_UQ_LOCAL_LLAMA_CPP_BASE_URL`), and start the same driver without
-`--only`. The runbook in [`docs/experiment_runbook.md`](docs/experiment_runbook.md)
+**3. Rerun the campaign.** This needs your own model access; the authors'
+keys and infrastructure are not shared. Export your own `ZAI_API_KEY` and
+`LLAMA_API_KEY`, point `conf/profile/local_llama_cpp.yaml` at your llama.cpp
+server (or export `RE_UQ_LOCAL_LLAMA_CPP_BASE_URL`), and start the same driver
+without `--only`. The runbook in [`docs/experiment_runbook.md`](docs/experiment_runbook.md)
 gives the request counts, the launch order and the resume behaviour; the
 full command reference is [`docs/reproduction.md`](docs/reproduction.md).
 

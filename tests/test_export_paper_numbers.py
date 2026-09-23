@@ -17,6 +17,8 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
+import subprocess
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -937,6 +939,35 @@ class ValidationTest(ExporterFixtureTest):
         _, printed = self.export()
         self.assertIn("warning", printed.lower())
         self.assertIn(exporter.SNAPSHOT_PROVENANCE, printed)
+
+    def _commit_outputs_with_old_provenance(self) -> Path:
+        provenance = self.outputs / exporter.SNAPSHOT_PROVENANCE
+        eu.write_json(provenance, {"generated_at_utc": "2020-01-01T00:00:00Z"})
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.org"]
+        for command in (
+            ["git", "init", "-q"],
+            ["git", "add", "outputs"],
+            [*git, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "snapshot"],
+        ):
+            subprocess.run(command, cwd=self.root, check=True, capture_output=True)
+        # A checkout writes mtimes in arbitrary order; make the provenance oldest.
+        os.utime(provenance, (10_000.0, 10_000.0))
+        return provenance
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_committed_snapshot_ignores_checkout_mtimes(self) -> None:
+        self._commit_outputs_with_old_provenance()
+        _, printed = self.export()
+        self.assertNotIn("is older than", printed)
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_locally_changed_input_still_compares_mtimes(self) -> None:
+        self._commit_outputs_with_old_provenance()
+        changed = sorted(self.outputs.glob("paper_*.csv"))[0]
+        changed.write_text(changed.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        _, printed = self.export()
+        self.assertIn("is older than", printed)
+        self.assertIn(changed.name, printed)
 
 
 class FormatterGuardTest(unittest.TestCase):

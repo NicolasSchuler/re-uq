@@ -39,6 +39,8 @@
 #
 # The smoke-fake* subcommands synthesize completions locally: they never call a
 # provider, never read an API key, and write only into data/processed/smoke/.
+# Without run_configs/current_run.json they use run_configs/full_matrix.example.json.
+# Real runs (smoke, full, task3) need your own run config and model access.
 
 set -euo pipefail
 
@@ -53,7 +55,7 @@ MODE="${RE_UQ_MODE:-full}"
 PY=".venv/bin/python"
 
 usage() {
-  sed -n '2,41p' "$0"
+  sed -n '2,43p' "$0"
   exit "${1:-0}"
 }
 
@@ -64,9 +66,22 @@ announce() {
 require_config() {
   if [[ ! -f "$CONFIG" ]]; then
     echo "error: run config not found at $CONFIG" >&2
+    echo "       Real runs need your own run config and model access (an API key" >&2
+    echo "       or your own OpenAI-compatible server). Start from the example:" >&2
     echo "       cp run_configs/full_matrix.example.json $CONFIG" >&2
+    echo "       and edit provider, model and endpoint (docs/reproduction.md)." >&2
     exit 2
   fi
+}
+
+# Fake runs never contact a provider, so on a fresh clone the tracked example
+# config is a safe default. An explicit RE_UQ_CONFIG is still honoured as given.
+require_fake_config() {
+  if [[ -z "${RE_UQ_CONFIG:-}" && ! -f "$CONFIG" ]]; then
+    CONFIG="run_configs/full_matrix.example.json"
+    echo "note: no run_configs/current_run.json; the fake run uses $CONFIG" >&2
+  fi
+  require_config
 }
 
 # Newest run id with the given prefix in a raw-output tree ("smoke" or "full").
@@ -91,7 +106,7 @@ PY
 }
 
 smoke_fake_run() {
-  require_config
+  require_fake_config
   # --fake-completion synthesizes responses locally; no provider key is read.
   "$PY" scripts/run_experiment_from_config.py \
     --config "$CONFIG" --profile "$PROFILE" --model "$MODEL" \
@@ -99,7 +114,7 @@ smoke_fake_run() {
 }
 
 smoke_fake_task3() {
-  require_config
+  require_fake_config
   local source_run_id="${RE_UQ_RUN_ID:-$(latest_run_id smoke smoke)}"
   echo "resolved: source_run_id=${source_run_id}" >&2
   "$PY" scripts/run_task3_verification_from_config.py \

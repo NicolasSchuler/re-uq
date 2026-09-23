@@ -63,6 +63,7 @@ import argparse
 import json
 import math
 import re
+import subprocess
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -517,6 +518,35 @@ def _ordered(values: Iterable[Any]) -> list[Any]:
 # --- Loading and validation --------------------------------------------------
 
 
+def committed_and_unchanged(paths: Sequence[Path]) -> bool:
+    """True when git tracks every path and none differs from HEAD.
+
+    A checkout writes modification times in arbitrary order, so comparing them
+    says nothing about a committed snapshot: its files were exported together.
+    Without git, or outside a repository, this is False and mtimes decide.
+    """
+    cwd = paths[0].parent
+    names = [str(path.resolve()) for path in paths]
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", *names],
+            cwd=cwd,
+            capture_output=True,
+            check=False,
+        )
+        if tracked.returncode != 0:
+            return False
+        unchanged = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", *names],
+            cwd=cwd,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return unchanged.returncode == 0
+
+
 class Artifacts:
     """The validated input artifacts, as row lists keyed by file name."""
 
@@ -584,6 +614,8 @@ class Artifacts:
         provenance = self.outputs_dir / SNAPSHOT_PROVENANCE
         if not provenance.is_file():
             return None, []
+        if committed_and_unchanged([provenance, *self.paths.values()]):
+            return provenance, []
         stamp = provenance.stat().st_mtime
         newer = [
             name
