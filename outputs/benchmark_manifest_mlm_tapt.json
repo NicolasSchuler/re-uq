@@ -1,11 +1,11 @@
 {
   "artifacts": [
     {
-      "bytes": 17806964,
+      "bytes": 4883665,
       "exists": true,
       "path": "data/processed/seeds_review_mlm_tapt.csv",
       "rows": 39139,
-      "sha256": "02a06117df58961cf72eaf13f3562fb8dbf45c3120e081eb00bb4efe9215b6eb"
+      "sha256": "47c2b1f00a9e2474a159f444b4bd8463024f0aa4574dc8cbc2fd4b8c3a702319"
     },
     {
       "bytes": 59046,
@@ -77,6 +77,7 @@
     "main_benchmark": "MUST",
     "robustness_benchmark": "SHALL",
     "seed_count": 180,
+    "seeds_review_revision": "2026-09-23: the source text of the 38,959 unselected rows was removed (original_requirement, capability_text_auto); every screening decision and the 180 selected requirements are unchanged. The source dataset declares no licence; notebook 00 refetches it to rebuild the full table.",
     "source_modalities": [
       "mandatory",
       "recommended",

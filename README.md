@@ -213,8 +213,8 @@ holds a key (`conf/profile/*.yaml`, `run_configs/full_matrix.example.json`).
 | Dataset | Source and licence | In this repository |
 | --- | --- | --- |
 | NICE / PROMISE relabelled | [Zenodo record 14590935](https://zenodo.org/records/14590935), CC BY 4.0 | `data/raw/PROMISE-relabeled-NICE.csv` (redistributed with attribution) |
-| `limsc/mlm-tapt-requirements` | [Hugging Face](https://huggingface.co/datasets/limsc/mlm-tapt-requirements), no licence declared | not redistributed; fetched with `datasets` when rebuilding seeds. The reviewed seeds derived from it are tracked. |
-| PURE (two specifications, document-context ablation) | [Zenodo record 7118517](https://zenodo.org/records/7118517), CC BY 4.0 | zip fetched by `scripts/build_pure_benchmark.py`; the reviewed capabilities are tracked |
+| `limsc/mlm-tapt-requirements` | [Hugging Face](https://huggingface.co/datasets/limsc/mlm-tapt-requirements), no licence declared | not redistributed; fetched with `datasets` when rebuilding seeds. The screening table records the decision for every source row but keeps the text only for the 180 selected requirements. |
+| PURE (two specifications, document-context ablation) | [Zenodo record 7118517](https://zenodo.org/records/7118517), CC BY 4.0 (Ferrari, Spagnolo and Gnesi) | zip fetched by `scripts/build_pure_benchmark.py`; the reviewed capabilities are tracked |
 
 The reviewed seed tables, the benchmark items and the manifests that hash
 every input are under `data/processed/` and `outputs/`; see
