@@ -1001,9 +1001,9 @@ class ReportingCohortTest(ExporterFixtureTest):
         )
         cells = strict.split("&")
         self.assertEqual(len(cells), 7)
-        self.assertIn(r"10.0\\{}[9.5, 10.5]\\340/3400", cells[1])
-        self.assertIn(r"7.6\\{}[7.1, 8.1]\\260/3400", cells[3])
-        self.assertIn(r"27.6\\{}[27.1, 28.1]\\940/3400", cells[5])
+        self.assertIn(r"\estcell{10.0}{[9.5, 10.5]}{340/3400}", cells[1])
+        self.assertIn(r"\estcell{7.6}{[7.1, 8.1]}{260/3400}", cells[3])
+        self.assertIn(r"\estcell{27.6}{[27.1, 28.1]}{940/3400}", cells[5])
         self.assertNotIn(" & Broad &", body)
         self.assertIn("All models &", body)
 
@@ -1180,37 +1180,58 @@ class RqTableMacroTest(ExporterFixtureTest):
 
     def _rows(self, body: str) -> list[str]:
         return [
-            line.strip().removeprefix(r"\rowcolor{tableShade} ")
+            line.strip().removeprefix(exporter.POOLED_ROW_TINT)
             for line in body.splitlines()
-            if line.strip()
+            if line.strip() and line.strip() != exporter.MODEL_ROW_GAP
         ]
 
-    def test_shading_alternates_model_blocks_and_leaves_headers_clear(self) -> None:
+    def test_only_the_pooled_row_is_tinted_and_models_are_spaced(self) -> None:
         macros, _ = self.export()
-        for name, rows_per_model in (
-            ("numTableRqOneRows", 1),
-            ("numTableRqTwoThreeRows", 1),
-            ("numTableModalityRows", 1),
+        for name in (
+            "numTableRqOneRows",
+            "numTableRqTwoThreeRows",
+            "numTableModalityRows",
         ):
             with self.subTest(table=name):
-                rows = macros[name].splitlines()
-                self.assertNotIn(r"\rowcolor", rows[0])
+                lines = [line for line in macros[name].splitlines() if line.strip()]
+                tinted = [line for line in lines if r"\rowcolor" in line]
+                self.assertEqual(len(tinted), 1, tinted)
                 self.assertTrue(
-                    all(r"\rowcolor" not in row for row in rows[1 : 1 + rows_per_model])
+                    tinted[0].startswith(exporter.POOLED_ROW_TINT + "All models &")
                 )
-                self.assertTrue(
-                    all(
-                        row.startswith(r"\rowcolor{tableShade} ")
-                        for row in rows[1 + rows_per_model : 1 + 2 * rows_per_model]
-                    )
-                )
-                self.assertTrue(
-                    all(
-                        r"\rowcolor" not in row
-                        for row in rows
-                        if r"\multicolumn" in row or row.startswith("All models")
-                    )
-                )
+                self.assertNotIn("tableShade", macros[name])
+                # A gap sits only between two model rows: never after a group
+                # header, before the inner rule, or around the pooled row.
+                gaps = [
+                    i for i, line in enumerate(lines) if line == exporter.MODEL_ROW_GAP
+                ]
+                self.assertTrue(gaps, "no gap between model rows")
+                for i in gaps:
+                    for neighbour in (lines[i - 1], lines[i + 1]):
+                        self.assertTrue(neighbour.endswith(r"\\"), neighbour)
+                        self.assertNotIn(r"\tabgroup", neighbour)
+                        self.assertNotIn(r"\rowcolor", neighbour)
+                        self.assertNotIn(r"\placeholder", neighbour)
+
+    def test_every_cell_is_one_estimate_macro(self) -> None:
+        macros, _ = self.export()
+        for name in (
+            "numTableRqOneRows",
+            "numTableRqTwoThreeRows",
+            "numTableModalityRows",
+        ):
+            with self.subTest(table=name):
+                for row in self._rows(macros[name]):
+                    if (
+                        r"\multicolumn" in row
+                        or row == r"\midrule"
+                        or r"\placeholder" in row
+                    ):
+                        continue
+                    cells = [cell.strip() for cell in row.split("&")][1:]
+                    for cell in cells:
+                        self.assertTrue(cell.startswith(r"\estcell{"), cell)
+                        self.assertNotIn(r"\begin{tabular}", cell)
 
     def test_rq_one_body_has_the_manuscript_column_order(self) -> None:
         macros, _ = self.export()
@@ -1225,15 +1246,16 @@ class RqTableMacroTest(ExporterFixtureTest):
             cells[1:],
             ("60/2000", "705/3400", "235/3400", "1540/13,600"),
             (
-                "3.0 [2.5, 3.5]",
-                "20.7 [20.2, 21.2]",
-                "6.9 [6.4, 7.4]",
-                "11.3 [10.8, 11.8]",
+                "{3.0}{[2.5, 3.5]}",
+                "{20.7}{[20.2, 21.2]}",
+                "{6.9}{[6.4, 7.4]}",
+                "{11.3}{[10.8, 11.8]}",
             ),
             strict=True,
         ):
-            self.assertIn(rate + r"\\" + counts, cell)
-            self.assertTrue(cell.startswith(r"\begin{tabular}[t]{@{}c@{}}"))
+            self.assertTrue(
+                cell.startswith(r"\estcell" + rate + "{" + counts + "}"), cell
+            )
         # Model and four outcomes, with the denominator in each result cell.
         for row in rows[1:2] + rows[-1:]:
             self.assertEqual(row.count("&"), 4)
@@ -1251,16 +1273,15 @@ class RqTableMacroTest(ExporterFixtureTest):
         for cell, content in zip(
             cells[1:],
             (
-                r"97.8\\{}[97.3, 98.3]\\1507/1540",
-                r"62.7\\{}[62.2, 63.2]\\965/1540",
-                r"0.753\\{}[0.733, 0.773]\\1540/13,600",
-                r"44.2\\{}[43.7, 44.7]\\680/1540",
-                r"46.3\\{}[45.8, 46.8]\\714/1540",
+                r"\estcell{97.8}{[97.3, 98.3]}{1507/1540}",
+                r"\estcell{62.7}{[62.2, 63.2]}{965/1540}",
+                r"\estcell{0.753}{[0.733, 0.773]}{1540/13,600}",
+                r"\estcell{44.2}{[43.7, 44.7]}{680/1540}",
+                r"\estcell{46.3}{[45.8, 46.8]}{714/1540}",
             ),
             strict=True,
         ):
-            self.assertIn(content, cell)
-            self.assertTrue(cell.startswith(r"\begin{tabular}[t]{@{}c@{}}"))
+            self.assertTrue(cell.startswith(content), cell)
         self.assertIn(r"\multicolumn{6}{@{}l}{\tabgroup{Local}} \\", rows)
         self.assertTrue(rows[-1].startswith("All models &"))
         self.assertEqual(rows[-1].count("&"), 5)
@@ -1306,8 +1327,8 @@ class RqTableMacroTest(ExporterFixtureTest):
             ("1507/1540", "7/10", "13/20", "3/8", "4/8"),
             strict=True,
         ):
-            self.assertIn(r"\\" + expected, cell)
-        self.assertIn(r"70.0\\{}[60.0, 80.0]\\7/10", cells[2])
+            self.assertIn("{" + expected + "}", cell)
+        self.assertIn(r"\estcell{70.0}{[60.0, 80.0]}{7/10}", cells[2])
 
     def test_rq_two_three_keeps_class_counts_when_auroc_is_unavailable(self) -> None:
         path = self.outputs / exporter.PER_MODEL_RQ
@@ -1337,9 +1358,9 @@ class RqTableMacroTest(ExporterFixtureTest):
         macros, _ = self.export()
         cells = self._rows(macros["numTableRqTwoThreeRows"])[1].split("&")
 
-        self.assertIn(r"n/a\\{}\\0/0", cells[2])
-        self.assertNotIn(r"n/a\\{}n/a", cells[2])
-        self.assertIn(r"n/a\\{}\\4/4", cells[3])
+        self.assertIn(r"\estcell{n/a}{--}{0/0}", cells[2])
+        self.assertNotIn("{n/a}{n/a}", cells[2])
+        self.assertIn(r"\estcell{n/a}{--}{4/4}", cells[3])
 
     def test_hosted_order_follows_the_recorded_cohort(self) -> None:
         write_fixture(self.outputs, models=["kit.gemma4-31b-it", "glm-5.1"])

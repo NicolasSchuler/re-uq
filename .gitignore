@@ -53,6 +53,8 @@ data/processed/*.bak-*
 data/processed/*.lock
 
 manuscript/**
+# latexdiff base: the submitted manuscript, referenced by manuscript/*_diff.tex
+old-version/
 
 # outputs/: ignored by default. The allow-list below IS the replication package.
 outputs/*

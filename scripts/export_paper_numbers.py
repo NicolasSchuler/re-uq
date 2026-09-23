@@ -1644,6 +1644,11 @@ def fmt_auroc_ci(value: float, low: float, high: float) -> str:
     return f"{text} [{low_text}, {high_text}]"
 
 
+POOLED_ROW_TINT = r"\rowcolor{tableSummary} "
+MODEL_ROW_GAP = r"\addlinespace[2pt]"
+NO_INTERVAL = "--"
+
+
 def render_grouped_table_body(
     hosted_rows: Sequence[str],
     local_rows: Sequence[str],
@@ -1656,31 +1661,30 @@ def render_grouped_table_body(
 
     Hosted models, then local models (a `\placeholder` row while none have
     run), then the pooled row after an inner rule. Shared by all three per-model
-    tables so their bodies cannot drift apart.
+    tables so their bodies cannot drift apart. Model rows are unshaded and
+    separated by a small gap; only the pooled row carries a background tint.
     """
     group = f"\\multicolumn{{{n_columns}}}{{@{{}}l}}"
     placeholder = " & ".join(
         [r"\placeholder{model}"] + [r"\placeholder{}"] * (n_columns - 1)
     )
 
-    def shaded_blocks(blocks: Sequence[str]) -> list[str]:
-        # Each block is one model, possibly spanning both check rows.
-        # Explicit outer-row colors avoid affecting nested estimate tables.
-        return [
-            "\n".join(
-                (r"\rowcolor{tableShade} " if index % 2 else "") + row
-                for row in block.splitlines()
-            )
-            for index, block in enumerate(blocks)
-        ]
+    def spaced(blocks: Sequence[str]) -> list[str]:
+        # Each block is one model; the gap replaces the former alternating shading.
+        lines: list[str] = []
+        for index, block in enumerate(blocks):
+            if index:
+                lines.append(MODEL_ROW_GAP)
+            lines.append(block)
+        return lines
 
-    lines = [f"{group}{{\\tabgroup{{Hosted}}}} \\\\", *shaded_blocks(hosted_rows)]
+    lines = [f"{group}{{\\tabgroup{{Hosted}}}} \\\\", *spaced(hosted_rows)]
     lines += [
         r"\addlinespace[0.3em]",
         f"{group}{{\\tabgroup{{{local_label}}}}} \\\\",
-        *(shaded_blocks(local_rows) or [placeholder + r" \\"]),
+        *(spaced(local_rows) or [placeholder + r" \\"]),
         r"\midrule",
-        all_row,
+        POOLED_ROW_TINT + all_row,
     ]
     return "\n".join(lines)
 
@@ -1698,24 +1702,16 @@ def _rq_table_rows(rq: RqTable, models: Sequence[str]) -> tuple[list[str], list[
     return rq_one, rq_two_three
 
 
-def _counted_estimate_cell(
-    count: str,
-    estimate: str,
-    *,
-    centered: bool = False,
-    separate_interval: bool = False,
-) -> str:
-    """Stack the estimate and interval above the eligible case counts."""
-    if separate_interval:
-        # A missing estimate needs only one unavailable marker.
-        point, _, interval = estimate.partition(" ")
-        if point == "n/a":
-            interval = ""
-        # An empty group keeps a leading '[' from becoming a row-spacing option.
-        estimate = point + r"\\{}" + interval
-    if centered:
-        return rf"\begin{{tabular}}[t]{{@{{}}c@{{}}}}{estimate}\\{count}\end{{tabular}}"
-    return rf"\shortstack[l]{{{estimate}\\{count}}}"
+def _counted_estimate_cell(count: str, estimate: str) -> str:
+    r"""One results cell, ``\estcell{point}{interval}{n/N}``.
+
+    The manuscript macro sets the point estimate bold in the table colour with
+    the interval and the eligible counts small and grey beneath it. An
+    unavailable interval prints an en-dash so the middle line never collapses
+    and every model keeps the same height.
+    """
+    point, _, interval = estimate.partition(" ")
+    return rf"\estcell{{{point}}}{{{interval or NO_INTERVAL}}}{{{count}}}"
 
 
 def _rate_cell(
@@ -1723,8 +1719,6 @@ def _rate_cell(
     name: str,
     *,
     denominator: bool = False,
-    centered: bool = False,
-    separate_interval: bool = False,
     source: str = PER_MODEL_RQ,
 ) -> str:
     rate = fmt_pct_ci(
@@ -1735,13 +1729,11 @@ def _rate_cell(
     count = fmt_count(_number(row, f"{name}_n", source))
     if denominator:
         count += "/" + fmt_count(_number(row, f"{name}_denominator", source))
-    return _counted_estimate_cell(
-        count, rate, centered=centered, separate_interval=separate_interval
-    )
+    return _counted_estimate_cell(count, rate)
 
 
 def _rq_one_row(label: str, row: Mapping[str, Any]) -> str:
-    """Model and four outcomes, each showing n/N above its rate and interval.
+    """Model and four outcomes, each showing the rate above its interval and n/N.
 
     The weak-intent stratum leads and is split by what moved: the obligation
     (``should``/``shall``/``must``) or only the wish frame around a kept
@@ -1751,7 +1743,7 @@ def _rq_one_row(label: str, row: Mapping[str, Any]) -> str:
     benchmark-composition figure rather than a per-model propensity.
     """
     columns = [label] + [
-        _rate_cell(row, name, denominator=True, centered=True)
+        _rate_cell(row, name, denominator=True)
         for name in (
             "task1_unsupported_acceptance_90",
             "task2_weak_strict_escalation",
@@ -1777,15 +1769,11 @@ def _rq_two_three_row(label: str, row: Mapping[str, Any]) -> str:
             row,
             "task2_strict_high_conf_90",
             denominator=True,
-            centered=True,
-            separate_interval=True,
         ),
         _rate_cell(
             row,
             "task2_strict_agreement",
             denominator=True,
-            centered=True,
-            separate_interval=True,
         ),
         _counted_estimate_cell(
             auroc_counts,
@@ -1796,22 +1784,16 @@ def _rq_two_three_row(label: str, row: Mapping[str, Any]) -> str:
                     row, "task2_meaning_variation_auroc_seed_ci_high", PER_MODEL_RQ
                 ),
             ),
-            centered=True,
-            separate_interval=True,
         ),
         _rate_cell(
             row,
             "task3_strict_flagged",
             denominator=True,
-            centered=True,
-            separate_interval=True,
         ),
         _rate_cell(
             row,
             "task3_strict_called_preserved",
             denominator=True,
-            centered=True,
-            separate_interval=True,
         ),
     ]
     return " & ".join(columns) + r" \\"
@@ -1957,8 +1939,6 @@ def modality_table_body(artifacts: Artifacts) -> str:
                         row,
                         f"{rule}_strengthening",
                         denominator=True,
-                        centered=True,
-                        separate_interval=True,
                         source=POOLED_MODALITY,
                     )
                 )
