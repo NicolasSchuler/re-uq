@@ -47,7 +47,7 @@ campaign wrote on the author's machine; neither changes a number.
 
 - `rerun/manuscript-final/state.json`: the local llama.cpp profile's
   `base_url` is the published placeholder (`http://localhost:9292/v1`). The
-  run registries in the Zenodo bundle carry the address each run used.
+  copies in the Zenodo bundle are redacted the same way.
 - `paper_snapshot_provenance.json`, `meaning_variation_sensitivity/settings.json`
   and `rerun/acse_selected_manifest.csv`: paths are checkout-relative, which is
   what the exporters write since version 2.0.0.

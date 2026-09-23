@@ -149,7 +149,7 @@ The campaign reads **`conf/`**, with these responsibilities:
 | --- | --- |
 | `conf/profile/zai.yaml` | Hosted endpoint, exact model IDs, API-key variable name, concurrency, batching, timeout, output-token budget, retries, structured output, request seed |
 | `conf/profile/local_llama_cpp.yaml` | Local endpoint and model IDs, local client-key variable name, the same request controls |
-| `conf/rerun/default.yaml` | Campaign group, datasets, variants, hosted/local profile membership, ablation representatives, embedding group, audit mode, analysis settings |
+| `conf/rerun/final.yaml` | Campaign group, datasets, variants, hosted/local profile membership, ablation representatives, embedding group, audit mode, analysis settings |
 | `conf/sampling/default.yaml` | Deterministic and stochastic temperatures, `top_p`, sample counts |
 | `conf/config.yaml` | Base prompt version, run seed and other Hydra defaults |
 | `conf/embedding/qwen3_06b.yaml` | Default neural embedding backend and model |
@@ -314,7 +314,7 @@ same state file. Running `--only cohort` alone is therefore not enough for a
 later complete analysis.
 
 The generation command needs no Metal, so it can run unattended on the GPU
-box from a synced copy of this checkout (`~/projects/re-uq-rerun`, built with
+machine from a synced copy of this checkout (built with
 `uv sync --group dev --locked --python /usr/bin/python3.13`) inside `tmux`.
 The 2026-09 campaign was started that way. Afterwards copy
 `data/processed/` (without `smoke/`), `data/processed/logs/` and

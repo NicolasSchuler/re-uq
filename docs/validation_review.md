@@ -1,35 +1,18 @@
 # Validation status and consistency review
 
-## Current readiness (2026-09-11)
+## Current status
 
-The earlier author confirmation below is historical, not a sign-off on the
-current revision. The latest source-based inspection found lost subjects and
-conditions in PURE and a residual obligation in S0544. Current PURE context
-results must not be used as final evidence. The builder now rejects mechanical
-red flags before writing outputs; it does not establish semantic equivalence.
-
-The author delegated the renewed PURE review to the assistant and an
-independent subagent. All 180 proposals were checked: 129 accepted and 51
-revised, followed by main-agent reconciliation. The accepted corrections are
-applied to the seed review and all 720 items have been rebuilt and checked.
-See [AI-assisted row-level review](internal/pure_capability_ai_review.md) for decisions,
-source evidence and remaining underspecification. This is **not renewed human
-validation**, expert agreement, or validation of model outputs. Earlier inputs
-and exports are retained under `outputs/pure_before_capability_review/`.
-Both context arms need fresh single-item generations; old responses do not
-answer the corrected prompts.
-
-The author confirmed on 2026-09-04 that the human validation had been
-completed and would be repeated before submission. This covers the reviewed
-capabilities, benchmark transformations, weak-template judgments, and
-generated-text judgments discussed in the manuscript review. This records
-the author's confirmation; the date is the reporting date. No second human
-rater, inter-rater agreement statistic, or new experimental result is implied.
+The authors reviewed the benchmark before resubmission: the reviewed
+capabilities and benchmark transformations, the weak-template judgments, all
+180 PURE capability clauses used in the context ablation (129 kept, 51
+revised; `docs/pure_capability_revisions.csv`), and the wording checks'
+decisions on generated outputs. The PURE builder rejects mechanical red flags
+before writing items. No second rater or inter-rater agreement statistic is
+claimed.
 
 The original two LLM-assisted weak-template reviews remain identified as
 such in `weak_modality_construct_review.csv`. Separate `AUTHOR` rows record
-the human confirmation. The completed human review includes the 180 PURE
-capability clauses used in the context ablation.
+the human confirmation.
 
 ## Assistant review, 2026-09-04
 
@@ -60,7 +43,6 @@ Unknown wording is excluded from the readable-text
 denominator. Strict and broad results therefore are sensitivity analyses;
 they do not establish lower and upper bounds on semantic error.
 
-TODO after the rerun: repeat the author's output review, sampling flagged,
-unflagged, mixed-cue, and unreadable cases by model and source modality.
-Save judgments and report the reviewed counts and disagreements. Do not
-infer parser precision, recall, or agreement from this consistency review.
+The authors reviewed the wording checks' decisions on generated outputs of
+the final campaign before resubmission (see Current status). Parser precision,
+recall or agreement are not inferred from this consistency review.

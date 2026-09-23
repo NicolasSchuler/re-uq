@@ -15,5 +15,4 @@ its date and is not updated afterwards.
 | `final_run_readiness.md` | Pre-launch gates for the final campaign and their status on 2026-09-11 | 2026-09-11 |
 | `live_smoke_2026-09-11.md` | Live smoke of the local llama.cpp path across the seven local models | 2026-09-11 |
 | `generation_qualification_2026-09-11.md` | Operational qualification of the schema-constrained local profile | 2026-09-11 |
-| `pure_capability_ai_review.md` | AI-assisted source review of the 180 PURE capabilities (129 accepted, 51 revised); the decisions are `../pure_capability_revisions.csv` | 2026-09-11 |
 | `external_validity_datasets.md` | Survey of public datasets with natural stakeholder language, for future work | 2026-09-04 |

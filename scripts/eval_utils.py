@@ -11925,7 +11925,7 @@ def uq_method_inventory_rows() -> list[dict[str, Any]]:
             "access_requirement": "model internals",
             "extra_inference_cost": "out of scope",
             "headline": "no",
-            "notes": "Explicitly excluded from this short communication because it requires internal activations or model modifications.",
+            "notes": "Explicitly excluded from this study because it requires internal activations or model modifications.",
         },
     ]
 

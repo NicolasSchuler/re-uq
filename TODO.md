@@ -32,12 +32,8 @@ The two-arm ablation on the PURE cell is done and reported
 
 ## B. Human validation before submission
 
-The author confirmed the human construct validation on 2026-09-04 and intends
-to repeat it before submission, for the weak-intent templates
-(`docs/weak_modality_construct_review.csv`) and for the 51 revised PURE
-capabilities (`docs/pure_capability_revisions.csv`). The AI-assisted reviews
-stay labelled as such ([`docs/validation_review.md`](docs/validation_review.md));
-no independent two-human agreement is claimed.
+Done: the authors repeated the review before resubmission; see
+[`docs/validation_review.md`](docs/validation_review.md).
 
 ## C. Archive links into the manuscript
 

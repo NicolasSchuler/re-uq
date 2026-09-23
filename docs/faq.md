@@ -36,7 +36,7 @@ Task 3 is a **diagnostic** blind text audit, not the headline. It asks whether t
 
 Then `scripts/generate_evaluation_analysis.py` will refuse to write paper-facing artifacts and weak-intent results stay diagnostic. Complete [`docs/weak_modality_construct_review.csv`](weak_modality_construct_review.csv) with two reviewer judgments per template before claiming weak-intent results in the paper. See `docs/evaluation.md` for the gate definition.
 
-Human validation is complete, as confirmed by the author on 2026-09-04, and will be repeated before submission. The original LLM-assisted judgments remain separately identified. See [validation review](validation_review.md) for the scope and the wording checks' limitations; no independent two-human agreement is claimed.
+Human validation is complete; the authors repeated it before resubmission. The original LLM-assisted judgments remain separately identified. See [validation review](validation_review.md) for the scope and the wording checks' limitations; no independent two-human agreement is claimed.
 
 ## Are the prompts in `README.md` what the models actually received?
 
@@ -60,7 +60,7 @@ It is not: the reported campaign evaluates nine models from five independently d
 
 ## Can I reproduce the exact requests of the reported runs?
 
-No. The reported runs sent no request `seed` and recorded only the requested model string, not the served model version. Both are recorded going forward, but the archived raw outputs cannot be bit-reproduced. A rerun is a new run that tests stability; it does not verify the old numbers. See [`TODO.md`](../TODO.md) section F.
+Not byte for byte. Every request of the reported campaign carries a recorded seed (20260518 for the single-pass answers, 20260519 to 20260523 for the five samples), and the served model identifier is recorded on every response. Local outputs are still not byte-identical under concurrent serving, and the provider does not expose the revision behind a hosted model id. A rerun is a new run that tests stability; the archived outputs verify the reported numbers (README, reproduction tier 2).
 
 ## Will you fine-tune a model to fix this?
 

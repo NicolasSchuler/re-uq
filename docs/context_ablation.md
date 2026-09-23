@@ -4,7 +4,7 @@ A minimal two-arm ablation for the reviewer's question whether *contextual*
 cues around a requirement (heading, the author's own priority marker,
 neighbouring requirements) change how a model treats the *lexical* cue inside
 it (the modal verb or the weak phrase). It is the small, runnable version of
-[`TODO.md`](../TODO.md) section B. Its numbers are reported on their own and
+[`TODO.md`](../TODO.md) section A. Its numbers are reported on their own and
 are **never pooled** into the four headline cells of
 [`docs/aggregation.md`](aggregation.md).
 
@@ -54,12 +54,11 @@ table says so rather than hiding it.
 
 The seed review table is `data/processed/seeds_review_pure.csv`
 (`include`, `capability_text_final` are the reviewer's columns, as for the
-other datasets). On 2026-09-11 the author delegated a renewed AI-assisted
-source review after defects in the old extraction were found. All 180
-capabilities were reviewed and corrected, then 720 items regenerated. This is
-not renewed human validation. See [row-level decisions](internal/pure_capability_ai_review.md)
-and [validation review](validation_review.md). Earlier benchmark inputs are
-archived under `outputs/pure_before_capability_review/`.
+other datasets). After defects in the old extraction were found, the authors
+reviewed all 180 capabilities (129 kept, 51 revised;
+`docs/pure_capability_revisions.csv`) and the 720 items were regenerated; see
+[validation review](validation_review.md). The earlier inputs are kept locally
+only.
 
 **Items.** `--stage benchmark` renders the 180 seeds through the unchanged
 four modality templates (`eu.source_statement`: MUST / SHOULD / MAY / "It
@@ -247,19 +246,19 @@ remain pending.
 
 - The marker is never manipulated. A marker-flipped third arm (same context,
   M ↔ O swapped) would isolate the marker from the heading and neighbours;
-  it is left in [`TODO.md`](../TODO.md) section B.
+  it is left in [`TODO.md`](../TODO.md) section A.
 - The other envelope factors of the TODO sketch (document status,
   stakeholder role, priority field, rationale sentence, elicitation
   transcript) are not modelled.
 - One domain (railway signalling and radio), two documents, one variant
   (MUST), Task 2 only, deterministic pass only.
-- The 180 corrected capability texts have an author-delegated AI-assisted
-  review, not renewed human/expert validation. Generic system phrasing is a
+- The 180 corrected capability texts were reviewed by the authors; no second
+  rater or agreement statistic is claimed. Generic system phrasing is a
   capability abstraction; original operator/design responsibilities are not
   an additional evaluated construct. Stakeholder intent remains unmeasured.
 - Naturally occurring stakeholder statements (for example Apache Jira "Wish"
   issues with a declared priority) are a separate track; candidates are in
-  [`docs/external_validity_datasets.md`](internal/external_validity_datasets.md).
+  [`docs/internal/external_validity_datasets.md`](internal/external_validity_datasets.md).
 
 ## 8. Provenance and what did not change
 

@@ -6,11 +6,12 @@ metric, what happens to parse failures and to text whose modality cannot be
 read, pooled versus macro-of-cells aggregation, how models are pooled, and the
 bootstrap procedure.
 
-For the final single-item campaign, raw rows have no batched-request identity,
-so the existing cluster resolver uses capability (`seed_id`), keeping sibling
-modalities together. Historical grouped-arm request clustering remains as
-described below. Composition deltas use exact jointly eligible source items
-and capability resampling against the named reference arm, now `single`.
+For the final single-item campaign the reported intervals resample
+capabilities (`seed_id`, 360 clusters), so the four source conditions and both
+keyword variants of a capability stay together; a second, item-clustered
+interval is exported as a sensitivity (Section 6). Composition deltas use exact
+jointly eligible source items and capability resampling against the named
+reference arm, now `single`.
 The cluster actually used is exported; saved-generation intervals do not
 measure repeated-server variability or arbitrary cross-capability dependence.
 
@@ -254,54 +255,40 @@ with no valid answers retain rows with zero eligible counts.
 All confidence intervals are **clustered nonparametric bootstraps**
 (`bootstrap_seed_metric`, `scripts/eval_utils.py`, Section 7):
 
-1. Group the score rows by the cluster field. Every tracked CSV names the
-   field it used in `ci_cluster_field`. For the reported single-item campaign
-   the primary interval clusters on the item (a request is one item) and the
-   second on the capability; the manuscript reports the capability-clustered
-   intervals. The archived runs clustered on the provider **request**
-   (`batch_id`, `DEFAULT_BOOTSTRAP_CLUSTER_FIELD`), not the seed: every
-   archived run sent 16 items per request, so one request carried four whole
-   seeds x four source conditions. The item is not independent of its
-   seed (the four source-modality variants share a capability) and the seed is
-   not independent of its request — strict text strengthening is all-or-none
-   within each `(request, source condition)` group, and unreadable text
-   modality is all-or-none per request. Because a request contains whole
-   seeds, request clustering *nests* seed clustering and is the conservative
-   choice.
+1. Group the score rows by the cluster field. The manuscript reports the
+   capability-clustered interval (`*_seed_ci_low` / `*_seed_ci_high`).
+   `seed_id` identifies a capability within a dataset and is shared by its four
+   source-modality variants and by its `must` and `shall` renderings, so the
+   four paper cells pool into 360 clusters (2 datasets x 180 capabilities), and
+   the answers of all models for one capability move together.
 2. Draw `n_clusters` clusters with replacement and concatenate their rows.
 3. Recompute the metric on the resampled rows; repeat `iterations` times
    (default 1000).
-4. Report the 2.5% and 97.5% percentiles of the resampled values as
-   `*_ci_low` / `*_ci_high`; the point estimate is the metric on the observed
-   rows.
+4. Report the 2.5% and 97.5% percentiles of the resampled values; the point
+   estimate is the metric on the observed rows.
 
-The seed-clustered interval is reported alongside the primary one as
-`*_seed_ci_low` / `*_seed_ci_high`, and `bootstrap_ci_cluster_field` records
-which field the primary interval actually used.
+The columns without `seed_` (`*_ci_low` / `*_ci_high`) hold a second interval
+whose cluster `bootstrap_ci_cluster_field` names
+(`resolve_bootstrap_cluster_field`): the request (`batch_id`) when every row
+carries one, otherwise the item (`item_id`), otherwise the seed. Under the
+single-item protocol that is the item, which treats the four source-modality
+variants of a capability as separate units; it is exported as a sensitivity and
+is not the interval the manuscript prints.
 
-Read the seed-clustered column with one caveat: `seed_id` is only unique within
-a dataset, not across benchmark variants, so the `must` and `shall` renderings
-of one capability share an id and land in the same cluster. Pooling the four
-paper cells therefore yields 360 seed clusters (2 datasets x 180 seeds) against
-1080 request clusters. `batch_id` embeds the run id and is globally unique, so
-the primary interval is unaffected.
+Capability resampling keeps the design fixed: every capability contributes one
+item per source condition. A rate that pools all four conditions is therefore
+nearly constant across resamples when one condition carries almost all of it.
+The all-modality strict rate is about a quarter by construction, because only
+weak-intent sources strengthen, and its interval is a fraction of a point wide.
+Read that as a property of the design, not as precision about models; the
+per-condition and per-model rates are the informative ones.
 
-Rows cluster on `batch_id` only when **every** row carries a non-blank one
-(`resolve_bootstrap_cluster_field`). A partially populated column — legacy
-runs, synthesised completions, the rule baseline — would otherwise collapse
-all unbatched rows into one meaningless cluster. Rows without a request then
-cluster on `item_id` when every row carries one: under the single-item
-protocol (the manuscript-final campaign) the request *is* the item, and
-clustering on the seed instead would put the four source-modality variants of
-one capability into one cluster. Strict strengthening is constant within
-every such cluster (exactly the `nice_to_have` quarter strengthens), so a
-seed-clustered bootstrap resamples it to a zero-width interval; the item
-cluster reports the sampling variation that actually exists. Only rows with
-neither a request nor an item fall back to `seed_id`. The seed-clustered pair
-is still reported alongside, and `bootstrap_ci_cluster_field` names the unit
-the primary interval used (`batch_id`, `item_id` or `seed_id`). Paired
-ablation deltas never use the item, because their cluster must nest the
-seed-level pairing.
+Paired ablation deltas cluster on `seed_id` and keep both arms of a pair
+together. In the batched arms one request carries several capabilities and its
+outcomes are all-or-none per request, so those intervals do not capture
+dependence across capabilities that share a request (manuscript, Section 3.5).
+The archived May 2026 runs sent 16 items per request and clustered on the
+request.
 
 The RNG seed is fixed at `20260518` (`BOOTSTRAP_SEED` in
 `scripts/export_paper_tables.py` and `scripts/compare_run_matrix.py`), so the

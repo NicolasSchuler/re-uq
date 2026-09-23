@@ -152,7 +152,7 @@ Sweeping across profiles only makes sense when the swept models exist in each
 profile, because `model=` selects the model for the *selected* profile — and the
 model id is validated against it, so a cross-profile sweep over a model list
 fails fast instead of running the wrong cells. For a cohort spread over several
-endpoints (the official cohort is `zai` plus `kit_toolbox`), run one sweep per
+endpoints (the reported cohort is `zai` plus `local_llama_cpp`), run one sweep per
 profile.
 
 ## 5. Experiment presets
@@ -172,7 +172,7 @@ applied last and opted into with a leading `+`:
 | `paper_cohort` | Hosted half of the reported cohort on the Hydra path: `profile=zai`, `glm-5.3,glm-5.3-flash`, datasets `nice,mlm_tapt`, both variants `must,shall`, Task 1 + Task 2, `mode=full`. The reported campaign itself was driven by `scripts/rerun_all.py` with `conf/rerun/final.yaml`, which also covers the seven local models. |
 | `batching_ablation` | `mlm_tapt`/`must`, deterministic Task 2. Grouped size sweep 1, 4, 16; the file header gives the separate sibling-separated sweep at sizes 4 and 16. `conf/rerun/final.yaml` schedules all five distinct arms. Single-item is the final reference; archive comparisons use `--baseline-arm grouped`. |
 | `context_ablation` | `pure`/`must`, deterministic Task 2, one item per request, sweeping `item_context=bare,document`. Separate group `context-manuscript-final`; old PURE outputs remain historical after capability corrections. See [`context_ablation.md`](context_ablation.md). |
-| `diverse_families` | [`TODO.md`](../TODO.md) section C: `openai`, `mistral`, `google_gemini`, `ollama_local`, every model of each profile, both datasets, variant `must`. All OpenAI-compatible endpoints; adding a family without one is out of scope. |
+| `diverse_families` | Not run for the paper: `openai`, `mistral`, `google_gemini`, `ollama_local`, every model of each profile, both datasets, variant `must`. All OpenAI-compatible endpoints; adding a family without one is out of scope. |
 
 Presets compose with further overrides, e.g.
 `+experiment=batching_ablation profile.batch_size=1`.
@@ -288,7 +288,7 @@ logging thresholds and run-level fields exactly.
 
 ## 9. Which path should I use?
 
-- Reproducing a published number: the JSON path, as documented in
-  [`reproduction.md`](reproduction.md).
+- Reproducing a published number: the reproduction tiers in the README
+  (`scripts/rerun_all.py` with `conf/rerun/final.yaml` and its state file).
 - Anything new — ablations, new providers, sweeps: the Hydra path, and keep the
   `resolved_config_sha` with the results.

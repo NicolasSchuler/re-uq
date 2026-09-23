@@ -68,8 +68,7 @@ The driver forces request transcripts, events, and progress files on:
 The driver uses exact recorded run IDs for audits, exports, embedding caches,
 and ablation comparisons. The manuscript's RQ tables consume generated row
 macros, but its numbers file is not overwritten automatically: integrate the
-fresh export when reviewing the rerun results. Current manuscript values are
-provisional. A zero denominator or undefined AUROC remains missing, never
+fresh export when reviewing the rerun results. A zero denominator or undefined AUROC remains missing, never
 converted into a success rate or a chance score.
 
 Run `--fake-completion` to check execution without credentials. Its state,
@@ -130,7 +129,7 @@ These are also the defaults built into `scripts/reproduce.sh`. **The default cel
 | `RE_UQ_VARIANT` | `must` | `must` or `shall`. |
 
 ```bash
-RE_UQ_PROFILE=local_llama_cpp RE_UQ_MODEL=qwen/qwen3.5-9b RE_UQ_DATASET=nice \
+RE_UQ_PROFILE=local_llama_cpp RE_UQ_MODEL=qwen3.5-9b RE_UQ_DATASET=nice \
   bash scripts/reproduce.sh smoke
 ```
 
@@ -389,8 +388,9 @@ Use diagnostic flags such as `--allow-partial`, `--skip-registry-check`, `--skip
 
 ### Recomputing Both Bootstrap Intervals
 
-Confidence intervals cluster on the provider **request** by default and report
-the seed-clustered interval alongside ([`aggregation.md`](aggregation.md) §6).
+The manuscript reports capability-clustered intervals; the tables also carry a
+second interval whose cluster `bootstrap_ci_cluster_field` names
+([`aggregation.md`](aggregation.md) §6).
 To recompute both from the local raw rows without touching the committed
 snapshots, point the exporter at a scratch directory:
 
@@ -456,7 +456,7 @@ Environment variables recognised by the runners and the wrapper:
 | `seed` | profile and run | Request seed for reproducibility. |
 | `send_seed` | profile | Whether the seed is actually put on the wire. Set `false` for providers whose OpenAI-compatible layer ignores it. |
 | `max_retries` | profile | Request retry budget. |
-| `batch_order` | profile and run | `grouped` (consecutive request indices; the archived policy and one ablation arm) or `shuffled` — a constrained shuffle that never places two source variants of one seed in the same batch, derived deterministically from the run seed and stable across resume (the ablation; see [`TODO.md`](../TODO.md) section A). |
+| `batch_order` | profile and run | `grouped` (consecutive request indices; the archived policy and one ablation arm) or `shuffled` — a constrained shuffle that never places two source variants of one seed in the same batch, derived deterministically from the run seed and stable across resume (the request-composition ablation). |
 | `batch_size` | profile | Benchmark items per request. `1` in the reported campaign; 4 and 16 in the request-composition ablation; 16 in the archived runs. |
 | `item_context` | run | `bare` (every reported run) or `document` — Task 2 items are shown with their document, section, author marker and neighbouring requirements. Only the `pure` dataset carries that context; see [`context_ablation.md`](context_ablation.md). |
 
@@ -466,11 +466,12 @@ Environment variables recognised by the runners and the wrapper:
 | --- | --- | --- | --- |
 | `zai`, `kit_toolbox` | yes | `json_object` | yes |
 | `institutional_llm` | yes | `json_schema` | yes |
-| `local_llama_cpp`, `ollama_local` | no | `none` | yes / n.a. |
+| `local_llama_cpp` | no | `json_schema` | yes |
+| `ollama_local` | no | `none` | n.a. |
 | `openai`, `mistral` | yes | `json_object` | yes |
 | `google_gemini` | yes | `json_object` | `send_seed: false` — same reason. |
 
-Every profile targets an OpenAI-compatible chat-completions endpoint; that is the only provider integration the pipeline supports, and new families are added as profile files (see `docs/configuration.md`). `ollama_local` gives a fully offline replication path. Running the new families is [`TODO.md`](../TODO.md) section C.
+Every profile targets an OpenAI-compatible chat-completions endpoint; that is the only provider integration the pipeline supports, and new families are added as profile files (see `docs/configuration.md`). `ollama_local` gives a fully offline replication path. Running further families is not part of the reported campaign.
 
 ### Registry Columns
 

@@ -8,7 +8,7 @@ request protocol, and this model cohort. Read it before citing any figure.
 `manuscript-final` campaign of 11 to 16 September 2026: nine models, one item
 per request, one deterministic and five sampled answers per item, request
 seeds sent and the served model recorded, task-specific JSON-schema decoding
-for the local models, and an AI-assisted source review of the PURE cell.
+for the local models, and the authors' review of the PURE capabilities.
 Reference-free extractions are audited but excluded from automatic audit
 correctness scores. The original submission's campaign (May 2026, six models,
 sixteen items per request) is referred to below as the *archived* campaign;

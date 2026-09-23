@@ -9,7 +9,7 @@ its tables live one level up under `outputs/`.
 
 Kept for the record and not cited by the revised manuscript. The headline
 values this campaign produced were strict text strengthening 8.6%, broad
-13.8%, and weak-intent strict strengthening at confidence >= 0.90 of 29.8% in
+13.8% pooled (13.9% as printed in the submitted paper, a mean over cells), and weak-intent strict strengthening at confidence >= 0.90 of 29.8% in
 the mlm_tapt/MUST cell.
 
 | File | Content |

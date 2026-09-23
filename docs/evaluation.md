@@ -124,7 +124,7 @@ Task 2 headline risks:
 Answer-length metrics (reported alongside, not as a headline risk):
 
 - `requirement_word_count` and `source_word_count` per item, plus `response_chars` on the raw record;
-- mean generated-requirement length per source condition. Weak-intent sources produce longer answers (18.65 words on average over the four cells; 18.31 in the MUST cells) than the other three conditions (15.57 words; 15.48 in the MUST cells). Read this as an answer-bloat signal that accompanies strengthening, not as evidence of it.
+- mean generated-requirement length per source condition. In the final campaign generated requirements are equally long across source conditions (15.5 to 15.6 words on average, at most 33). For weak-intent sources they are about a quarter shorter than the source (length ratio 0.74, against about 0.99 for the other conditions): the wish frame is dropped, nothing is added.
 
 ## Text-Strengthening Detector
 
@@ -132,7 +132,7 @@ Declared-label accuracy misses the failure mode, so `requirement_text_modality_d
 
 | Basis | Rule | Strengthening evidence |
 | --- | --- | --- |
-| `weak_phrase` | `would be nice/useful if`, `low-priority enhancement`, `future enhancement`, `nice-to-have`, `wishlist`. | strict and broad |
+| `weak_phrase` | `would be nice/useful if`; `it would/will/could/might be useful/nice/desirable/beneficial/helpful if/for/to`; `it is desirable/useful/nice/beneficial/helpful if/for/that/to`; `low-priority enhancement`; `future enhancement`; `nice-to-have`; `wishlist`; a trailing `… would be/is useful` when no explicit modal is present. | strict and broad |
 | `explicit_modal` | Positive modal cue: `must`/`shall`/`required to` -> mandatory; `should`/`recommended` -> recommended; `may`/`optional`/`could`/`can` -> optional. | strict and broad |
 | `negated_modal` | A modal cue negated by contraction (`must not`, `cannot`, `shouldn't`), by `not`/`never` within 3 preceding tokens, or by a following `not`/`n't`. Resolves to `negated`. | neither |
 | `heuristic_system_verb` | No modal cue, but the text matches `^(the )?system <verb>`; defaulted to mandatory. | broad only |
@@ -140,7 +140,7 @@ Declared-label accuracy misses the failure mode, so `requirement_text_modality_d
 
 - **Strict** evidence requires an explicit modal or a weak phrase. It is the conservative measure.
 - **Broad** evidence additionally accepts the `heuristic_system_verb` default, which encodes the RE convention that a bare `The system X.` reads as an obligation. That is a modelling assumption.
-- The two are not close: **11.5% of successful Task 2 outputs contain no modal at all** (17.6% in the MUST cells, 5.5% in the SHALL cells). Always report strict and broad together and name which one a number uses.
+- In the final campaign **4.2% of valid Task 2 outputs (1,092 of 25,920) carry no readable modal cue**, almost all from gpt-oss-20B (909) and Muse-Glimmer-30B (182). Always report strict and broad together and name which one a number uses.
 - Negation is handled explicitly so that `The system must not export reports.` is never scored as a positive mandatory strengthening.
 - When several modal categories co-occur the record is flagged `text_modality_multi_modal` and the strongest positive category wins (`mandatory > recommended > optional`).
 

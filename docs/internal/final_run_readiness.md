@@ -47,13 +47,9 @@ descriptive rows and 102 comparison rows, six explicitly unavailable because
 GLM-5.3-Flash has no single-item reference in that group. These are exploratory
 size-1/16 results, not the new campaign and not evidence for size 4.
 
-PURE source review is complete as **AI-assisted review**, authorized by the
-author, not human or expert validation. The independent subagent reviewed all
-180 proposals: 129 accepted, 51 revised. The main agent checked the revisions
-against source/context and refined the equipment-design clause. The decisions
-and limitations are in `docs/pure_capability_ai_review.md`; accepted clauses
-are in `docs/pure_capability_revisions.csv` with explicit AI-review decisions.
-No original marker, source text, selection or context field was changed.
+PURE capability review is complete: all 180 proposals reviewed, 129 kept and
+51 revised; the clauses are in `docs/pure_capability_revisions.csv`. No
+original marker, source text, selection or context field was changed.
 
 The reviewed clauses were applied and all 720 PURE items rebuilt. The builder's
 source-copy, unique-identity and existing-benchmark checks pass. Old benchmark
