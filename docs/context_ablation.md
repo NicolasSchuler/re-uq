@@ -158,7 +158,8 @@ registry `notes` column.
 
 ## 5. The table
 
-Results for the eight models of the reported campaign are in
+Results for the nine models of the reported campaign (GLM-5.3-Flash added on
+2026-09-24 with the same protocol) are in
 `outputs/context_ablation_summary.md` (deltas with intervals in
 `outputs/context_ablation_summary_deltas.csv`).
 

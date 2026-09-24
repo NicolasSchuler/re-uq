@@ -24,8 +24,11 @@ ablations:
     batch_sizes: [1, 4, 16]
     batch_orders: [grouped, shuffled]
     baseline_arm: single
+    # GLM-5.3-Flash added 2026-09-24 through conf/rerun/final_flash_ablations.yaml
+    # (same protocol, merged into this plan's state file).
     models:
       - {profile: zai, model: glm-5.3}
+      - {profile: zai, model: glm-5.3-flash}
       - {profile: local_llama_cpp, model: qwen3.6-27b}
       - {profile: local_llama_cpp, model: qwen3.8-27b}
       - {profile: local_llama_cpp, model: qwen3.5-9b}
@@ -39,6 +42,7 @@ ablations:
     batch_order: grouped
     models:
       - {profile: zai, model: glm-5.3}
+      - {profile: zai, model: glm-5.3-flash}
       - {profile: local_llama_cpp, model: qwen3.6-27b}
       - {profile: local_llama_cpp, model: qwen3.8-27b}
       - {profile: local_llama_cpp, model: qwen3.5-9b}

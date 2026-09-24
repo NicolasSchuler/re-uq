@@ -229,6 +229,13 @@
       "status": "complete",
       "updated_at_utc": "2026-09-12T06:29:09Z"
     },
+    "batching:grouped:zai:glm-5.3-flash:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260924-202614-a40d23a8",
+      "started_at_utc": "2026-09-24T18:26:11Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-24T18:30:20Z"
+    },
     "batching:grouped:zai:glm-5.3:mlm_tapt:must": {
       "attempts": 1,
       "run_id": "full-20260912-150225-7b879841",
@@ -284,6 +291,13 @@
       "started_at_utc": "2026-09-12T06:19:48Z",
       "status": "complete",
       "updated_at_utc": "2026-09-12T06:23:01Z"
+    },
+    "batching:grouped_4:zai:glm-5.3-flash:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260924-201305-0319167c",
+      "started_at_utc": "2026-09-24T18:12:59Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-24T18:19:44Z"
     },
     "batching:grouped_4:zai:glm-5.3:mlm_tapt:must": {
       "attempts": 1,
@@ -341,6 +355,13 @@
       "status": "complete",
       "updated_at_utc": "2026-09-12T06:32:01Z"
     },
+    "batching:shuffled:zai:glm-5.3-flash:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260924-203023-82d3d4db",
+      "started_at_utc": "2026-09-24T18:30:20Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-24T18:34:23Z"
+    },
     "batching:shuffled:zai:glm-5.3:mlm_tapt:must": {
       "attempts": 1,
       "run_id": "full-20260912-150505-54bbf594",
@@ -397,6 +418,13 @@
       "status": "complete",
       "updated_at_utc": "2026-09-12T06:26:13Z"
     },
+    "batching:shuffled_4:zai:glm-5.3-flash:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260924-201946-e6ee8089",
+      "started_at_utc": "2026-09-24T18:19:44Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-24T18:26:11Z"
+    },
     "batching:shuffled_4:zai:glm-5.3:mlm_tapt:must": {
       "attempts": 1,
       "run_id": "full-20260912-145739-8e491836",
@@ -452,6 +480,13 @@
       "started_at_utc": "2026-09-12T06:15:32Z",
       "status": "complete",
       "updated_at_utc": "2026-09-12T06:19:48Z"
+    },
+    "batching:single:zai:glm-5.3-flash:mlm_tapt:must": {
+      "attempts": 1,
+      "run_id": "full-20260924-195718-c567056f",
+      "started_at_utc": "2026-09-24T17:57:15Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-24T18:12:59Z"
     },
     "batching:single:zai:glm-5.3:mlm_tapt:must": {
       "attempts": 1,
@@ -768,6 +803,13 @@
       "status": "complete",
       "updated_at_utc": "2026-09-12T13:25:19Z"
     },
+    "context:bare:zai:glm-5.3-flash": {
+      "attempts": 1,
+      "run_id": "full-20260924-203426-fcb66411",
+      "started_at_utc": "2026-09-24T18:34:23Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-24T18:49:23Z"
+    },
     "context:document:local_llama_cpp:gemma4-12b-it": {
       "attempts": 1,
       "run_id": "full-20260912-183247-67006adc",
@@ -823,6 +865,13 @@
       "started_at_utc": "2026-09-12T13:25:19Z",
       "status": "complete",
       "updated_at_utc": "2026-09-12T13:40:41Z"
+    },
+    "context:document:zai:glm-5.3-flash": {
+      "attempts": 1,
+      "run_id": "full-20260924-204925-cc76894e",
+      "started_at_utc": "2026-09-24T18:49:23Z",
+      "status": "complete",
+      "updated_at_utc": "2026-09-24T19:04:21Z"
     },
     "task3:local_llama_cpp:gemma4-12b-it:mlm_tapt:must": {
       "attempts": 1,
@@ -1144,6 +1193,10 @@
               "profile": "zai"
             },
             {
+              "model": "glm-5.3-flash",
+              "profile": "zai"
+            },
+            {
               "model": "qwen3.6-27b",
               "profile": "local_llama_cpp"
             },
@@ -1180,6 +1233,10 @@
           "models": [
             {
               "model": "glm-5.3",
+              "profile": "zai"
+            },
+            {
+              "model": "glm-5.3-flash",
               "profile": "zai"
             },
             {
@@ -1405,5 +1462,5 @@
     },
     "smoke_items": 8
   },
-  "updated_at_utc": "2026-09-16T17:30:01Z"
+  "updated_at_utc": "2026-09-24T19:04:21Z"
 }

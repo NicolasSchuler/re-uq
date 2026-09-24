@@ -1,0 +1,50 @@
+# Extension of the manuscript-final campaign: the request-composition
+# (batching) and document-context ablations for GLM-5.3-Flash, the one cohort
+# model conf/rerun/final.yaml did not select for them (2026-09-24). Same run
+# groups, same profiles, same single-item protocol, arms and sampling as the
+# eight existing models' ablation runs, so the new runs are protocol-compatible
+# with them.
+#
+# This plan schedules ONLY these two ablations for one model. Run it with its
+# own state file so no cohort, Task 3 or phrasing cell can be scheduled by
+# accident:
+#
+#   .venv/bin/python -u scripts/rerun_all.py \
+#     --config conf/rerun/final_flash_ablations.yaml \
+#     --state outputs/rerun/manuscript-final/flash_ablations_state.json \
+#     --profile zai --only preflight --only ablations
+#
+# The dataset and variant lists match final.yaml (the context ablation adds
+# `pure`), so the generated run config is byte-identical to the campaign's.
+run_group_id: manuscript-final
+embedding: qwen3_06b
+datasets: [mlm_tapt, nice]
+variants: [must, shall]
+cohort_profiles: [zai]
+local_profiles: [local_llama_cpp]
+primary_protocol:
+  batch_size: 1
+  batch_order: grouped
+primary_sampling:
+  deterministic: 1
+  stochastic: 5
+
+ablations:
+  batching:
+    dataset: mlm_tapt
+    variant: must
+    batch_sizes: [1, 4, 16]
+    batch_orders: [grouped, shuffled]
+    baseline_arm: single
+    models:
+      - {profile: zai, model: glm-5.3-flash}
+  context:
+    run_group_id: context-manuscript-final
+    batch_size: 1
+    batch_order: grouped
+    models:
+      - {profile: zai, model: glm-5.3-flash}
+
+analysis:
+  bootstrap_samples: 1000
+  numbers_output: outputs/paper_numbers.tex

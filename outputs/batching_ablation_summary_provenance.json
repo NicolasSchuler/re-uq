@@ -1,6 +1,6 @@
 {
   "baseline_arm": "single",
-  "generated_at_utc": "2026-09-13T19:39:54Z",
+  "generated_at_utc": "2026-09-24T19:15:47Z",
   "runs": [
     {
       "arm": "grouped",
@@ -165,6 +165,61 @@
       "run_group_id": "manuscript-final",
       "run_id": "full-20260912-143818-62f432ec",
       "started_at_utc": "2026-09-12T12:38:23Z",
+      "task2_rows": 720
+    },
+    {
+      "arm": "grouped",
+      "batch_order": "grouped",
+      "batch_size": "16",
+      "model": "glm-5.3-flash",
+      "notes": "mode=full; resolved_config_sha=8995c169458f98acf40af393cbe28f4ece5d2ea8804c3d969e621589ad0d4c01",
+      "run_group_id": "manuscript-final",
+      "run_id": "full-20260924-202614-a40d23a8",
+      "started_at_utc": "2026-09-24T18:26:21Z",
+      "task2_rows": 720
+    },
+    {
+      "arm": "grouped_4",
+      "batch_order": "grouped",
+      "batch_size": "4",
+      "model": "glm-5.3-flash",
+      "notes": "mode=full; resolved_config_sha=e45b485329263657114a4bdc4cb1d818121bea7b095d2baa9ba34ee2580a0618",
+      "run_group_id": "manuscript-final",
+      "run_id": "full-20260924-201305-0319167c",
+      "started_at_utc": "2026-09-24T18:13:12Z",
+      "task2_rows": 720
+    },
+    {
+      "arm": "shuffled",
+      "batch_order": "shuffled",
+      "batch_size": "16",
+      "model": "glm-5.3-flash",
+      "notes": "mode=full; resolved_config_sha=8a0cbb0d8368403a47daa54b000025511932285d9accb6eaf7610d54a8b3d4d5",
+      "run_group_id": "manuscript-final",
+      "run_id": "full-20260924-203023-82d3d4db",
+      "started_at_utc": "2026-09-24T18:30:30Z",
+      "task2_rows": 720
+    },
+    {
+      "arm": "shuffled_4",
+      "batch_order": "shuffled",
+      "batch_size": "4",
+      "model": "glm-5.3-flash",
+      "notes": "mode=full; resolved_config_sha=4578d23f00a30586dc034795951cf960aa720f44f69aaaa9b5f3d975876447da",
+      "run_group_id": "manuscript-final",
+      "run_id": "full-20260924-201946-e6ee8089",
+      "started_at_utc": "2026-09-24T18:19:53Z",
+      "task2_rows": 720
+    },
+    {
+      "arm": "single",
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "model": "glm-5.3-flash",
+      "notes": "mode=full; resolved_config_sha=5b074c81cf148d374aa262e64e664ba6f5b6d540af5d10f03e534ea1d482faed",
+      "run_group_id": "manuscript-final",
+      "run_id": "full-20260924-195718-c567056f",
+      "started_at_utc": "2026-09-24T17:57:26Z",
       "task2_rows": 720
     },
     {

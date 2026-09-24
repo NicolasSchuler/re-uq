@@ -1,7 +1,7 @@
 {
   "benchmark_variant": "must",
   "dataset_id": "pure",
-  "generated_at_utc": "2026-09-13T19:37:26Z",
+  "generated_at_utc": "2026-09-24T19:13:01Z",
   "runs": [
     {
       "batch_order": "grouped",
@@ -67,6 +67,28 @@
       "run_group_id": "context-manuscript-final",
       "run_id": "full-20260912-152522-d815b750",
       "started_at_utc": "2026-09-12T13:25:22Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "bare",
+      "model": "glm-5.3-flash",
+      "notes": "mode=full; resolved_config_sha=5a5a1b3e53f37690687775bcb5cc3cd2bcbf8eebe4b3f926d3740d17a5aa0826",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260924-203426-fcb66411",
+      "started_at_utc": "2026-09-24T18:34:26Z",
+      "task2_rows": 720
+    },
+    {
+      "batch_order": "grouped",
+      "batch_size": "1",
+      "item_context": "document",
+      "model": "glm-5.3-flash",
+      "notes": "mode=full; resolved_config_sha=3be4c25f966de222a3a5d165c485dd4a8d07198246b01a9c34b0b8ff3675cc04",
+      "run_group_id": "context-manuscript-final",
+      "run_id": "full-20260924-204925-cc76894e",
+      "started_at_utc": "2026-09-24T18:49:26Z",
       "task2_rows": 720
     },
     {

@@ -40,8 +40,9 @@ The configuration checked on 2026-09-11 selects:
 | Embeddings | `mlx-community/Qwen3-Embedding-0.6B-8bit` |
 | Analysis resampling | 1,000 bootstrap samples in the driver-controlled table/comparison/embedding-diagnostic commands |
 
-The final batching/context comparisons use `glm-5.3` and all seven local
-models. Weak phrasing covers all nine cohort models: `conf/rerun/final.yaml`
+The final batching/context comparisons use all nine models: `glm-5.3` and
+the seven local models at launch, and `glm-5.3-flash` added on 2026-09-24
+through `conf/rerun/final_flash_ablations.yaml`. Weak phrasing covers all nine cohort models: `conf/rerun/final.yaml`
 selected `glm-5.3`, `qwen3.6-27b`, and `muse-glimmer-30b` at launch, and the
 other six were added on 2026-09-16 through
 `conf/rerun/final_phrasing_extension.yaml` with the same protocol and merged
@@ -62,7 +63,8 @@ driver logs), as a planning reference rather than a promise:
 | --- | --- | --- | --- | --- |
 | Hosted, 2 models (cohort, audits, batching arm) | 116,621 | 28.5 M | 7.1 M | 36.4 h (2026-09-11 21:52 to 09-13 10:17) |
 | Local, 7 models (cohort, audits, batching arms) | 418,320 | 91.3 M | 43.4 M | 30.7 h (2026-09-11 21:52 to 09-13 04:32), in parallel with the hosted driver |
-| Document-context ablation, 8 models | 11,520 | 2.8 M | 0.9 M | included above |
+| Document-context ablation, 8 models (2026-09-11 campaign) | 11,520 | 2.8 M | 0.9 M | included above |
+| GLM-5.3-Flash batching and context arms (added 2026-09-24) | 2,610 | 0.7 M | 0.2 M | 67 min (2026-09-24 19:57 to 21:04) |
 | Analysis stage (`--only analysis`) | none | none | none | about 5 h on an Apple M4 with 32 GB |
 
 The hosted models ran on a Z.AI subscription plan without per-token billing,
