@@ -18,7 +18,7 @@
 
 ## Local only, shipped in the Zenodo dataset record
 
-Archived at [doi:10.5281/zenodo.22802294](https://doi.org/10.5281/zenodo.22802294).
+Archived at [doi:10.5281/zenodo.22802293](https://doi.org/10.5281/zenodo.22802293).
 
 Raw model outputs and run bookkeeping stay on the machine that ran the
 campaign and are archived with the release:

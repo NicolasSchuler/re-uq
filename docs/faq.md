@@ -44,7 +44,7 @@ Yes. Every request of the reported campaign carries one benchmark item rendered 
 
 ## Does sending several items per request change the results?
 
-It does, and the paper measures by how much. The request-composition ablation repeats deterministic Task 2 on one cell at 4 and 16 items per request, with the four conditions of a capability kept together or spread across requests, against a single-item reference, for eight models. For most models, several items per request lower the weak-intent strengthening rate by tens of percentage points, so single-item results do not transfer to batched use. The table is `outputs/batching_ablation_summary.md`.
+It does, and the paper measures by how much. The request-composition ablation repeats deterministic Task 2 on one cell at 4 and 16 items per request, with the four conditions of a capability kept together or spread across requests, against a single-item reference, for all nine models. For most models, several items per request lower the weak-intent strengthening rate by tens of percentage points, so single-item results do not transfer to batched use. The table is `outputs/batching_ablation_summary.md`.
 
 ## Does surrounding document context change the result?
 
@@ -56,7 +56,7 @@ Because it is a convention, not evidence. 11.5% of successful Task 2 outputs con
 
 ## Is the model cohort mostly one family?
 
-It is not: the reported campaign evaluates nine models from five independently developed families, two hosted GLM models and seven open-weight models served locally (see [`docs/experimental_setup.md`](experimental_setup.md) §5.1). The two hosted models share a developer, so every result is reported per model and conclusions are restricted to the evaluated models. Example profiles for OpenAI, Mistral, Gemini, and Ollama exist so the cohort can be widened further; provider support is deliberately limited to OpenAI-compatible chat-completions endpoints, so any provider exposing one is a profile file away.
+It is not: the reported campaign evaluates nine models from five independently developed families, two hosted GLM models and seven open-weight models served locally (see [`docs/experimental_setup.md`](experimental_setup.md) §5.1). The two hosted models share a developer, so the main results are reported per model and conclusions are restricted to the evaluated models. Example profiles for OpenAI, Mistral, Gemini, and Ollama exist so the cohort can be widened further; provider support is deliberately limited to OpenAI-compatible chat-completions endpoints, so any provider exposing one is a profile file away.
 
 ## Can I reproduce the exact requests of the reported runs?
 

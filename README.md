@@ -20,7 +20,7 @@ Everything the paper's numbers are generated from is tracked here: the frozen
 prompts, the benchmark, the campaign configuration, the analysis code, the
 tables and figures, and the provenance that names every run. The raw model
 outputs (about one gigabyte) are archived separately on Zenodo
-([doi:10.5281/zenodo.22802294](https://doi.org/10.5281/zenodo.22802294)); see [Reproduce](#reproduce).
+([doi:10.5281/zenodo.22802293](https://doi.org/10.5281/zenodo.22802293)); see [Reproduce](#reproduce).
 
 ## Results at a glance
 
@@ -124,10 +124,10 @@ repositories, UD-Q4_K_XL quantisation, one NVIDIA RTX 6000 Pro).
 
 **Ablations.** Request composition: the same Task 2 cell at 4 and 16 items
 per request, with the four conditions of a capability kept together or spread
-across requests, against a fresh single-item reference (GLM-5.3 and the seven
-local models). Document context: 180 capabilities from two PURE
+across requests, against a fresh single-item reference (all nine models).
+Document context: 180 capabilities from two PURE
 specifications shown bare or with their title, section, author marker and
-neighbours (same eight models). Phrasing: the weak-intent template against
+neighbours (all nine models). Phrasing: the weak-intent template against
 three alternative wordings over all 180 NICE capabilities (all nine models).
 A sensitivity appendix rescores every readable extraction over five
 clustering thresholds and six dispersion weights of the meaning-variation
@@ -154,16 +154,16 @@ analysis stages without contacting a provider; see
 
 **2. Re-derive every table from the archived raw outputs.** Download both
 archives and `SHA256SUMS.txt` from the Zenodo dataset record
-([doi:10.5281/zenodo.22802294](https://doi.org/10.5281/zenodo.22802294)),
+([doi:10.5281/zenodo.22802293](https://doi.org/10.5281/zenodo.22802293)),
 unpack them into the repository, and recompute the analysis stage of the
 campaign driver:
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
-tar --zstd -xf re-uq-raw-manuscript-final-v2.0.0.tar.zst --strip-components=1 \
-    re-uq-raw-v2.0.0/data re-uq-raw-v2.0.0/outputs
-tar --zstd -xf re-uq-embeddings-manuscript-final-v2.0.0.tar.zst --strip-components=1 \
-    re-uq-embeddings-v2.0.0/outputs
+tar --zstd -xf re-uq-raw-manuscript-final-v2.1.0.tar.zst --strip-components=1 \
+    re-uq-raw-v2.1.0/data re-uq-raw-v2.1.0/outputs
+tar --zstd -xf re-uq-embeddings-manuscript-final-v2.1.0.tar.zst --strip-components=1 \
+    re-uq-embeddings-v2.1.0/outputs
 .venv/bin/python scripts/rerun_all.py --only analysis --refresh-analysis \
     --state outputs/rerun/manuscript-final/state.json
 git diff --stat outputs/    # the regenerated tables should match the tracked ones
@@ -220,7 +220,7 @@ The reviewed seed tables, the benchmark items and the manifests that hash
 every input are under `data/processed/` and `outputs/`; see
 [`data/README.md`](data/README.md). Raw model outputs, run registries,
 per-request transcripts and embedding caches are in the Zenodo dataset record
-([doi:10.5281/zenodo.22802294](https://doi.org/10.5281/zenodo.22802294)).
+([doi:10.5281/zenodo.22802293](https://doi.org/10.5281/zenodo.22802293)).
 
 ## Repository map
 

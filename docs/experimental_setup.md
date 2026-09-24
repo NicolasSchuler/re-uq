@@ -242,7 +242,8 @@ request-composition ablation repeats the deterministic Task 2 pass on the
 MLM-TAPT/MUST cell at 4 and 16 items per request, either keeping the four
 source conditions of a capability in one request (grouped) or spreading them
 across requests (sibling-separated), against a fresh single-item reference,
-for GLM-5.3 and the seven local models. The comparison table is
+for all nine models (GLM-5.3-Flash added on 2026-09-24 with the same protocol,
+`conf/rerun/final_flash_ablations.yaml`). The comparison table is
 `outputs/batching_ablation_summary.md`; the paper reports that several items
 per request lower the weak-intent strengthening rate by tens of percentage
 points for most models, so single-item results do not transfer to batched use.
@@ -315,8 +316,8 @@ Unsloth GGUF repositories, UD-Q4_K_XL quantisation, one NVIDIA RTX 6000 Pro).
 | Muse-Glimmer-30B | `muse-glimmer-30b` | `Muse-Glimmer-30B-GGUF` | low effort |
 | gpt-oss-20B | `gpt-oss-20b` | `gpt-oss-20b-GGUF` | low effort |
 
-The two hosted models share a developer, so every result is reported per model
-and conclusions are restricted to the evaluated models and conditions. The
+The two hosted models share a developer, so the main results are reported per
+model and conclusions are restricted to the evaluated models and conditions. The
 Z.AI coding endpoint answers requests for older GLM ids with these two served
 models (recorded in `served_model`), which is why only the two served ids are
 configured.
@@ -429,6 +430,29 @@ quantisations, `UD-Q4_K_XL`):
 | `gemma4-12b-it` | `unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL` (quantisation-aware-trained base) |
 | `muse-glimmer-30b` | `unsloth/Muse-Glimmer-30B-GGUF:UD-Q4_K_XL` |
 | `gpt-oss-20b` | `unsloth/gpt-oss-20b-GGUF:UD-Q4_K_XL` |
+
+The exact files, read from the server's Hugging Face cache on 2026-09-24:
+the repository revision (commit) of the cached snapshot, the file name, and
+the SHA-256 of the file content (`sha256sum`, which equals the Git LFS object
+id on Hugging Face, so a download can be checked against the published
+revision). Every file was written to the cache before the final campaign
+started (2026-09-11 21:52 CEST), and none has changed since. For
+`qwen3.6-27b`, whose served identifier carries the appended quantisation type,
+the server's `/props` endpoint confirms the loaded file.
+
+| Model id | Revision | File | SHA-256 |
+| --- | --- | --- | --- |
+| `qwen3.8-27b` | `4ca720788d1e01f1bff70c033e0d0028fd02e502` | `Qwen3.8-27B-UD-Q4_K_XL.gguf` | `3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e` |
+| `qwen3.6-27b` | `82d411acf4a06cfb8d9b073a5211bf410bfc29bf` | `Qwen3.6-27B-UD-Q4_K_XL.gguf` | `ff6941ded525b34eb159496762c29dd0ec6e71dc31b74d57e75d871a03eec259` |
+| `qwen3.5-9b` | `3885219b6810b007914f3a7950a8d1b469d598a5` | `Qwen3.5-9B-UD-Q4_K_XL.gguf` | `6f5d30666c2d8ae16a306e616d95341dcf3cc46810df84d7e6f5a7d1e4c1b293` |
+| `gemma4-31b-it` | `c1ac76e99d5513b141e8adde7288b85c3f9c32ec` | `gemma-4-31B-it-UD-Q4_K_XL.gguf` | `9e92cb6236044c6a9870af406029c74a76e0571c157a6f95df724dcc8c7a1575` |
+| `gemma4-12b-it` | `980b060c40a8539ac159e0501a3e0f66a6365af3` | `gemma-4-12B-it-qat-UD-Q4_K_XL.gguf` | `90fd44e29e0d7cffeb0fd00dc73cfdab9ed0b0e95306ecf7821ea634c940c370` |
+| `muse-glimmer-30b` | `faa5b025c584459c13febfa5c59883516710ae39` | `Muse-Glimmer-30B-UD-Q4_K_XL.gguf` | `82bece304887a313ece08400bc030f6066c7bff5b906b0cd40308ec8a409fd38` |
+| `gpt-oss-20b` | `d449b42d93e1c2c7bda5312f5c25c8fb91dfa9b4` | `gpt-oss-20b-UD-Q4_K_XL.gguf` | `10fe673de12c20b74b8d670a9fdf0fd36b43b0a86ffc04daeb175c0a2b98c4f9` |
+
+The snapshots also hold multimodal projector files (`mmproj-*.gguf`), which
+llama.cpp loads alongside the model (the server reports vision support).
+Every request is text only, so the projector processes no input.
 
 To serve them yourself, load these files in any OpenAI-compatible llama.cpp
 server (llama-swap routes by the request's `model` field), name them with the
@@ -629,7 +653,7 @@ strict strengthening — see `scripts/diagnose_embedding_separability.py`.
    strengthening by tens of percentage points for most models, so they do not
    transfer to batched use; batched deployments need their own measurement.
 4. **Model families.** Nine models from five families, two of them hosted by
-   one developer; every result is reported per model and conclusions are
+   one developer; the main results are reported per model and conclusions are
    restricted to the evaluated models and conditions.
 5. **Provenance of local generation.** Request seeds are sent and the served
    model is recorded, but recorded seeds do not make local outputs

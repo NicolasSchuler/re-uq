@@ -6,7 +6,8 @@ The authors reviewed the benchmark before resubmission: the reviewed
 capabilities and benchmark transformations, the weak-template judgments, all
 180 PURE capability clauses used in the context ablation (129 kept, 51
 revised; `docs/pure_capability_revisions.csv`), and the wording checks'
-decisions on generated outputs. The PURE builder rejects mechanical red flags
+decisions on a sample of 100 generated outputs covering every model and
+source condition. The PURE builder rejects mechanical red flags
 before writing items. No second rater or inter-rater agreement statistic is
 claimed.
 
@@ -43,6 +44,7 @@ Unknown wording is excluded from the readable-text
 denominator. Strict and broad results therefore are sensitivity analyses;
 they do not establish lower and upper bounds on semantic error.
 
-The authors reviewed the wording checks' decisions on generated outputs of
-the final campaign before resubmission (see Current status). Parser precision,
+The authors reviewed the wording checks' decisions on a sample of 100
+generated outputs of the final campaign, covering every model and source
+condition, before resubmission (see Current status). Parser precision,
 recall or agreement are not inferred from this consistency review.
