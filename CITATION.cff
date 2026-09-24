@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use this artifact, please cite it using the metadata below; cite the paper once it is published."
 title: "When Weak Intent Becomes a Requirement: replication package"
 type: software
-version: 2.0.1
-date-released: 2026-09-23
+version: 2.1.0
+date-released: 2026-09-24
 license: MIT
 repository-code: "https://github.com/NicolasSchuler/re-uq"
 url: "https://github.com/NicolasSchuler/re-uq"
@@ -24,8 +24,14 @@ identifiers:
     value: 10.5281/zenodo.22802188
     description: "Replication package v2.0.0"
   - type: doi
+    value: 10.5281/zenodo.22924134
+    description: "Replication package v2.0.1"
+  - type: doi
+    value: 10.5281/zenodo.22802293
+    description: "Dataset, all versions (concept DOI): raw model outputs, transcripts, run logs and embedding caches"
+  - type: doi
     value: 10.5281/zenodo.22802294
-    description: "Dataset v2.0.0: raw model outputs, transcripts, run logs and embedding caches"
+    description: "Dataset v2.0.0"
 authors:
   - family-names: Schuler
     given-names: Nicolas

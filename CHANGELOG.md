@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.1.0 (2026-09-24): GLM-5.3-Flash in every ablation
+
+Every number of the main study is unchanged.
+
+- GLM-5.3-Flash added to the request-composition and document-context
+  ablations with the campaign's protocol (`conf/rerun/final_flash_ablations.yaml`):
+  seven runs, 2,610 requests, zero unresolved answers. The comparisons in
+  `outputs/batching_ablation_summary*` and `outputs/context_ablation_summary*`
+  and the ablation figure now cover all nine models; the values of the other
+  eight models are unchanged.
+- `docs/experimental_setup.md` gives the Hugging Face revision, file name and
+  SHA-256 of each of the seven local model files.
+- `docs/validation_review.md` states that the authors reviewed the wording
+  checks' decisions on a sample of 100 generated outputs covering every model
+  and source condition.
+- The docs say that the main results, not every result, are reported per
+  model (the embedding classifier is pooled).
+- The dataset record is cited by its concept DOI (10.5281/zenodo.22802293);
+  dataset version v2.1.0 adds the seven GLM-5.3-Flash runs, and the README
+  unpacks the v2.1.0 archives.
+
 ## v2.0.1 (2026-09-23): replication-package fixes before resubmission
 
 Every reported number is unchanged.
