@@ -1,6 +1,6 @@
 [project]
 name = "re-uq"
-version = "2.1.0"
+version = "2.1.1"
 description = "Command-first evaluation artifact for modality-conditioned uncertainty in LLM-assisted requirements engineering."
 readme = "README.md"
 license = { text = "MIT" }
@@ -16,7 +16,6 @@ dependencies = [
     "instructor>=1.15,<2",
     "matplotlib>=3.10.0",
     "mlx-embeddings; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "nbformat>=5.10.0",
     "numpy>=2.0.0",
     "openai>=1.0.0",
     "pandas>=2.2.0",
@@ -31,8 +30,6 @@ dependencies = [
 [dependency-groups]
 dev = [
     "coverage[toml]>=7",
-    "ipykernel>=6.29.0",
-    "jupyterlab>=4.2.0",
     "ruff>=0.16.5",
 ]
 

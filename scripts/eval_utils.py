@@ -3,7 +3,7 @@
 The module intentionally keeps the durable research contracts in one place:
 dataset and benchmark construction, provider request planning, raw-output
 parsing, UQ scoring, and compact paper-facing exports. Command-line entry
-points and notebooks should stay thin wrappers around these helpers.
+points should stay thin wrappers around these helpers.
 """
 
 from __future__ import annotations
@@ -679,7 +679,6 @@ def ensure_project_dirs(root: Path | None = None) -> None:
     for rel in [
         "data/raw",
         "data/processed",
-        "notebooks",
         "outputs",
         "prompts",
     ]:

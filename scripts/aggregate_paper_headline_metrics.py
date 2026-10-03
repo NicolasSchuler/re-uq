@@ -1,11 +1,9 @@
 """Derive the manuscript headline metrics from the shipped per-cell snapshots.
 
-The README "Reported Paper Findings" section quotes five headline numbers
+The README "Results at a glance" section quotes five headline numbers
 (strict / broad text strengthening, weak-intent strict strengthening,
-high-confidence share, and repeated-sample agreement). Those numbers only ever
-lived in static snapshot CSVs whose generating code was never committed. This
-script reconstructs each headline value from the per-cell snapshots that *are*
-present so the aggregation is auditable rather than orphaned.
+high-confidence share, and repeated-sample agreement). This script derives
+them from the per-cell tables exported by ``scripts/export_paper_tables.py``.
 
 It reads three per-cell CSVs:
 
@@ -59,12 +57,13 @@ In short:
   every stochastic sample parsed (``stochastic_complete``), with the excluded
   count reported as ``agreement_n_incomplete_excluded``.
 * **Bootstrap.** ``--regenerate-snapshots`` appends a request-clustered
-  bootstrap CI (resampling ``batch_id`` with replacement, 1000 resamples, fixed
+  bootstrap CI (resampling recorded request clusters where available, 1000 resamples, fixed
   seed 20260518, percentile interval) to the strict and broad headline rows,
   pooled over all requested cells, as ``value_ci_low`` / ``value_ci_high``. The
-  narrower seed-clustered pair travels alongside as ``value_seed_ci_low`` /
+  capability-clustered pair travels alongside as ``value_seed_ci_low`` /
   ``value_seed_ci_high``, and ``value_ci_cluster_field`` records which unit the
-  reported interval used. See docs/aggregation.md Section 6.
+  auxiliary interval used. The manuscript reports the capability-clustered
+  pair. See docs/aggregation.md Section 6.
 """
 
 from __future__ import annotations

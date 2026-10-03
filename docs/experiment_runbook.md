@@ -3,15 +3,14 @@
 Use this guide to launch the prepared campaign from the repository root. The
 entry point is `scripts/rerun_all.py --config conf/rerun/final.yaml`: it runs Task 1/2, audits those outputs
 with Task 3, runs the configured ablations, and produces the analysis exports.
-No notebook execution is required.
 
 **Campaign status.** The final campaign ran from 2026-09-11 to 2026-09-16
 under run group `manuscript-final`; the weak-phrasing probe was extended to
 the whole cohort on 2026-09-16. The primary protocol is one item per request,
 using server concurrency for parallelism. Batch sizes 4 and 16, both grouped
-and sibling-separated, are ablations. This page remains the launch procedure
-for a rerun; [final-run readiness](internal/final_run_readiness.md) records the
-pre-launch gates that were applied.
+and sibling-separated, are ablations. GLM-5.3-Flash batching and context arms
+were added on 2026-09-24. This page gives the launch and verification procedure
+for a rerun.
 
 The commands below run from the checkout root on macOS with Apple Silicon
 and Metal GPU access, as required by the configured MLX embedding backend.
@@ -104,8 +103,11 @@ Keep the reviewed seed tables, benchmark manifests, prompts, and
 not rebuild missing datasets. The weak probe requires the template construct
 review to pass; the analysis also checks benchmark integrity and review
 evidence. See [validation status](validation_review.md) and
-[benchmark ground truth](benchmark_ground_truth.md). Do not regenerate the
-reviewed inputs as a routine launch step.
+[benchmark ground truth](benchmark_ground_truth.md). The optional reconstruction
+path uses `scripts/prepare_benchmark.py` for the main cells and
+`scripts/build_pure_benchmark.py` for PURE; commands are in
+[reproduction](reproduction.md) and [context ablation](context_ablation.md).
+Do not regenerate reviewed inputs as a routine launch step.
 
 ## 3. Set credentials and start the local endpoint
 

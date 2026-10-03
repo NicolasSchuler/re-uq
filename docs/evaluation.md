@@ -39,7 +39,7 @@ For each accepted seed capability, generate four controlled source variants:
 
 The benchmark holds functional content constant and varies only requirement strength. This makes modality preservation and over-commitment measurable without relying on naturally occurring modality labels.
 
-Human validation is complete, as confirmed by the author on 2026-09-04, and will be repeated before submission. The original LLM-assisted judgments remain separately identified. See [validation review](validation_review.md) for the scope and the wording checks' limitations; no independent two-human agreement is claimed.
+The authors reviewed the benchmark and weak-template judgments before resubmission. The original LLM-assisted judgments remain separately identified. See [validation review](validation_review.md) for the scope and the wording checks' limitations; no independent two-human agreement is claimed.
 
 The full template inventory, including the `SHALL` swap and the four weak-intent phrasing-probe templates, is exported to `outputs/modality_template_inventory.csv` / `.md` by `eval_utils.write_main_modality_template_inventory`.
 
@@ -94,7 +94,7 @@ Use lightweight black-box uncertainty signals:
 - `token_logprob_confidence`: optional and non-headline until endpoint support and scoring are stable.
 
 Entropy, variation ratio, and consistency are related summaries of the same stochastic distribution. Do not present them as independent prediction methods.
-The ACSE-inspired score adds a separate text-clustering view of the same five samples. The current implementation uses local TF-IDF character n-gram embeddings plus average-linkage HAC as a lightweight proxy for sentence-encoder clustering; formal ACSE-style threshold guarantees would require a held-out calibration set and a stronger embedding backend.
+The ACSE-inspired score adds a text-clustering view of the same five samples. The reported campaign uses Qwen3 sentence embeddings and average-linkage agglomerative clustering; a TF-IDF character n-gram backend is available as a fallback. Neither choice establishes formal threshold guarantees without an appropriate predeclared calibration protocol.
 
 Meaning-variation parameters (constants in `scripts/eval_utils.py`, recorded per row in `semantic_embedding_backend` and `semantic_distance_threshold`): the five sample texts are embedded, L2-normalised, and clustered by average-linkage agglomerative clustering on cosine distance with distance threshold `ACSE_PROXY_DISTANCE_THRESHOLD = 0.35`. The score is `0.8 x normalised cluster entropy + 0.2 x dispersion`, where `ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT = 0.20` and dispersion is the larger of the mean pairwise distance and the dominant-cluster mean distance, divided by the threshold and capped at 1. The manuscript's final campaign (2026-09-11 to 2026-09-13) ran with `RE_UQ_ACSE_EMBEDDING_BACKEND=mlx` and `mlx-community/Qwen3-Embedding-0.6B-8bit`, as every raw row records; the TF-IDF proxy is only the fallback default.
 For local Apple Silicon runs, set `RE_UQ_ACSE_EMBEDDING_BACKEND=mlx` after installing `mlx-embeddings`; the default MLX model is `mlx-community/Qwen3-Embedding-0.6B-8bit`, with `RE_UQ_ACSE_MLX_MODEL` available for alternatives such as the 4-bit DWQ variant.
@@ -124,7 +124,7 @@ Task 2 headline risks:
 Answer-length metrics (reported alongside, not as a headline risk):
 
 - `requirement_word_count` and `source_word_count` per item, plus `response_chars` on the raw record;
-- mean generated-requirement length per source condition. In the final campaign generated requirements are equally long across source conditions (15.5 to 15.6 words on average, at most 33). For weak-intent sources they are about a quarter shorter than the source (length ratio 0.74, against about 0.99 for the other conditions): the wish frame is dropped, nothing is added.
+- mean generated-requirement length per source condition. In the final campaign mean lengths are similar across conditions (about 15.5 to 15.6 words). This descriptive comparison does not establish preservation of functional content or explain why strengthening occurs; see the pooled modality table and [experimental setup](experimental_setup.md).
 
 ## Text-Strengthening Detector
 
@@ -134,13 +134,13 @@ Declared-label accuracy misses the failure mode, so `requirement_text_modality_d
 | --- | --- | --- |
 | `weak_phrase` | `would be nice/useful if`; `it would/will/could/might be useful/nice/desirable/beneficial/helpful if/for/to`; `it is desirable/useful/nice/beneficial/helpful if/for/that/to`; `low-priority enhancement`; `future enhancement`; `nice-to-have`; `wishlist`; a trailing `… would be/is useful` when no explicit modal is present. | strict and broad |
 | `explicit_modal` | Positive modal cue: `must`/`shall`/`required to` -> mandatory; `should`/`recommended` -> recommended; `may`/`optional`/`could`/`can` -> optional. | strict and broad |
-| `negated_modal` | A modal cue negated by contraction (`must not`, `cannot`, `shouldn't`), by `not`/`never` within 3 preceding tokens, or by a following `not`/`n't`. Resolves to `negated`. | neither |
+| `negated_modal` | A modal cue negated by contraction (`must not`, `cannot`, `shouldn't`), by `not`/`never` within 3 preceding tokens, or by a following `not`/`n't`, with no positive modal cue elsewhere. Resolves to `negated`. | neither |
 | `heuristic_system_verb` | No modal cue, but the text matches `^(the )?system <verb>`; defaulted to mandatory. | broad only |
 | `unknown` | Nothing matched. | neither |
 
-- **Strict** evidence requires an explicit modal or a weak phrase. It is the conservative measure.
+- **Strict** evidence requires an explicit modal or a weak phrase. It is the narrower wording rule, not a lower bound on semantic error.
 - **Broad** evidence additionally accepts the `heuristic_system_verb` default, which encodes the RE convention that a bare `The system X.` reads as an obligation. That is a modelling assumption.
-- In the final campaign **4.2% of valid Task 2 outputs (1,092 of 25,920) carry no readable modal cue**, almost all from gpt-oss-20B (909) and Muse-Glimmer-30B (182). Always report strict and broad together and name which one a number uses.
+- In the final campaign **4.2% of valid Task 2 outputs (1,092 of 25,920) have unclassified wording**, almost all from gpt-oss-20B (909) and Muse-Glimmer-30B (182). A separate 511 outputs receive heuristic-only classifications, which enter the readable-text denominator. Always report strict and broad together and name which one a number uses.
 - Negation is handled explicitly so that `The system must not export reports.` is never scored as a positive mandatory strengthening.
 - When several modal categories co-occur the record is flagged `text_modality_multi_modal` and the strongest positive category wins (`mandatory > recommended > optional`).
 
@@ -198,7 +198,7 @@ Generate paper-facing analysis artifacts from a complete run with:
   --task3-audit-mode blind
 ```
 
-The notebooks remain useful for inspection, but `docs/reproduction.md` is the canonical command-first reproduction guide.
+`docs/reproduction.md` is the command reference for benchmark preparation, provider runs and analysis.
 
 ## External Probe
 

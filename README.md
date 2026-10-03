@@ -43,14 +43,24 @@ generated from the tables under `outputs/`; the Source column names the table.
 | Weak-intent answers rewritten to should/shall/must; kept could/may but dropped the wish framing | 68.9%; 30.8% | `paper_per_model_rq_table.csv` <!-- num:numWeakEscalation numWeakFrameOnly --> |
 | Strict-strengthened outputs with verbalized confidence >= 0.90 | 83.4% [82.4, 84.2] | `paper_headline_metrics.csv` <!-- num:numHighConfShare numHighConfShareCI --> |
 | Strict-strengthened outputs whose five sampled labels all agree | 67.5% | `paper_headline_metrics.csv` <!-- num:numSampleAgreement --> |
-| Strengthening detectors, AUROC: meaning variation across samples; verbalized confidence | 0.719 [0.710, 0.728]; 0.935 | `paper_per_model_rq_table.csv` <!-- num:numMeaningVarAUROC numMeaningVarAUROCCI numVerbConfAUROC --> |
-| Embedding classifier on the requirement text, held-out capabilities, AUROC | 0.810 [0.795, 0.824] | `embedding_diagnostic/probe_grid_summary.csv` <!-- num:numEmbGlobalAUROC numEmbGlobalAUROCCI --> |
+| Pooled strengthening AUROC: meaning variation across samples; lower verbalized confidence | 0.719 [0.710, 0.728]; 0.935 | `paper_per_model_rq_table.csv` <!-- num:numMeaningVarAUROC numMeaningVarAUROCCI numVerbConfAUROC --> |
+| Sampled-text classifier predicting strengthening in the separate single-pass answer, held-out capabilities, AUROC | 0.810 [0.795, 0.824] | `embedding_diagnostic/probe_grid_summary.csv` <!-- num:numEmbGlobalAUROC numEmbGlobalAUROCCI --> |
 | Blind preservation check: strict-strengthened outputs it flags | 94.8% [94.0, 95.5] | `paper_per_model_rq_table.csv` <!-- num:numBlindRecall numBlindRecallCI --> |
 
-Intervals are 95% bootstrap intervals clustered on the capability. Per-model
-values for every quantity are in
+Intervals are 95% bootstrap intervals clustered on the capability. The pooled
+AUROCs largely reflect differences between source conditions; they do not
+establish a threshold for accepting an extraction or sending it for review.
+The embedding classifier uses a sampled extraction to predict the strict
+wording-check outcome of a separate single-pass answer from the same source.
+Its fits reached the 300-step training limit, so the reported performance is
+conditional on that budget; its intervals hold fitted models and folds fixed.
+Per-model values for the main task outcomes are in
 [`outputs/paper_per_model_rq_table.md`](outputs/paper_per_model_rq_table.md);
-the ablation results are in
+the embedding classifier is reported across models. Wording checks detect
+specified patterns: an unflagged output is not necessarily semantically
+preserved. The blind check's recall is measured against the strict wording
+check, not independently adjudicated semantic errors.
+The ablation results are in
 [`outputs/batching_ablation_summary.md`](outputs/batching_ablation_summary.md),
 [`outputs/context_ablation_summary.md`](outputs/context_ablation_summary.md)
 and the nine directories under
@@ -152,7 +162,7 @@ The fake-completion smoke path exercises the runner, parser, audit and
 analysis stages without contacting a provider; see
 [`docs/reproduction_smoke.md`](docs/reproduction_smoke.md).
 
-**2. Re-derive every table from the archived raw outputs.** Download both
+**2. Recompute the main analyses from the archived raw outputs.** Download both
 archives and `SHA256SUMS.txt` from the Zenodo dataset record
 ([doi:10.5281/zenodo.22802293](https://doi.org/10.5281/zenodo.22802293)),
 unpack them into the repository, and recompute the analysis stage of the
@@ -169,18 +179,23 @@ tar --zstd -xf re-uq-embeddings-manuscript-final-v2.1.0.tar.zst --strip-componen
 git diff --stat outputs/    # the regenerated tables should match the tracked ones
 ```
 
+The software release `v2.1.1` uses the same `v2.1.0` raw and embedding archives;
+this release changes documentation and preparation tooling, not observations.
+
 The driver reads the recorded run ids and settings from
 `outputs/rerun/manuscript-final/state.json`, regenerates the per-cell
-analyses, the paper tables, the macro file, the ablation comparisons and the
-figures, and refuses to run on an incomplete cohort. Without
+analyses, the paper tables, the macro file, the batching and context comparisons
+and the figures, and refuses to run on an incomplete cohort. The phrasing-probe
+summaries are retained as tracked inputs to the ablation figure; this analysis
+refresh does not regenerate them. Without
 `--refresh-analysis` it skips every step, because the tracked state records
 them as complete; add `--dry-run` to preview the 48 steps. The refresh needs
 an Apple Silicon Mac with MLX (`mlx-embeddings` is installed there by
 `uv sync`), because the table export re-embeds the sampled answers, and takes
 several hours.
 
-Without a Mac, the unpacked raw archive still lets you check every number in
-the result tables on any OS in under a minute:
+Without a Mac, the unpacked raw archive still lets you check the counts,
+rates and uncertainty-score AUROCs behind Tables 4–6 on any OS:
 
 ```bash
 .venv/bin/python scripts/verify_paper_numbers.py --raw-check
@@ -231,24 +246,23 @@ per-request transcripts and embedding caches are in the Zenodo dataset record
 | `conf/` | Provider profiles, sampling, embedding and campaign configuration (`conf/rerun/final.yaml` is the reported campaign) |
 | `scripts/` | The pipeline: runner, audit, analysis, exporters, figures, and the one-command driver `rerun_all.py` |
 | `outputs/` | The tracked results: paper tables, macro file, provenance, ablation summaries, probe summaries, figures, benchmark reviews |
-| `docs/` | Reader-facing documentation ([index](docs/README.md)); engineering records under `docs/internal/` |
-| `notebooks/` | Generated companion notebooks for inspection; scripts are canonical |
-| `tests/` | Unit, contract, notebook-boundary, link and README-number tests (run in CI) |
+| `docs/` | Reader-facing methods, reproduction instructions and validation records ([index](docs/README.md)) |
+| `tests/` | Unit, contract, benchmark-reproduction, documentation-link and reported-number tests (run in CI) |
 
 Layout conventions and the variant-suffix scheme are in
 [`docs/repository_layout.md`](docs/repository_layout.md).
 
 ## Status and provenance
 
-The tracked results are the `manuscript-final` campaign of 11 to 16
-September 2026. [`outputs/paper_snapshot_provenance.json`](outputs/paper_snapshot_provenance.json)
+The main results are the `manuscript-final` campaign of 11 to 16
+September 2026; GLM-5.3-Flash's batching and context ablations were added on
+24 September with the same protocol. [`outputs/paper_snapshot_provenance.json`](outputs/paper_snapshot_provenance.json)
 names the contributing run per model and cell and hashes every input;
 [`outputs/rerun/manuscript-final/state.json`](outputs/rerun/manuscript-final/state.json)
 records every cell of the campaign with its run id. The original submission's
 campaign (May 2026, six models, sixteen items per request) is archived under
 `outputs/archive/` and `data/processed/archive/` and is not cited by the
-revised manuscript. Open work is listed in [`TODO.md`](TODO.md); versions in
-[`CHANGELOG.md`](CHANGELOG.md).
+revised manuscript. Artifact versions are recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Citation and license
 

@@ -325,6 +325,18 @@ class AggregatePaperHeadlineMetricsTest(unittest.TestCase):
                 "paper_task2_text_drift_metrics.csv",
             )
 
+    def test_tracked_headlines_and_annotations_regenerate_from_cell_tables(self):
+        outputs = Path(__file__).resolve().parents[1] / "outputs"
+        regenerated = agg.build_headline_rows(
+            eu.read_csv_rows(outputs / "paper_task2_text_drift_metrics.csv"),
+            eu.read_csv_rows(outputs / "paper_text_drift_confidence_and_stability.csv"),
+            [],
+        )
+        self.assertEqual(
+            [{key: str(value) for key, value in row.items()} for row in regenerated],
+            eu.read_csv_rows(outputs / "paper_headline_metrics.csv"),
+        )
+
     def test_readme_values_are_the_tracked_manuscript_final_headlines(self):
         """README_VALUES must be readable off outputs/paper_headline_metrics.csv."""
         path = (

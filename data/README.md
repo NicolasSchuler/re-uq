@@ -5,7 +5,7 @@
 | Dataset | Source and licence | In this repository |
 | --- | --- | --- |
 | NICE / PROMISE relabelled | [Zenodo record 14590935](https://zenodo.org/records/14590935), CC BY 4.0 (Rejithkumar and Anish) | `data/raw/PROMISE-relabeled-NICE.csv`, redistributed with attribution |
-| `limsc/mlm-tapt-requirements` | [Hugging Face](https://huggingface.co/datasets/limsc/mlm-tapt-requirements); no licence declared | not redistributed. `seeds_review_mlm_tapt.csv` records the screening decision for all 39,139 source rows but keeps the source text only for the 180 selected requirements, which the benchmark needs. Notebook 00 fetches the dataset with `datasets` to rebuild the full table locally; its full-text candidate file is ignored by Git |
+| `limsc/mlm-tapt-requirements` | [Hugging Face](https://huggingface.co/datasets/limsc/mlm-tapt-requirements); no licence declared | not redistributed. `seeds_review_mlm_tapt.csv` records the screening decision for all 39,139 source rows but keeps the source text only for the 180 selected requirements, which the benchmark needs. `scripts/prepare_benchmark.py` fetches the dataset with `datasets` when rebuilding automatic candidates locally; its full-text candidate file is ignored by Git |
 | PURE requirements XML | [Zenodo record 7118517](https://zenodo.org/records/7118517), CC BY 4.0 (Ferrari, Spagnolo and Gnesi) | `scripts/build_pure_benchmark.py` downloads the zip into `data/raw/` (ignored); the reviewed capabilities and their revisions are tracked |
 
 ## Layout
@@ -30,8 +30,8 @@ campaign and are archived with the release:
   response bodies) and `<run_id>.resolved.yaml`
 - `task3_verification_items/` and `uq_scores*.csv`
 
-Notebook execution also writes `metrics_summary*.csv` and
-`bootstrap_seed_ci.csv` here; those are ignored, the archived May copies are
+Legacy local analyses may also write `metrics_summary*.csv` and
+`bootstrap_seed_ci.csv` here; those are ignored. The archived May copies are
 the tracked ones.
 
 ## Smoke runs

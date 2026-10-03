@@ -6,12 +6,8 @@ it could be a fact about that phrase rather than about weak intent. The probe
 re-asks Task 2 with four weak phrasings of the same capabilities and reports
 what modality each one is read as.
 
-It used to exist only inside ``notebooks/02b_weak_modality_robustness_probe.ipynb``,
-which read the legacy ``config.json``, planned its own requests, and wrote raw
-rows with no registry row, no resume, and no lease -- so a probe run could not
-be continued, audited, or driven from the same place as everything else. This
-runs it through the shared cell lifecycle instead: same run config, same
-registry, same resume protocol, same request transcripts.
+The probe uses the shared cell lifecycle: the campaign run configuration,
+registry, resume protocol and request transcripts.
 
 The construct sanity check gates execution: every template must be marked
 ``weaker_than_should=yes`` in ``outputs/weak_modality_template_sanity_check.csv``

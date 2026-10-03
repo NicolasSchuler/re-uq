@@ -1,8 +1,8 @@
 # Documentation index
 
-Reader-facing pages, in the order a new reader needs them. Engineering
-records live under [`internal/`](internal/README.md); the compressed planning
-notes of the first submission under [`archive/`](archive/study_planning_archive.md).
+Methods, evidence and reproduction instructions, in the order a new reader
+needs them. Development plans and engineering review logs are kept outside
+the public artifact.
 
 | Page | Read it to |
 | --- | --- |
@@ -18,7 +18,7 @@ notes of the first submission under [`archive/`](archive/study_planning_archive.
 | [`configuration.md`](configuration.md) | Understand the JSON and Hydra configuration paths and every knob |
 | [`architecture.md`](architecture.md) | Get the one-page mental model of the pipeline and its modules |
 | [`repository_layout.md`](repository_layout.md) | Find what is where and how variant suffixes work |
-| [`repository_hygiene.md`](repository_hygiene.md) | Know what is tracked, what stays local, and the release checklist |
+| [`repository_hygiene.md`](repository_hygiene.md) | Know which artifacts are tracked, archived separately or kept local |
 | [`validation_review.md`](validation_review.md) | See the status of the human construct validation |
 | [`faq.md`](faq.md) | Get short answers to common reviewer questions |
 | [`figures/`](figures/embedding_diagnostic.md) | Read the notes behind the embedding-diagnostic and commitment-transition figures |

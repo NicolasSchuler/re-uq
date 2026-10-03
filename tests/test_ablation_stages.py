@@ -1,12 +1,7 @@
-"""The two ablation stages that had no script: batching and weak phrasing.
+"""Contracts for request-composition and weak-phrasing ablations.
 
-`TODO.md` section A left "the three ablation runs themselves and the comparison
-table" open, and the weak-phrasing probe lived only in a notebook that bypassed
-the runner. These tests pin what the two new entry points do: how a registry
-row is read as a batching arm, how the batching delta is paired and resampled
-(differently from the context ablation, because the request is the thing being
-varied), and that the probe plans the four templates over the pilot seeds and
-refuses to send anything until the construct review is complete.
+These tests cover arm selection, paired deltas and resampling, template planning
+over the probe seeds, and the construct-review gate before requests are sent.
 """
 
 from __future__ import annotations

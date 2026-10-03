@@ -59,18 +59,18 @@ Weak-intent paper claims (`nice_to_have` results) are gated on a completed
 construct-validity table:
 
 - Input: `docs/weak_modality_construct_review.csv`
-- Pass condition: every weak template is marked weaker than `SHOULD/recommended` by both reviewer slots.
+- Pass condition: every weak template has at least two distinct reviewer IDs and every recorded judgment marks it weaker than `SHOULD/recommended`.
 - The analysis script refuses to write paper-facing artifacts if this gate is incomplete unless `--skip-construct-review-check` is set (for diagnostic local runs only).
 
-Human validation is complete, as confirmed by the author on 2026-09-04, and
-will be repeated before submission. The original LLM-assisted judgments remain
+Human validation is complete and the authors repeated it before resubmission.
+The original LLM-assisted judgments remain
 separately identified. See [validation review](validation_review.md) for the
 scope and the wording checks' limitations; no independent two-human agreement
 is claimed.
 
 ## Confidence-scale contract
 
-Every paper-facing claim depends on the v2 confidence contract:
+Every paper-facing claim uses the decimal-probability confidence contract:
 `confidence ∈ [0.0, 1.0]`, prompt version in `{v2-conf01, v2-instructor-conf01}`,
 raw records tagged `confidence_scale=0_1`. The analysis script fails closed if
 it encounters mixed-scale rows.

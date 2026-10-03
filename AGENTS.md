@@ -41,7 +41,7 @@ Keep exploratory work and durable code separate.
 
 Prefer:
 
-- small, inspectable notebooks or scripts;
+- small, inspectable scripts;
 - reproducible data generation;
 - cached raw model outputs;
 - exact model identifiers and run metadata;
@@ -62,13 +62,12 @@ This repository uses a `uv`-managed virtual environment at `.venv/`.
 
 Dependencies are declared in `pyproject.toml` and locked in `uv.lock`. Run `uv sync --group dev` to refresh the environment.
 
-Prefer running Python and notebook-related commands through that environment, for example:
+Prefer running Python commands through that environment, for example:
 
 - `.venv/bin/python -m unittest discover -s tests -v`
-- `.venv/bin/python scripts/populate_notebooks.py`
-- `source .venv/bin/activate` before launching Jupyter locally
+- `.venv/bin/python scripts/prepare_benchmark.py --help`
 
-Use established scientific/notebook libraries already declared for the project (`pandas`, `numpy`, `scipy`, `scikit-learn`, `matplotlib`, `openai`, `requests`, and `nbformat`) rather than reimplementing common CSV, metric, plotting, HTTP, or notebook-JSON functionality.
+Use established scientific libraries already declared for the project (`pandas`, `numpy`, `scipy`, `scikit-learn`, `matplotlib`, `openai`, and `requests`) rather than reimplementing common CSV, metric, plotting, or HTTP functionality.
 
 ## Verification Expectations
 

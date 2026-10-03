@@ -7,19 +7,19 @@ or cares which path you used.
 
 | Path | Entry point | Status |
 | --- | --- | --- |
-| JSON run config | `scripts/run_experiment_from_config.py --config run_configs/*.json` | Legacy, unchanged, **the provenance record for the published runs** |
-| Hydra composition | `scripts/run.py <overrides>` | Recommended for new experiments: composition, overrides, sweeps |
+| JSON run config | `scripts/run_experiment_from_config.py --config run_configs/*.json` | Direct provider-matrix interface; also used by analysis and comparison tools |
+| Hydra composition | `scripts/run.py <overrides>` | Composition, overrides and sweeps; the final campaign driver uses this entry point for provider runs |
 
-The JSON path is frozen on purpose. Every number in the paper was produced with
-it, and it keeps working byte-for-byte as documented in
-[`reproduction.md`](reproduction.md). The Hydra layer is additive: it builds the
-same dictionary from composable YAML groups and then calls the same runner
-functions.
+The reported campaign is orchestrated by `scripts/rerun_all.py` from
+`conf/rerun/final.yaml`. Hydra builds the same normalized dictionary from
+composable YAML groups and calls the shared runner functions. The campaign state
+and resolved per-run settings identify what was executed; a configuration
+interface alone is not its provenance record.
 
 ## 1. Quick start
 
 ```bash
-uv sync --group dev                      # installs hydra-core
+uv sync --group dev --locked
 # one cell
 .venv/bin/python scripts/run.py profile=zai model=glm-5.3 dataset=nice variant=must mode=full
 # no credentials needed: synthesize completions locally into data/processed/smoke/
@@ -236,18 +236,18 @@ with `--no-request-transcripts` on either runner, or
 
 ## 7. The rerun config
 
-`conf/rerun/default.yaml` is read by `scripts/rerun_all.py` only -- it is not a
-Hydra group and never composes into a run. It names the profiles whose models
-are the official cohort, the profiles reported separately as local, the models
-that carry each ablation, and the run group everything is written under. The
-model lists themselves stay in `conf/profile/<id>.yaml`, so there is one place
-per fact:
+`conf/rerun/final.yaml` is the reported campaign plan, selected explicitly with
+`scripts/rerun_all.py --config conf/rerun/final.yaml`. Rerun plans are read by
+the driver; they are not Hydra groups. A plan names the hosted and local
+profiles, primary protocol and sampling, ablation models, and run group. The
+driver's built-in `conf/rerun/default.yaml` is a separate plan and should not be
+substituted for the final one when reproducing the paper.
 
 | Fact | Where |
 | --- | --- |
-| API key variable, endpoint, request size, sampling, seed | `conf/profile/<id>.yaml` |
-| Which models to run | `models:` in the same file |
-| Which profiles are the cohort / local, which models carry ablations, which run group | `conf/rerun/default.yaml` |
+| API key variable, endpoint, provider settings, seed | `conf/profile/<id>.yaml` |
+| Models available in a profile | `models:` in the same file |
+| Selected profiles, primary request size and sampling, ablation models, run group | `conf/rerun/final.yaml` for the reported campaign |
 
 The driver writes the JSON-shaped config the non-Hydra tools need to
 `outputs/rerun/run_config.json`, derived from those files; the hand-maintained

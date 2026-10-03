@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.1.1 (2026-10-03): public artifact and documentation alignment
+
+Reported scientific results and the v2.1.0 data archives are unchanged.
+
+- Correct stale agreement, answer-length, cohort, ablation and bootstrap
+  descriptions against the final results and recorded configurations.
+- Clarify the README's pooled detector AUROCs, the sampled-text classifier's
+  separate prediction target and training budget, and analysis-refresh scope.
+- Keep methods, reproduction instructions and validation evidence public;
+  move development notes, planning records, notebooks and their generator to
+  ignored local storage. Existing Git history is unchanged.
+- Add `scripts/prepare_benchmark.py` for source-candidate preparation and
+  benchmark reconstruction from reviewed seeds, with regression checks against
+  all four frozen main benchmark cells. Remove notebook-only dependencies.
+- Refresh stale headline-table annotations without changing their values,
+  and extend checks for scientific statements in the documentation.
+
 ## v2.1.0 (2026-09-24): GLM-5.3-Flash in every ablation
 
 Every number of the main study is unchanged.

@@ -1,6 +1,6 @@
 # Reproduction Guide
 
-This is the command-first path for reproducing the publication artifacts. The notebooks are useful for inspection, but these scripts are the canonical interface for provider runs and final analysis.
+This is the command-first path for reproducing the publication artifacts: benchmark preparation, provider runs, and analysis of archived outputs.
 
 For the prepared campaign, follow the [experiment rerun runbook](experiment_runbook.md)
 for ordered setup, credentials, configuration, smoke checks, launch, monitoring,
@@ -48,9 +48,9 @@ All generation stages finish for one model before the next model starts:
 Task 1/2 → blind audits of those exact outputs → that model's ablations.
 The local endpoint must route/load by the requested model name. Both profiles
 contribute to pooled estimates and retain separate per-model table groups.
-Each ablation uses the **first model in each profile's list** unless explicit
-`models` are supplied in `conf/rerun/default.yaml`; reorder the lists to choose
-representatives. See [ablation proposals](internal/ablation_proposals.md).
+The final plan explicitly names all nine models for each ablation. Custom plans
+can supply their own `models` lists; when a list is omitted, the driver uses the
+first model of each selected profile.
 
 The driver forces request transcripts, events, and progress files on:
 
@@ -83,7 +83,7 @@ embedding results. `--dry-run` needs no API keys and writes no state.
 | --- | --- |
 | One-time env setup | `uv sync --group dev --locked` |
 | Full rerun (everything) | `.venv/bin/python scripts/rerun_all.py --config conf/rerun/final.yaml` (see above) |
-| Re-derive every table from the archived raw outputs | unpack both archives of the Zenodo dataset record into the repository (commands in the README, tier 2), then `.venv/bin/python scripts/rerun_all.py --only analysis --refresh-analysis --state outputs/rerun/manuscript-final/state.json` (Apple Silicon with MLX; several hours) |
+| Recompute main analyses from archived outputs | unpack both archives of the Zenodo dataset record into the repository (commands in the README, tier 2), then `.venv/bin/python scripts/rerun_all.py --only analysis --refresh-analysis --state outputs/rerun/manuscript-final/state.json` (Apple Silicon with MLX; several hours). The analysis stage consumes the retained phrasing-probe summaries; it does not regenerate them. |
 | Check the result tables without MLX (any OS) | after unpacking the raw archive, `.venv/bin/python scripts/verify_paper_numbers.py --raw-check` |
 | Sanity-check pipeline without API access | `bash scripts/reproduce.sh smoke-fake` (uses `--fake-completion`) |
 | Fake-completion Task 3 smoke | `bash scripts/reproduce.sh smoke-fake-task3` |
@@ -94,8 +94,8 @@ embedding results. `--dry-run` needs no API keys and writes no state.
 | Generate paper-facing analysis | `bash scripts/reproduce.sh analysis --run-id RUN_ID --task3-run-id TASK3_RUN_ID` |
 | Monitor a live run | `.venv/bin/python scripts/show_run_progress.py --dataset mlm_tapt --run-id RUN_ID --watch 30` |
 | Compare completed cells | `.venv/bin/python scripts/compare_run_matrix.py --config run_configs/current_run.json --dataset mlm_tapt` |
-| Document-context ablation table | `.venv/bin/python scripts/compare_context_ablation.py` (after `+experiment=context_ablation`; see [`context_ablation.md`](context_ablation.md)) |
-| Batching ablation table | `.venv/bin/python scripts/compare_batching_ablation.py` (after the three `+experiment=batching_ablation` arms) |
+| Document-context ablation table | `.venv/bin/python scripts/compare_context_ablation.py --run-group-id context-manuscript-final --stochastic-samples 0 --output-prefix /tmp/reuq-context/context_ablation_summary` (latest complete arms in this group; exact recorded selection uses the analysis driver above) |
+| Batching ablation table | `.venv/bin/python scripts/compare_batching_ablation.py --run-group-id manuscript-final --baseline-arm single --output-prefix /tmp/reuq-batching/batching_ablation_summary` (all five arms; exact recorded selection uses the analysis driver above) |
 | Weak-phrasing probe | `.venv/bin/python scripts/run_weak_modality_probe.py --config run_configs/current_run.json --profile zai --model glm-5.3 --dataset nice --mode full` |
 | Resolve Task 3 source runs | `.venv/bin/python scripts/task3_sources.py --config run_configs/current_run.json` |
 | Export cross-cell paper tables | `.venv/bin/python scripts/export_paper_tables.py` (the driver passes `--run-group-id manuscript-final` and the nine models; the archived May runs are `--run-group-id provider-matrix-2026-05` with the six models in `export_paper_tables.ARCHIVED_COHORT`) |
@@ -145,6 +145,35 @@ uv sync --group dev --locked
 If the lock file needs to be refreshed locally, use `uv sync --group dev` and commit the resulting `uv.lock` only when the dependency change is intentional.
 
 For a no-credentials sanity check before configuring a provider, see [`docs/reproduction_smoke.md`](reproduction_smoke.md).
+
+### Prepare the benchmark
+
+The tracked benchmark CSVs and reviewed seeds are sufficient for reproducing the
+reported runs. To rebuild the four main cells from those reviews:
+
+```bash
+.venv/bin/python scripts/prepare_benchmark.py --stage build --dataset nice --variant both
+.venv/bin/python scripts/prepare_benchmark.py --stage build --dataset mlm_tapt --variant both
+```
+
+The builder validates the reviewed seed count, item identities and gold labels.
+It preserves differing frozen outputs by writing candidate files; `--overwrite`
+explicitly accepts replacement after review. Use `--root PATH` to work in an
+isolated prepared checkout. The separate PURE builder is described in
+[`context_ablation.md`](context_ablation.md).
+
+To start a new seed review from source data, prepare candidates first:
+
+```bash
+.venv/bin/python scripts/prepare_benchmark.py --stage candidates --dataset nice
+.venv/bin/python scripts/prepare_benchmark.py --stage candidates --dataset mlm_tapt
+```
+
+Candidate preparation may download the source dataset if it is absent; it makes
+no LLM calls. Existing manual reviews are preserved and refreshed automatic
+candidates are written separately. Review `data/processed/seeds_review.csv` and
+`data/processed/seeds_review_mlm_tapt.csv` before building. The tracked review
+records define the paper's benchmark; a new selection defines a new experiment.
 
 ## 2. Configure A Provider Matrix
 
@@ -544,7 +573,7 @@ more.
 | `structured_outputs.py` | Pydantic response models for the strict structured-output paths. |
 | `build_pure_benchmark.py` | Build the `pure` document-context ablation dataset. |
 | `export_benchmark_ground_truth.py` | Write `docs/benchmark_ground_truth.md` from the template code. |
-| `populate_notebooks.py` | Generate the stripped companion notebooks. |
+| `prepare_benchmark.py` | Prepare source candidates and build the NICE/MLM-TAPT benchmark from reviewed seeds, preserving frozen outputs unless replacement is explicit. |
 | `generate_evaluation_analysis.py` | Per-cell analysis: UQ scores, metrics, intervals, examples, provenance manifest. |
 | `compute_acse_semantic_artifacts.py` | Compute and cache the sample embeddings and item-level meaning-variation rows per run. |
 | `export_paper_tables.py` | The cross-cell paper tables and the snapshot provenance. |

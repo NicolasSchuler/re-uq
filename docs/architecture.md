@@ -59,7 +59,9 @@ seed datasets   ---> | seed candidates (raw)   |
                 paper-facing artifacts in outputs/evaluation_<dataset>_<variant>_<run_id>/
 ```
 
-The cross-cell paper tables (`outputs/paper_*`) are then written by `scripts/export_paper_tables.py`, the manuscript's macro file by `scripts/export_paper_numbers.py`, and the ablation comparisons and figures by their own scripts; `scripts/rerun_all.py` drives the whole chain from `conf/rerun/final.yaml`.
+`scripts/prepare_benchmark.py` prepares source candidates and builds the main
+benchmark from reviewed seeds. The campaign consumes those frozen inputs.
+The cross-cell paper tables (`outputs/paper_*`) are then written by `scripts/export_paper_tables.py`, the manuscript's macro file by `scripts/export_paper_numbers.py`, and the ablation comparisons and figures by their own scripts; `scripts/rerun_all.py` drives the campaign from `conf/rerun/final.yaml`. An analysis-only refresh reuses the tracked phrasing-probe summaries.
 
 ## Tasks
 

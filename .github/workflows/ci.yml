@@ -38,7 +38,7 @@ jobs:
       - name: Check formatting
         run: uv run ruff format --check scripts tests
 
-      - name: Run unit and notebook boundary tests with coverage
+      - name: Run unit and artifact contract tests with coverage
         run: uv run python -m coverage run --branch --source=scripts -m unittest discover -s tests -v
 
       - name: Report coverage

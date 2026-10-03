@@ -137,12 +137,9 @@ Two different failure modes are kept apart.
    numerator and denominator. It is reported separately as
    `parse_failure_rate = sum(parse_failures) / sum(total_n)` in
    `metric_summary_by_model_task_method` (`scripts/eval_utils.py:7951`) and as
-   `n_parse_failures` in the per-model tables. In the per-cell paper snapshot
-   that quantity was structurally 0: a failed record never becomes a score row,
-   and every deterministic score row carries `valid_n == total_n == 1`, so
-   nothing could reach the numerator. `scripts/export_paper_tables.py` now
-   derives the snapshot's `parse_failure_rate` from the raw Task 2
-   deterministic rows, where the failures actually are.
+   `n_parse_failures` in the per-model tables. `scripts/export_paper_tables.py`
+   derives the snapshot's `parse_failure_rate` from raw Task 2 deterministic
+   rows, so failures remain visible even though they produce no score row.
 2. **Unreadable text modality.** The answer parsed, but the generated
    requirement text carries no usable modal signal, or carries a *negated*
    modal (`must not`, `cannot`, `shouldn't`, ...). The detector
@@ -154,9 +151,9 @@ Two different failure modes are kept apart.
    strengthening and never enters the strict evidence basis. Negation only wins
    when the text carries no positive modal cue: "The system must ensure that
    users cannot delete records." resolves to mandatory and is flagged
-   `text_modality_multi_modal`, not dropped as `negated`. No cohort row
-   contained a negated cue — the negated rate is 0.0 in all four cells — so
-   this precedence changes no published number.
+   `text_modality_multi_modal`, not dropped as `negated`. No final-campaign
+   Task 2 output is classified as `negated`; this does not assert that every
+   output is free of negated phrases.
 
 Because that exclusion is a coverage assumption, every text-strengthening rate
 is published together with its accounting, from `text_modality_summary_metrics`
@@ -208,9 +205,8 @@ resolved run ids and compatibility settings are written to
 (`scripts/export_paper_tables.py:548`, selection in `select_cell_runs`,
 `scripts/export_paper_tables.py:180`). A registry row marked `complete` whose
 raw rows were later removed is not a usable run: the exporter now fails on a
-selected run that has no raw rows instead of exporting an empty cell. Local
-registries still hold such rows from 2026-05-21 ([`TODO.md`](../TODO.md),
-section E).
+selected run that has no raw rows instead of exporting an empty cell. A
+registry entry alone is therefore insufficient evidence for a reproducible run.
 
 Per-model disaggregation of the same rows is exported to
 `outputs/paper_per_model_modality_table.csv` (model x dataset x variant x
@@ -241,7 +237,9 @@ meaning-variation AUROC is recomputed on the pooled scored observations.
 
 `paper_per_model_modality_pooled.csv` supplies the manuscript's model-by-modality
 table. Each model/modality row pools the underlying answers across cells and
-recomputes its request-clustered interval. Additional `model=all` rows pool
+recomputes both its capability-clustered interval and the interval named by
+`strengthening_ci_cluster_field` (item-clustered in the final campaign).
+Additional `model=all` rows pool
 models by modality. Never average per-cell interval bounds. These rows remain
 separate from the per-cell CSV so consumers cannot count both scopes twice.
 
@@ -278,17 +276,19 @@ is not the interval the manuscript prints.
 Capability resampling keeps the design fixed: every capability contributes one
 item per source condition. A rate that pools all four conditions is therefore
 nearly constant across resamples when one condition carries almost all of it.
-The all-modality strict rate is about a quarter by construction, because only
-weak-intent sources strengthen, and its interval is a fraction of a point wide.
+The all-modality strict rate is about a quarter because strengthening is
+concentrated in weak-intent sources, and its interval is a fraction of a point wide.
 Read that as a property of the design, not as precision about models; the
 per-condition and per-model rates are the informative ones.
 
-Paired ablation deltas cluster on `seed_id` and keep both arms of a pair
-together. In the batched arms one request carries several capabilities and its
-outcomes are all-or-none per request, so those intervals do not capture
-dependence across capabilities that share a request (manuscript, Section 3.5).
-The archived May 2026 runs sent 16 items per request and clustered on the
-request.
+Paired ablation deltas compare the same source item in both arms and retain
+both members of each eligible pair. Request-composition deltas resample
+capabilities (`seed_id`); those intervals do not capture dependence across
+capabilities that share a batched request. Context deltas use connected request
+components when request IDs are available in both arms, otherwise capabilities.
+The final context exports use the capability fallback because the single-item
+rows lack request IDs. The archived May main runs sent 16 items per request and
+used request-clustered intervals.
 
 The RNG seed is fixed at `20260518` (`BOOTSTRAP_SEED` in
 `scripts/export_paper_tables.py` and `scripts/compare_run_matrix.py`), so the
@@ -337,8 +337,9 @@ Denominators, per metric family:
   the archived May tables therefore carry a slightly larger rate under the
   same column name and are not directly comparable.
 - **Task 2** -- strict and broad strengthening divide by the answers with a
-  readable text modality; `task2_no_cue` divides the unreadable ones by all
-  answers.
+  readable text modality; `task2_no_cue` divides the unreadable ones by valid
+  answers. Heuristic-only classifications are readable for this purpose and
+  are not part of `task2_no_cue`.
 - **Weak intent** -- `task2_weak_strict_strengthening` counts every strict
   strengthening of a `nice_to_have` source and supplies `\numWeakStrict` pooled
   over all cells and models. `task2_weak_strict_high_conf_90` additionally requires
@@ -383,15 +384,16 @@ Entry points, and the columns each writes:
 - `scripts/compare_context_ablation.py` — arm rows carry
   `*_ci_*` / `*_seed_ci_*` / `bootstrap_ci_cluster_field`; delta rows carry
   `delta_ci_*`, `delta_seed_ci_*`, `delta_cluster_field` and
-  `n_delta_clusters`. The paired delta **pairs by seed and resamples by
-  request**: the two arms are separate runs whose request ids differ, but the
-  partition of seeds into requests is the same, and a seed's four source
-  conditions sit in one request, so a request carries whole pairs.
+  `n_delta_clusters`. Pairing uses the exact jointly eligible source items,
+  identified by model, dataset, keyword variant, original requirement and
+  transformed modality. Request partitions need not match across arms: connected
+  components preserve both memberships. The final exports record `seed_id`
+  clustering and `cluster_note=missing request IDs; capability fallback`.
+  See [context ablation](context_ablation.md) for exclusions and denominators.
 
-The snapshots committed under `outputs/` predate this change: their
-`*_ci_low` / `*_ci_high` columns are seed-clustered and they carry no
-`*_seed_ci_*` or cluster-field column. Regenerating them (Section 8) produces
-request-clustered primaries and the seed-clustered pair alongside.
+The tracked final-campaign tables include both interval types and their cluster
+fields. Read the exported field rather than inferring the resampling unit from
+a column's position or a historical campaign.
 
 ## 7. Answer length and bloat
 

@@ -3,8 +3,7 @@
 A minimal two-arm ablation for the reviewer's question whether *contextual*
 cues around a requirement (heading, the author's own priority marker,
 neighbouring requirements) change how a model treats the *lexical* cue inside
-it (the modal verb or the weak phrase). It is the small, runnable version of
-[`TODO.md`](../TODO.md) section A. Its numbers are reported on their own and
+it (the modal verb or the weak phrase). Its numbers are reported on their own and
 are **never pooled** into the four headline cells of
 [`docs/aggregation.md`](aggregation.md).
 
@@ -20,9 +19,8 @@ generated requirement text, compared with the same sentence shown bare?
 
 **Corpus.** PURE (Ferrari, Spagnolo & Gnesi, RE 2017;
 [Zenodo 7118517](https://zenodo.org/records/7118517), CC BY 4.0), the 19
-documents in the common XML format. Only two of them attach an
-author-assigned commitment marker to every requirement, and those two are
-used:
+documents in the common XML format. Two of them encode author-assigned
+mandatory/optional markers at requirement level, and those two are used:
 
 | Document | Marker encoding | Requirements | M | O | I / none |
 | --- | --- | --- | --- | --- | --- |
@@ -144,17 +142,29 @@ differences are the third instruction line and the `context` values.
 # offline dry run of the wiring
 .venv/bin/python scripts/run.py --multirun +experiment=context_ablation \
   mode=smoke fake_completion=true smoke_items=4
-# the table
-.venv/bin/python scripts/compare_context_ablation.py            # real runs
-.venv/bin/python scripts/compare_context_ablation.py --include-smoke
+# compare complete runs from the final context group
+.venv/bin/python scripts/compare_context_ablation.py \
+  --run-group-id context-manuscript-final --stochastic-samples 0 \
+  --output-prefix /tmp/reuq-context/context_ablation_summary
 ```
 
 The preset pins dataset `pure`, variant `must`, Task 2, deterministic
-sampling, batch size 16, grouped batching, and its own run group
-`context-ablation-2026-09`, so the arms can never be selected into the paper
+sampling, batch size 1, grouped order, and its own run group
+`context-manuscript-final`, so the arms can never be selected into the paper
 tables (`scripts/export_paper_tables.py` gates on the run group). Each
 Hydra run writes its resolved config next to the logs and its digest into the
-registry `notes` column.
+registry `notes` column. The standalone comparison selects the latest compatible
+run for each arm in that group. To reproduce the reported tables with their exact
+recorded run IDs, restore the archived campaign state and use:
+
+```bash
+.venv/bin/python scripts/rerun_all.py --only analysis --refresh-analysis \
+  --state outputs/rerun/manuscript-final/state.json
+```
+
+This is the complete analysis stage: it refreshes shared paper exports and
+requires the archived raw outputs and embedding caches. See
+[reproduction](reproduction.md) for prerequisites and alternatives.
 
 ## 5. The table
 
@@ -222,9 +232,10 @@ Breakdowns include `all`, `weak_intent`, each transformed modality, each origina
 marker (`M`, `O`), and marker × transformed-modality intersections, separately
 for every model. Context results remain separate from the headline benchmark.
 
-Synthetic regression fixtures verify these contracts; existing experimental
-outputs are stale and were not regenerated. Rerun measurements and interpretation
-remain pending.
+The tracked nine-model tables were regenerated on 2026-09-24. Their delta rows
+record capability clustering (`delta_cluster_field=seed_id`) with the reason
+`missing request IDs; capability fallback`. These are estimates for the exact
+matched items, with exclusions recorded per metric.
 
 ## 6. Reading it
 
@@ -247,8 +258,8 @@ remain pending.
 
 - The marker is never manipulated. A marker-flipped third arm (same context,
   M ↔ O swapped) would isolate the marker from the heading and neighbours;
-  it is left in [`TODO.md`](../TODO.md) section A.
-- The other envelope factors of the TODO sketch (document status,
+  it was not evaluated.
+- Other contextual factors (document status,
   stakeholder role, priority field, rationale sentence, elicitation
   transcript) are not modelled.
 - One domain (railway signalling and radio), two documents, one variant
@@ -257,22 +268,13 @@ remain pending.
   rater or agreement statistic is claimed. Generic system phrasing is a
   capability abstraction; original operator/design responsibilities are not
   an additional evaluated construct. Stakeholder intent remains unmeasured.
-- Naturally occurring stakeholder statements (for example Apache Jira "Wish"
-  issues with a declared priority) are a separate track; candidates are in
-  [`docs/internal/external_validity_datasets.md`](internal/external_validity_datasets.md).
+- Naturally occurring stakeholder statements with independently recorded intent
+  remain outside this controlled-template study.
 
-## 8. Provenance and what did not change
+## 8. Provenance
 
-- Adding the knob changed no existing fingerprint: `item_context` enters the
-  job-config SHA only when it is not `bare`, and the bare batch wrapper is
-  byte-identical (both pinned by `tests/test_eval_utils.py`). Archived runs
-  therefore resume without re-requests.
-- `completion_batch_key` was deliberately left untouched, because that tuple
-  seeds the shuffled-arm RNG of the batching ablation; two arms of this
-  ablation can never share a batch anyway because `run_id` is already in
-  the key.
-- The new `item_context` key in `conf/config.yaml` changes the
-  `resolved_config_sha` of every Hydra run from now on; that is provenance,
-  not behaviour.
-- `docs/benchmark_ground_truth.md`, the four headline benchmark CSVs and
-  their manifests are untouched.
+Each arm records `item_context`, its run ID and resolved settings. The benchmark
+manifest hashes the reviewed PURE inputs and both Task 2 prompt files. The
+comparison provenance names the selected source runs, allowing each paired
+estimate to be traced to the archived outputs without mixing them with the
+headline benchmark.

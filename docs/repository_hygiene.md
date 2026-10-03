@@ -1,54 +1,30 @@
-# Repository hygiene
+# Artifact distribution
 
-This project is a research-engineering artifact: Git should preserve code, prompts, benchmark definitions, reviewed seeds, manifests, and compact paper-facing summaries. Local runs may produce much larger raw or row-level artifacts, but those should stay local unless they are explicitly promoted for a paper or reproducibility reason.
+The public repository contains the material needed to understand the study,
+inspect its evidence and reproduce its analyses. The artifact is divided
+between Git and the separately archived raw outputs.
 
-## Git workflow
+| Location | Contents |
+| --- | --- |
+| Git | Analysis and preparation scripts, tests, frozen prompts, reviewed seeds, benchmark CSVs, review decisions, configuration examples, manifests, paper tables and figures, and methods and reproduction documentation |
+| Zenodo dataset record | Raw model outputs, per-request transcripts, run registries, per-item scores and embedding caches; see [reproduction](reproduction.md) |
+| Local development storage | Planning notes, implementation reviews, launch logs, exploratory notebooks, manuscript drafts, credentials and machine-specific settings |
 
-- Work on a branch for every coherent change. Branch names are free-form; use a short topic slug.
-- Keep commits narrow enough to review: separate code/notebook behavior, artifact policy, and infrastructure changes.
-- Stage intentionally. Prefer path-specific `git add` and inspect `git diff --cached --stat` before committing.
-- Do not commit local secrets or machine-specific settings. Use `config.example.json` as the tracked template and keep `config.json` local.
+The explicit allow-list in `.gitignore` identifies the compact outputs that
+belong to the public artifact. Raw run outputs and caches are excluded from
+Git and distributed through the dataset archive when needed for reproduction.
+The historical scientific snapshots under `outputs/archive/` and
+`data/processed/archive/` remain public and are labelled by campaign.
 
-## Artifact policy
+The two review CSVs in `docs/` are scientific inputs:
+`weak_modality_construct_review.csv` records the weak-template validation used
+by the analysis gate; `pure_capability_revisions.csv` records the accepted
+capability revisions used to build the document-context benchmark. They must
+remain available with the code that consumes them. Human validation scope
+and limitations are described in [validation_review.md](validation_review.md).
 
-- Track durable inputs and curated artifacts: prompts, stripped notebooks, tests, benchmark item CSVs, selected/reviewed seed files, benchmark manifests, final seed documents, and compact paper-facing summaries.
-- Track the tables the manuscript's numbers are generated from (`outputs/paper_*`, the provenance JSON, ablation summaries, probe summaries, figures) under the explicit allow-list in `.gitignore`; promote a new campaign's files deliberately, run by run.
-- Keep raw and run-level outputs out of Git by default: `model_outputs_raw*.jsonl`, run registries/progress files, `uq_scores*.csv`, Task 3 item CSVs, provider matrix current-run configs, generated `outputs/evaluation_*` directories, and scratch files under `tmp/`.
-- If a generated output becomes paper-facing, promote it deliberately in a small commit whose message explains why it belongs in the repository.
-- Remove accidental tracked generated files with `git rm --cached <path>` so the local file is preserved.
-- Keep local manuscript drafts and assistant-orchestration scripts out of normal commits. In particular, `docs/paper_draft.*`, `o.sh`, and `*.local.sh` are ignored because they commonly contain credentials, local paths, or one-off prompt bundles. Promote a manuscript deliberately with `git add -f` only when packaging a publication artifact.
-
-## Local verification before commit
-
-Run these checks before pushing or asking for review:
-
-```bash
-git diff --check
-.venv/bin/python -m unittest discover -s tests -v
-```
-
-The unit suite includes notebook boundary tests that verify checked-in notebooks match `scripts/populate_notebooks.py` and contain no stored execution outputs.
-
-For a quick working-tree hygiene audit before committing, run:
-
-```bash
-git status --short
-git status --ignored --short
-git ls-files outputs data/processed docs | sort
-```
-
-The first command should be empty except for intentional tracked edits. The ignored-status view should contain local run outputs and caches, not files that you intend to publish. Before sharing an artifact, inspect any ignored or untracked manuscript candidate for credentials or local paths separately before forcing it into Git.
-
-## Publication release checklist
-
-Before tagging or archiving a publication artifact:
-
-- Confirm `README.md`, `docs/experimental_setup.md`, `docs/evaluation.md`, `docs/reproduction.md`, and `docs/results_mapping.md` agree on Task 1/2 as the primary experiment and Task 3 as a diagnostic, and on the canonical example cell.
-- Confirm `docs/experimental_setup.md` still matches the code it describes: templates, request composition, request parameters, and recorded raw fields.
-- Run the command-first reproduction path in `docs/reproduction.md` or document exactly which provider cells could not be rerun.
-- Complete `docs/weak_modality_construct_review.csv` before making weak-intent paper claims.
-- Generate final analysis with `scripts/generate_evaluation_analysis.py` and inspect the exported table, figure, qualitative examples, and provenance manifest.
-- Audit tracked files with `git ls-files` and ignored local outputs with `git status --ignored --short` before committing curated artifacts.
-- Treat raw JSONL outputs as local reproducibility evidence unless there is a deliberate archival reason to promote them.
-- Run `tests/test_docs_links.py` and `tests/test_readme_numbers.py` (part of the suite): every relative link must resolve and every number in `README.md` must come from a tracked table.
-- Tag the release, let the Zenodo integration archive it, upload the raw bundle as a dataset record, and record both DOIs in `CITATION.cff` and `README.md`.
+Preparation and analysis use the scripts documented in
+[reproduction.md](reproduction.md). Notebooks are not required. The test suite
+checks benchmark reconstruction, result-table consistency and documentation
+links. Use [results_mapping.md](results_mapping.md) to trace a reported result
+to its evidence.

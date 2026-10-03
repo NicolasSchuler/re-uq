@@ -13,14 +13,13 @@ Reference-free extractions are audited but excluded from automatic audit
 correctness scores. The original submission's campaign (May 2026, six models,
 sixteen items per request) is referred to below as the *archived* campaign;
 its summaries are under `outputs/archive/2026-05-grouped-cohort/` and are not
-relabelled. The [generation qualification](internal/generation_qualification_2026-09-11.md)
-documents the formatting comparison and failure accounting behind the local
-profile; the launch gates are in [final-run readiness](internal/final_run_readiness.md).
+relabelled. The final request protocol and failure accounting are described below;
+the [rerun runbook](experiment_runbook.md) gives the operational checks.
 
 Related pages: [`docs/evaluation.md`](evaluation.md) (metric definitions),
 [`docs/aggregation.md`](aggregation.md) (how per-cell numbers are pooled into
-headline numbers), [`docs/reproduction.md`](reproduction.md) (commands),
-[`TODO.md`](../TODO.md) (known gaps and planned work).
+headline numbers), and [`docs/reproduction.md`](reproduction.md) (commands).
+Section 11 records the study's limitations.
 
 ## 1. Overview
 
@@ -125,18 +124,18 @@ wording. `scripts/run_weak_modality_probe.py` runs every benchmark capability
 of one cell through all four templates (a smoke run keeps the 20 pilot seeds)
 and writes one directory per run under `outputs/weak_modality_probe/<run_id>/`:
 the per-template summary and the paired text-strengthening deltas against the
-`useful_if` baseline. The rerun driver runs it on the representative model of
-each endpoint. The probe is a diagnostic, not a headline result.
+`useful_if` baseline. The reported probe covers all nine cohort models on the
+180 NICE capabilities, as listed in `conf/rerun/final.yaml`. The probe is a
+diagnostic, not a headline result.
 
 ### 2.4 Construct-validity review
 
 `docs/weak_modality_construct_review.csv` retains the two original
-LLM-assisted reviews and adds separate author-confirmation rows. The author
-confirmed completed human validation on 2026-09-04 and will repeat it before
-submission. The assistant also checked the benchmark construction and four
-weak-template mappings. See [validation review](validation_review.md) for the
-scope and the wording parser's mixed-clause limitation. Two independent human
-raters or agreement statistics are not claimed.
+LLM-assisted reviews and separate author-confirmation rows. The authors reviewed
+the benchmark and weak-template judgments before resubmission. See
+[validation review](validation_review.md) for the scope, the distinction between
+construction checks and semantic review, and the wording checks' limitations.
+Two independent human raters or agreement statistics are not claimed.
 
 ## 3. Prompts
 
@@ -293,7 +292,7 @@ shuffled run keeps the batch membership of the original run. The
 historical comparison used size 16 for both batch-order arms. The final
 campaign instead uses single-item primary requests, with size-4 and size-16
 grouped/sibling-separated ablations. Historical numbers retain their original
-protocol; see [final-run readiness](internal/final_run_readiness.md).
+protocol and remain separate from the final campaign.
 
 ## 5. Model Cohort And Request Parameters
 
@@ -464,10 +463,10 @@ matter for the outputs.
 Intervals from the saved generations are conditional on those outputs; they
 do not measure variability across repeated server executions.
 
-Temperature 0.0 is treated as deterministic. It is not guaranteed to be
-deterministic on a hosted endpoint, and without a request seed and a recorded
-served-model version this cannot be checked after the fact for the existing
-runs.
+Temperature 0.0 names the single-pass condition; it does not guarantee
+byte-identical answers. The final campaign records request seeds and served
+model identifiers, but the hosted provider does not expose an immutable model
+revision.
 
 ### 5.2.2 Adding your own model
 
@@ -502,12 +501,15 @@ summaries are archived and not cited by the revised manuscript.
 Raw records are written to `data/processed/model_outputs_raw*.jsonl`
 (local-only, archived in the Zenodo dataset record; see [`docs/repository_hygiene.md`](repository_hygiene.md)).
 
-| Field group | In the reported runs | Added after this change |
-| --- | --- | --- |
-| Identity | `run_id`, `run_group_id`, `model`, `profile_id`, `provider_id`, `host`, `task`, `item_id`, `sample_kind`, `sample_index`, `request_index` | — |
-| Request | `prompt_version`, prompt hash, `temperature`, `top_p`, `max_tokens`, `json_mode`, `structured_output` | `request_seed`, `request_payload_sha`, `system_prompt` (always empty: only a user message is sent), `batch_variant_mix`, `max_retries`, `retry_count`, `item_context` (`bare` unless the document-context ablation) |
-| Response | `raw_text`, `parsed_json`, `parse_status`, latency | `finish_reason`, `usage_*` (prompt/completion/total tokens), `served_model`, `system_fingerprint`, `response_chars`, `requirement_word_count` |
-| Parse status values | `ok`, `invalid_json`, `invalid_confidence`, `invalid_label`, `missing_fields` | `truncated` |
+| Field group | Recorded fields |
+| --- | --- |
+| Identity | `run_id`, `run_group_id`, `model`, `profile_id`, `provider_id`, `host`, `task`, `item_id`, `sample_kind`, `sample_index`, `request_index` |
+| Request | `prompt_version`, prompt hash, `temperature`, `top_p`, `max_tokens`, `json_mode`, `structured_output`, `request_seed`, `request_payload_sha`, `system_prompt` (empty: only a user message is sent), `batch_variant_mix`, `max_retries`, `retry_count`, `item_context` (`bare` unless the document-context ablation) |
+| Response | `raw_text`, `parsed_json`, `parse_status`, latency, `finish_reason`, `usage_*` (prompt/completion/total tokens), `served_model`, `system_fingerprint`, `response_chars`, `requirement_word_count` |
+
+Missing optional provider fields remain missing; recording a served model name
+does not establish an immutable hosted-model revision. Parsing failures include
+invalid JSON, confidence, labels or required fields, and truncated responses.
 
 A `truncated` response counts as a **parse failure**, not as a separate
 category, so `parse_success_rate` now reflects token-budget losses instead of
@@ -535,7 +537,7 @@ The gap that mattered for the archived campaign: those runs recorded the
 **requested** model string, not the **served** model version, and sent no
 request seed. Both are recorded in the reported campaign, but the archived raw outputs cannot
 be re-derived. Any rerun should therefore be treated as a new run, not as a
-verification of the old one (see [`TODO.md`](../TODO.md), section F).
+verification of the old one.
 
 ## 7. Sampling Design
 
@@ -549,8 +551,10 @@ Per benchmark item and task:
 
 Repeated-sample agreement and unanimity are only computed over items whose
 stochastic group is complete (all five samples parsed). Incomplete groups are
-excluded rather than counted as agreeing; this is what keeps the reported
-100% agreement figure from being an artifact of dropped samples.
+excluded rather than counted as agreeing. Among the final campaign's 6,459
+strict-strengthened single-pass outputs, 4,363 (67.5%) have unanimous sampled
+labels; all 6,459 have complete sample groups. This measures agreement of the
+declared labels, not preservation of the generated wording.
 
 `model_ensemble_disagreement` needs several deterministic runs over the same
 items and is therefore available only where the run matrix provides them.
@@ -570,30 +574,32 @@ is classified independently by `requirement_text_modality_diagnostic` in
 | `unknown` | Nothing matched. | neither |
 
 - **Strict strengthening** requires explicit modal or weak-phrase evidence.
-  This is the conservative measure.
+  It is the narrower wording rule, not a lower bound on semantic error.
 - **Broad strengthening** additionally accepts the `heuristic_system_verb`
   default. It rests on the RE convention that a bare `The system X.` reads as an
   obligation; that convention is an assumption, not an observation.
-- The gap is not small: **11.5% of successful Task 2 outputs contain no modal at
-  all** (1,992 of 17,280 over all four cells), so the strict/broad spread is
-  driven by a large, genuinely ambiguous slice. Report both. The share is very
-  uneven across variants — 17.6% (1,520/8,640) in the two `MUST` cells against
-  5.5% (472/8,640) in the two `SHALL` cells — so always name the scope.
+- Of the final campaign's **25,920 valid Task 2 outputs**, 511 (2.0%) receive a
+  heuristic-only classification and 1,092 (4.2%) have unclassified wording.
+  These are different groups: heuristic classifications enter the readable-text
+  denominator and may contribute broad-only strengthening; unclassified wording
+  is excluded from that denominator and reported separately. The remaining
+  24,317 outputs have an explicit modal or weak-phrase classification. Report
+  both wording rules and their eligible counts.
 - When several distinct modal categories co-occur the record is flagged
   (`text_modality_multi_modal`) and the strongest positive category wins
   (`mandatory > recommended > optional`). Negation loses this contest: a
   negated cue resolves to `negated` only when no positive cue is present, so
   "The system must ensure that users cannot delete records." is read as
-  mandatory and flagged multi-modal rather than dropped as negated. No cohort
-  row contained a negated cue (negated rate 0.0 in every cell), so no published
-  number changes.
+  mandatory and flagged multi-modal rather than dropped as negated. No final
+  Task 2 output is classified as `negated`; a zero rate for that category does
+  not establish the absence of negated phrases inside otherwise positive text.
 
 Answer length is recorded alongside (`requirement_word_count`,
-`source_word_count`, `response_chars`). Weak-intent outputs average **18.65
-words** against **15.57 words** for the other three conditions over all four
-cells (18.31 vs 15.48 in the two `MUST` cells alone): the model does
-not just re-label a weak wish, it writes more when hedging it. Treat this as an
-answer-bloat signal worth reporting next to the strengthening rate.
+`source_word_count`, `response_chars`). Generated requirements have similar
+mean lengths across source conditions: **15.59 words** for weak intent and
+**15.47 words** over the other three conditions, pooling all four cells and
+nine models. These descriptive averages do not establish a causal relationship
+between length and strengthening; see `outputs/paper_per_model_modality_pooled.csv`.
 
 ## 9. Metrics And Aggregation
 
@@ -630,9 +636,12 @@ ready in `conf/embedding/`.
 
 Caveats: the quantization was **not ablated** against the 4-bit or full-precision
 variants, and no other embedding family was benchmarked on this data. The
-TF-IDF proxy remains available and is a useful contrast, because a character
-n-gram model is close to an oracle for the surface modal keyword that defines
-strict strengthening — see `scripts/diagnose_embedding_separability.py`.
+TF-IDF proxy remains available as a lexical contrast. In the held-out diagnostic,
+both representations encode sampled answers and predict the separate single-pass
+output's strengthening label. The classifier therefore does not simply apply the
+wording rule to its own input; see the
+[embedding diagnostic](figures/embedding_diagnostic.md) for the target, grouping
+and fitting limitations.
 
 ## 11. Limitations
 
@@ -646,8 +655,8 @@ strict strengthening — see `scripts/diagnose_embedding_separability.py`.
    two-arm ablation now exists (`item_context: bare|document` on the `pure`
    cell built from two PURE documents with author-assigned M/O markers; see
    [`context_ablation.md`](context_ablation.md)); its numbers are reported
-   separately and never pooled into the headline cells. The fuller extension
-   remains [`TODO.md`](../TODO.md), section B.
+   separately and never pooled into the headline cells. The other listed
+   contextual factors remain outside the evaluated study.
 3. **Request composition.** The reported numbers are single-item. The
    ablation (§4) shows that 4 and 16 items per request lower weak-intent
    strengthening by tens of percentage points for most models, so they do not
@@ -663,8 +672,8 @@ strict strengthening — see `scripts/diagnose_embedding_separability.py`.
    judgments remain labelled separately; see `docs/validation_review.md`. The
    operational ordering still does not establish intent in arbitrary contexts.
 7. **Broad strengthening rests on a convention.** The `heuristic_system_verb`
-   default is a modelling choice, and it covers an 11.5% slice over all four
-   cells (17.6% in the `MUST` cells, 5.5% in the `SHALL` cells).
+   default is a modelling choice. Its classified outputs are distinct from
+   unclassified wording; neither wording rule is a general semantic judge.
 8. **Fine-tuning is not in scope.** We do not fine-tune. This study measures
    off-the-shelf behaviour of hosted instruction-tuned models under a frozen
    prompt contract. Whether fine-tuning removes the failure mode is an open

@@ -10,10 +10,8 @@ from collections import Counter
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import ClassVar
 from unittest import mock
-
-import nbformat
 
 try:
     from helpers import raw_record
@@ -24,7 +22,6 @@ from scripts import (
     eval_utils as eu,
     evaluate_external_ai_probe as external_eval,
     export_external_ai_probe as external_export,
-    populate_notebooks,
     run_task3_verification_from_config as task3_cli,
     show_run_progress,
 )
@@ -42,66 +39,7 @@ def seed_rows(count=1):
     ]
 
 
-class NotebookBoundaryTest(unittest.TestCase):
-    NOTEBOOK_BUILDERS: ClassVar[dict[str, Any]] = {
-        "00_prepare_data.ipynb": populate_notebooks.notebook_00,
-        "01_build_modality_benchmark.ipynb": populate_notebooks.notebook_01,
-        "02_pilot_local_llms.ipynb": populate_notebooks.notebook_02,
-        "02b_weak_modality_robustness_probe.ipynb": populate_notebooks.notebook_02b,
-        "03_run_experiments.ipynb": populate_notebooks.notebook_03,
-        "03b_run_modality_verification.ipynb": populate_notebooks.notebook_03b,
-        "04_compute_uq_and_metrics.ipynb": populate_notebooks.notebook_04,
-        "05_analyze_and_export_results.ipynb": populate_notebooks.notebook_05,
-    }
-
-    def test_checked_in_notebooks_match_generator_sources(self):
-        for name, builder in self.NOTEBOOK_BUILDERS.items():
-            with self.subTest(notebook=name):
-                actual = nbformat.read(Path("notebooks") / name, as_version=4)
-                expected_cells = builder()
-
-                actual_sources = [
-                    (cell.cell_type, cell.source) for cell in actual.cells
-                ]
-                expected_sources = [
-                    (cell.cell_type, cell.source) for cell in expected_cells
-                ]
-
-                self.assertEqual(actual_sources, expected_sources)
-
-    def test_notebooks_are_clean_execution_artifacts(self):
-        for path in sorted(Path("notebooks").glob("*.ipynb")):
-            with self.subTest(notebook=str(path)):
-                notebook = nbformat.read(path, as_version=4)
-                for index, cell in enumerate(notebook.cells, start=1):
-                    if cell.cell_type != "code":
-                        continue
-                    self.assertIsNone(
-                        cell.execution_count,
-                        f"{path} cell {index} has an execution count",
-                    )
-                    self.assertEqual(
-                        cell.outputs, [], f"{path} cell {index} has stored outputs"
-                    )
-
-    def test_populate_notebooks_help_and_dry_run_do_not_write(self):
-        buffer = io.StringIO()
-        with self.assertRaises(SystemExit) as context, redirect_stdout(buffer):
-            populate_notebooks.main(["--help"])
-        self.assertEqual(context.exception.code, 0)
-        self.assertIn("--dry-run", buffer.getvalue())
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            notebook_dir = Path(tmpdir) / "notebooks"
-            with io.StringIO() as buffer, redirect_stdout(buffer):
-                paths = populate_notebooks.main(
-                    ["--dry-run", "--notebook-dir", str(notebook_dir)]
-                )
-                output = buffer.getvalue()
-            self.assertIsNone(paths)
-            self.assertIn("Would write:", output)
-            self.assertFalse(notebook_dir.exists())
-
+class BenchmarkManifestTest(unittest.TestCase):
     def test_benchmark_manifest_tracks_prompt_inputs_and_metadata(self):
         manifest = json.loads(
             Path("outputs/benchmark_manifest.json").read_text(encoding="utf-8")
@@ -231,8 +169,7 @@ class PublicationArtifactIntegrityTest(unittest.TestCase):
     def test_checked_weak_modality_probe_rows_are_balanced(self):
         rows = eu.read_csv_rows("data/processed/weak_modality_probe_items.csv")
 
-        # All 180 seeds since the 2026-09-10 rerun (the probe covers the full
-        # benchmark, see docs/internal/ablation_proposals.md); previously a 20-seed subset.
+        # The published probe covers all 180 capabilities and four weak phrasings.
         self.assertEqual(len(rows), 720)
         self.assertEqual(len({row["item_id"] for row in rows}), 720)
         self.assertEqual(len({row["seed_id"] for row in rows}), 180)

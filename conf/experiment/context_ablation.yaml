@@ -1,5 +1,5 @@
 # @package _global_
-# TODO.md section B, minimal version: does the document context around the
+# Does the document context around the
 # same minimal-pair sentence change modality preservation?
 #
 # Cell: dataset pure, variant must, Task 2, deterministic pass only, grouped
@@ -7,13 +7,15 @@
 # `item_context`: `bare` sends today's prompt, `document` adds each item's
 # document, section, author marker and neighbouring requirements.
 #
-# Both arms, GLM half of the cohort:
+# Both arms for the default hosted model:
 #   .venv/bin/python scripts/run.py --multirun +experiment=context_ablation
-# Both arms, non-GLM half:
+# Both arms for a locally served model:
 #   .venv/bin/python scripts/run.py --multirun +experiment=context_ablation \
-#     profile=kit_toolbox model=kit.gemma4-31b-it
+#     profile=local_llama_cpp model=qwen3.5-9b
 # Table:
-#   .venv/bin/python scripts/compare_context_ablation.py
+#   .venv/bin/python scripts/compare_context_ablation.py \
+#     --run-group-id context-manuscript-final --stochastic-samples 0 \
+#     --output-prefix /tmp/reuq-context/context_ablation_summary
 #
 # The run group is its own, so these arms can never be selected into the
 # paper tables (export_paper_tables.py gates on run_group_id).

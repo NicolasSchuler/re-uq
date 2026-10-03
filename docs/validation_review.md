@@ -1,50 +1,49 @@
-# Validation status and consistency review
+# Benchmark and wording-check validation
 
-## Current status
-
-The authors reviewed the benchmark before resubmission: the reviewed
-capabilities and benchmark transformations, the weak-template judgments, all
-180 PURE capability clauses used in the context ablation (129 kept, 51
-revised; `docs/pure_capability_revisions.csv`), and the wording checks'
-decisions on a sample of 100 generated outputs covering every model and
-source condition. The PURE builder rejects mechanical red flags
-before writing items. No second rater or inter-rater agreement statistic is
+The authors reviewed the benchmark before resubmission: the main capabilities
+and controlled transformations, the weak-template judgments, all 180 PURE
+capability clauses used in the context ablation, and the wording checks'
+decisions on 100 generated outputs covering every model and source condition.
+No independent second-rater assessment or inter-rater agreement statistic is
 claimed.
 
-The original two LLM-assisted weak-template reviews remain identified as
-such in `weak_modality_construct_review.csv`. Separate `AUTHOR` rows record
-the human confirmation.
+## Reviewed inputs and construction checks
 
-## Assistant review, 2026-09-04
+- The reviewed seed tables retain inclusion decisions and final capability
+  clauses. [Benchmark ground truth](benchmark_ground_truth.md) traces the main
+  datasets through the templates and gold labels.
+- The PURE review kept 129 clauses and revised 51. The changes are recorded in
+  [`pure_capability_revisions.csv`](pure_capability_revisions.csv), and its 720
+  items use the corrected clauses. The builder checks mechanical red flags
+  before writing items.
+- [`weak_modality_construct_review.csv`](weak_modality_construct_review.csv)
+  retains the original `R1` and `R2` LLM-assisted reviews, identified by role.
+  Separate `AUTHOR` rows record human confirmation. The four weak phrasings
+  belong to the study's operational weak-intent class; priority or temporal
+  scope alone does not establish obligation in arbitrary documents.
+- A separate construction consistency check covered all 3,600 generated items:
+  180 capabilities × four source modalities × two keyword variants in each of
+  the two main datasets, plus 720 PURE items. Source statements, mandatory
+  candidates, Task 1 gold labels and Task 2 gold modalities matched the builder.
+  This checks the transformations, not the semantic validity of the capabilities.
 
-**Correct: construction and operational template mapping.** I checked all
-3,600 generated items: NICE and MLM-TAPT, each with 180 capabilities × four
-modalities × two mandatory-keyword variants, plus 720 PURE items. Every
-source statement, mandatory candidate, Task 1 gold label, and Task 2 gold
-modality matches the current builder. MUST and SHALL cells use the matching
-keyword in their candidate. This is a consistency check, distinct from the
-author's semantic validation of the capabilities.
+## Limits of the wording checks
 
-I also reviewed the four weak phrasings. The two conditional wishes express
-desirability, and the low-priority and possible-future enhancements express
-tentative scope. All four are consistent with the study's operational
-weak-intent category and weaker than its explicit SHOULD recommendation.
-Priority and temporal scope alone would not determine obligation in a real
-document; surrounding requirements can change the interpretation.
+The strict and broad rules are reproducible lexical diagnostics, not a validated
+general semantic judge. A result unflagged by the strict rule does not establish
+preservation of functional content or commitment. Broad-only classifications
+depend on the convention that bare system-verb wording expresses obligation;
+unclassified wording is separately excluded from the readable-text denominator.
+Consequently, the two rules are sensitivity analyses, not lower and upper bounds
+on semantic error.
 
-**Qualified: generated-text wording checks.** The six worked examples agree
-with the implementation after replacing “preserved” with “not flagged” where
-appropriate. The rules are reproducible diagnostics, not a validated general
-semantic judge. For example, “It would be useful if the system could export
-reports, but it must retain records” was assigned weak intent in the earlier
-implementation. The 2026-09-11 correction gives positive obligations and
-recommendations precedence over weak phrases and flags mixed wording. This is
-still a lexical diagnostic, not a resolution of scope or negation semantics.
-Unknown wording is excluded from the readable-text
-denominator. Strict and broad results therefore are sensitivity analyses;
-they do not establish lower and upper bounds on semantic error.
+Positive obligations and recommendations take precedence over weak phrases in
+mixed wording. For example, “It would be useful if the system could export
+reports, but it must retain records” is flagged as mixed and assigned the
+positive obligation. This precedence does not resolve the scope of each clause
+or general negation semantics.
 
-The authors reviewed the wording checks' decisions on a sample of 100
-generated outputs of the final campaign, covering every model and source
-condition, before resubmission (see Current status). Parser precision,
-recall or agreement are not inferred from this consistency review.
+The authors' 100-output review supports inspection of these decisions, but no
+parser precision, recall or agreement estimate is reported from that sample.
+The exact rules and handling of unclassified outputs are documented in
+[evaluation](evaluation.md) and [aggregation](aggregation.md).
