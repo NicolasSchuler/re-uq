@@ -54,14 +54,14 @@ def _row(task, method, item, **fields):
 
 
 def _score_rows():
-    det = "verbalized_confidence"
-    weak, rec, man = "nice_to_have", "recommended", "mandatory"
+    verbalized = "verbalized_confidence"
+    weak, recommended, mandatory = "nice_to_have", "recommended", "mandatory"
     return [
-        _row("task1", det, "t1a", y_true="0", y_pred="1", confidence="0.95"),
-        _row("task1", det, "t1b", y_true="0", y_pred="0", confidence="0.99"),
+        _row("task1", verbalized, "t1a", y_true="0", y_pred="1", confidence="0.95"),
+        _row("task1", verbalized, "t1b", y_true="0", y_pred="0", confidence="0.99"),
         _row(
             "task2",
-            det,
+            verbalized,
             "a",
             source_modality=weak,
             text_modality="recommended",
@@ -73,7 +73,7 @@ def _score_rows():
         ),
         _row(
             "task2",
-            det,
+            verbalized,
             "b",
             source_modality=weak,
             text_modality="optional",
@@ -85,9 +85,9 @@ def _score_rows():
         ),
         _row(
             "task2",
-            det,
+            verbalized,
             "c",
-            source_modality=rec,
+            source_modality=recommended,
             text_modality="recommended",
             text_modality_parse_status="ok",
             strict_text_overcommit="0",
@@ -97,9 +97,9 @@ def _score_rows():
         ),
         _row(
             "task2",
-            det,
+            verbalized,
             "d",
-            source_modality=man,
+            source_modality=mandatory,
             text_modality="unknown",
             text_modality_parse_status="unknown",
             strict_text_overcommit="0",
@@ -126,11 +126,19 @@ def _score_rows():
         _row("task2", eu.ACSE_PROXY_METHOD, "c", uncertainty_score="0.2"),
         # Task 3 rows carry their own run id; the join must not depend on it.
         {
-            **_row("task3", det, "v1", source_item_id="a", pred_relation="strengthens"),
+            **_row(
+                "task3",
+                verbalized,
+                "v1",
+                source_item_id="a",
+                pred_relation="strengthens",
+            ),
             "run_id": "task3-1",
         },
         {
-            **_row("task3", det, "v2", source_item_id="b", pred_relation="preserves"),
+            **_row(
+                "task3", verbalized, "v2", source_item_id="b", pred_relation="preserves"
+            ),
             "run_id": "task3-1",
         },
     ]

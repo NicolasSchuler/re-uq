@@ -301,10 +301,10 @@ def summarize_grid(
             }
         )
     for row in summary:
-        ap, baseline = row.get("auprc_mean", ""), row.get("baseline_auprc", "")
+        auprc_mean, baseline = row.get("auprc_mean", ""), row.get("baseline_auprc", "")
         row["auprc_lift_over_baseline"] = (
-            float(ap) / float(baseline)
-            if ap != "" and baseline != "" and float(baseline) > 0
+            float(auprc_mean) / float(baseline)
+            if auprc_mean != "" and baseline != "" and float(baseline) > 0
             else ""
         )
         if row["target"].endswith("text_overcommit"):

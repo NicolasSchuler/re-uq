@@ -374,11 +374,15 @@ def delta_rows(
         def eligible(r, name=metric_name):
             return metric_eligible(r, name)
 
-        a, b, counts = eu.exact_item_metric_pairs(bare, document, eligible)
-        a, b, cluster, cluster_note = eu.paired_request_clusters(a, b)
+        matched_bare, matched_document, counts = eu.exact_item_metric_pairs(
+            bare, document, eligible
+        )
+        matched_bare, matched_document, cluster, cluster_note = (
+            eu.paired_request_clusters(matched_bare, matched_document)
+        )
         paired = eu.bootstrap_seed_metric_delta(
-            a,
-            b,
+            matched_bare,
+            matched_document,
             metric,
             pair_field="exact_pair_id",
             cluster_field=cluster,
@@ -386,8 +390,8 @@ def delta_rows(
             seed=BOOTSTRAP_SEED,
         )
         by_seed = eu.bootstrap_seed_metric_delta(
-            a,
-            b,
+            matched_bare,
+            matched_document,
             metric,
             pair_field="exact_pair_id",
             cluster_field="seed_id",
@@ -399,16 +403,20 @@ def delta_rows(
                 "model": model,
                 "stratum": stratum,
                 "metric": metric_name,
-                "bare": _finite(metric(a)) if a else "",
+                "bare": _finite(metric(matched_bare)) if matched_bare else "",
                 "full_arm_bare_descriptive": _finite(
                     metric([r for r in bare if eligible(r)])
                 ),
-                "document": _finite(metric(b)) if b else "",
+                "document": _finite(metric(matched_document))
+                if matched_document
+                else "",
                 "full_arm_document_descriptive": _finite(
                     metric([r for r in document if eligible(r)])
                 ),
                 "cluster_note": cluster_note,
-                "unavailable_reason": "" if a else "no jointly eligible exact items",
+                "unavailable_reason": ""
+                if matched_bare
+                else "no jointly eligible exact items",
                 "delta_ci_unavailable_reason": "fewer than two clusters"
                 if paired.n_clusters < 2
                 else "bootstrap disabled"

@@ -572,15 +572,15 @@ def main() -> None:
             # Affine projection: the mean of the projected samples already is
             # the projected centroid.
             centroid = np.mean(projected[indices], axis=0)
-            det = det_scores[item_id]
+            det_score = det_scores[item_id]
             acse = acse_scores.get(item_id, {})
             benchmark = benchmark_by_item.get(item_id, {})
             item_output_rows.append(
                 {
                     "item_id": item_id,
-                    "seed_id": det.get("seed_id", ""),
-                    "source_modality": det.get("source_modality", ""),
-                    "status": drift_status(det),
+                    "seed_id": det_score.get("seed_id", ""),
+                    "source_modality": det_score.get("source_modality", ""),
+                    "status": drift_status(det_score),
                     "x": centroid[0],
                     "y": centroid[1],
                     "z": centroid[2] if args.components == 3 else 0.0,
@@ -592,11 +592,13 @@ def main() -> None:
                     "semantic_cluster_variation_ratio": acse.get(
                         "semantic_cluster_variation_ratio", ""
                     ),
-                    "text_modality": det.get("text_modality", ""),
-                    "text_modality_basis": det.get("text_modality_basis", ""),
-                    "text_overcommit": det.get("text_overcommit", ""),
-                    "strict_text_overcommit": det.get("strict_text_overcommit", ""),
-                    "confidence": det.get("confidence", ""),
+                    "text_modality": det_score.get("text_modality", ""),
+                    "text_modality_basis": det_score.get("text_modality_basis", ""),
+                    "text_overcommit": det_score.get("text_overcommit", ""),
+                    "strict_text_overcommit": det_score.get(
+                        "strict_text_overcommit", ""
+                    ),
+                    "confidence": det_score.get("confidence", ""),
                     "source_statement": benchmark.get("source_statement", ""),
                     "task2_requirement": deterministic_requirements.get(item_id, ""),
                 }

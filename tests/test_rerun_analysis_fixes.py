@@ -37,24 +37,24 @@ def item(seed, modality, strengthened=False, **extra):
 
 
 class ExactPairingTest(unittest.TestCase):
-    def compare(self, a, b):
+    def compare(self, bare, document):
         return {
             r["metric"]: r
             for r in context.delta_rows(
-                "fixture-model", "all", a, b, bootstrap_samples=100
+                "fixture-model", "all", bare, document, bootstrap_samples=100
             )
         }
 
     def test_different_failed_variants_cannot_form_seed_pair(self):
-        a = [
+        bare = [
             item("s", "optional", True),
             item("s", "recommended", response_status="request_error"),
         ]
-        b = [
+        document = [
             item("s", "optional", response_status="request_error"),
             item("s", "recommended", True),
         ]
-        for row in self.compare(a, b).values():
+        for row in self.compare(bare, document).values():
             self.assertEqual(row["n_matched_items"], 0)
             self.assertEqual(row["n_excluded_ineligible_items"], 2)
             self.assertEqual(row["n_bare_failed_items"], 1)
@@ -62,17 +62,17 @@ class ExactPairingTest(unittest.TestCase):
             self.assertEqual(row["bare"], "")
 
     def test_metric_specific_cohorts_and_hand_computable_difference(self):
-        a = [
+        bare = [
             item("a", "optional"),
             item("b", "optional", True),
             item("c", "optional", True),
         ]
-        b = [
+        document = [
             item("a", "optional", True),
             item("b", "optional", text_modality_parse_status="unknown"),
             item("c", "optional", True, pred_modality="mandatory"),
         ]
-        rates = self.compare(a, b)
+        rates = self.compare(bare, document)
         text = rates["strict_text_strengthening"]
         self.assertEqual((text["bare"], text["document"], text["delta"]), (0.5, 1, 0.5))
         self.assertEqual(text["n_matched_items"], 2)
@@ -85,7 +85,7 @@ class ExactPairingTest(unittest.TestCase):
         self.assertIn("missing request", text["cluster_note"])
 
     def test_unmatched_duplicates_missing_identity_and_variant_isolation(self):
-        a = [
+        bare = [
             item("s", "optional"),
             item("duplicate", "optional"),
             item("duplicate", "optional"),
@@ -93,12 +93,12 @@ class ExactPairingTest(unittest.TestCase):
             item("", "optional"),
             item("variant", "optional"),
         ]
-        b = [
+        document = [
             item("s", "optional", True),
             item("duplicate", "optional"),
             item("variant", "optional", benchmark_variant="shall"),
         ]
-        row = self.compare(a, b)["label_accuracy"]
+        row = self.compare(bare, document)["label_accuracy"]
         self.assertEqual(row["n_matched_items"], 1)
         self.assertEqual(row["n_duplicate_identities"], 1)
         self.assertEqual(row["n_bare_duplicate_rows"], 2)
@@ -107,9 +107,11 @@ class ExactPairingTest(unittest.TestCase):
         self.assertEqual(row["delta"], 0)
 
     def test_crossing_request_partitions_preserve_all_dependence(self):
-        a = [item(str(i), "optional", batch_id=f"a{i // 2}") for i in range(4)]
-        b = [item(str(i), "optional", True, batch_id=f"b{i % 2}") for i in range(4)]
-        row = self.compare(a, b)["strict_text_strengthening"]
+        bare = [item(str(i), "optional", batch_id=f"a{i // 2}") for i in range(4)]
+        document = [
+            item(str(i), "optional", True, batch_id=f"b{i % 2}") for i in range(4)
+        ]
+        row = self.compare(bare, document)["strict_text_strengthening"]
         self.assertEqual(row["n_delta_clusters"], 1)
         self.assertEqual(row["n_matched_capabilities"], 4)
         self.assertEqual(
@@ -117,11 +119,15 @@ class ExactPairingTest(unittest.TestCase):
         )
 
     def test_arm_local_ids_resolve_to_stable_original_requirement(self):
-        helper = paper_fixtures.ContextAblationTableTest()
-        benchmark = helper._pure_benchmark()
-        a = helper._raw_rows(benchmark, "a", "fixture-model", strengthen_weak=False)
-        b = helper._raw_rows(benchmark, "b", "fixture-model", strengthen_weak=True)
-        b = [
+        fixtures = paper_fixtures.ContextAblationTableTest()
+        benchmark = fixtures._pure_benchmark()
+        bare_raw = fixtures._raw_rows(
+            benchmark, "a", "fixture-model", strengthen_weak=False
+        )
+        document_raw = fixtures._raw_rows(
+            benchmark, "b", "fixture-model", strengthen_weak=True
+        )
+        document_raw = [
             {
                 **r,
                 "source_statement": source["source_statement"],
@@ -129,22 +135,22 @@ class ExactPairingTest(unittest.TestCase):
                 "item_id": "document-" + r["item_id"],
                 "seed_id": "arm-specific",
             }
-            for r, source in zip(b, benchmark, strict=True)
+            for r, source in zip(document_raw, benchmark, strict=True)
         ]
-        sa = context.task2_scores(
-            benchmark, a, sampling_plan=paper_fixtures.NO_STOCHASTIC_PLAN
+        bare_scores = context.task2_scores(
+            benchmark, bare_raw, sampling_plan=paper_fixtures.NO_STOCHASTIC_PLAN
         )
-        sb = context.task2_scores(
-            benchmark, b, sampling_plan=paper_fixtures.NO_STOCHASTIC_PLAN
+        document_scores = context.task2_scores(
+            benchmark, document_raw, sampling_plan=paper_fixtures.NO_STOCHASTIC_PLAN
         )
-        row = self.compare(sa, sb)["strict_text_strengthening"]
+        row = self.compare(bare_scores, document_scores)["strict_text_strengthening"]
         self.assertEqual(row["n_matched_items"], len(benchmark))
         self.assertEqual(row["delta"], 0.25)
 
     def test_reused_arm_ids_do_not_override_recorded_source_identity(self):
-        helper = paper_fixtures.ContextAblationTableTest()
-        benchmark = helper._pure_benchmark()
-        raw = helper._raw_rows(
+        fixtures = paper_fixtures.ContextAblationTableTest()
+        benchmark = fixtures._pure_benchmark()
+        raw = fixtures._raw_rows(
             benchmark, "document", "fixture-model", strengthen_weak=True
         )
         # Rotate IDs onto other real benchmark items, while retaining each

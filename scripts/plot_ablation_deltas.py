@@ -106,15 +106,15 @@ def read_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def pp(value: str) -> float:
+def to_percentage_points(value: str) -> float:
     return float(value) * 100.0
 
 
 class Point:
     def __init__(self, row: dict[str, str], low: str, high: str, pairs: str):
-        self.delta = pp(row["delta"])
-        self.low = pp(row[low])
-        self.high = pp(row[high])
+        self.delta = to_percentage_points(row["delta"])
+        self.low = to_percentage_points(row[low])
+        self.high = to_percentage_points(row[high])
         self.pairs = int(float(row[pairs]))
 
 

@@ -542,16 +542,16 @@ class PairedBootstrap:
     point: np.ndarray  # [settings]
     draws: np.ndarray  # [iterations, settings], NaN where undefined
 
-    def interval(self, s: int) -> tuple[float, float]:
-        values = self.draws[:, s]
+    def interval(self, setting: int) -> tuple[float, float]:
+        values = self.draws[:, setting]
         values = values[~np.isnan(values)]
         if values.size == 0:
             return math.nan, math.nan
         low, high = np.quantile(values, [0.025, 0.975])
         return float(low), float(high)
 
-    def delta_interval(self, s: int, reference: int) -> tuple[float, float, int]:
-        deltas = self.draws[:, s] - self.draws[:, reference]
+    def delta_interval(self, setting: int, reference: int) -> tuple[float, float, int]:
+        deltas = self.draws[:, setting] - self.draws[:, reference]
         deltas = deltas[~np.isnan(deltas)]
         if deltas.size == 0:
             return math.nan, math.nan, 0
@@ -923,14 +923,14 @@ def run(
     diagnostics_rows: list[dict[str, Any]] = []
     for kind, name, mask in slices_for(cohort, snapshot):
         labels = cohort.labels[mask]
-        sub = matrix[mask]
+        slice_matrix = matrix[mask]
         rows = [row for row, keep in zip(cohort.rows, mask, strict=True) if keep]
         seed_keys = [row["seed_id"] for row in rows]
         item_keys = [row["item_id"] for row in rows]
         started = time.time()
         capability = paired_cluster_bootstrap(
             labels,
-            sub,
+            slice_matrix,
             seed_keys,
             cluster_field=CAPABILITY_FIELD,
             iterations=iterations,
@@ -940,7 +940,7 @@ def run(
         # the reported setting only.
         item = paired_cluster_bootstrap(
             labels,
-            sub[:, [reference_setting]],
+            slice_matrix[:, [reference_setting]],
             item_keys,
             cluster_field=ITEM_FIELD,
             iterations=iterations,
@@ -976,7 +976,7 @@ def run(
         live_item_low, live_item_high = live_item.interval(0)
         reported_auroc = _float_or_nan(reported_row_value(reported, kind, name))
         sklearn_auroc = eu.auroc_score(
-            labels.tolist(), sub[:, reference_setting].tolist()
+            labels.tolist(), slice_matrix[:, reference_setting].tolist()
         )
         reported_row = reported.get(rq_key(kind, name), {})
         cap_low, cap_high = capability.interval(reference_setting)
@@ -1005,7 +1005,7 @@ def run(
                 "abs_diff_auroc": abs(reference_auroc - reported_auroc),
                 "abs_diff_cache_vs_live_auroc": abs(reference_auroc - live_auroc),
                 "max_abs_score_diff_cache_vs_live": float(
-                    np.max(np.abs(sub[:, reference_setting] - live[mask]))
+                    np.max(np.abs(slice_matrix[:, reference_setting] - live[mask]))
                 ),
                 "capability_ci_low": cap_low,
                 "capability_ci_high": cap_high,

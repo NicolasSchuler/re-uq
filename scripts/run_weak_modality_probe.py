@@ -420,13 +420,19 @@ def write_summary(
         ]
         # Report missing/unreadable pairs explicitly; only readable matched
         # capabilities contribute to the paired change in strengthening.
-        a = [row for row in baseline if row["text_modality_parse_status"] == "ok"]
-        b = [row for row in other if row["text_modality_parse_status"] == "ok"]
+        readable_baseline = [
+            row for row in baseline if row["text_modality_parse_status"] == "ok"
+        ]
+        readable_other = [
+            row for row in other if row["text_modality_parse_status"] == "ok"
+        ]
         for metric, strict in (("strict", True), ("broad", False)):
             delta = eu.bootstrap_seed_metric_delta(
-                a,
-                b,
-                lambda rs, strict=strict: eu.text_strengthening_rate(rs, strict=strict),
+                readable_baseline,
+                readable_other,
+                lambda sample_rows, strict=strict: eu.text_strengthening_rate(
+                    sample_rows, strict=strict
+                ),
                 cluster_field="batch_id",
                 pair_field="seed_id",
                 iterations=iterations,
@@ -438,8 +444,9 @@ def write_summary(
                     "template_id": template_id,
                     "baseline": "useful_if",
                     "metric": metric,
-                    "baseline_unreadable_or_missing_n": per_template - len(a),
-                    "other_unreadable_or_missing_n": per_template - len(b),
+                    "baseline_unreadable_or_missing_n": per_template
+                    - len(readable_baseline),
+                    "other_unreadable_or_missing_n": per_template - len(readable_other),
                     **delta._asdict(),
                 }
             )

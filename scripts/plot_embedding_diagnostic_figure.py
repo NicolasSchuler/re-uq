@@ -412,16 +412,16 @@ def panel_readout(
                         backend=backend,
                         text="reqonly",
                         group=group_mode,
-                        scope=f"source_modality={lvl}",
+                        scope=f"source_modality={modality}",
                         target="deterministic_strict_text_overcommit",
                         model=model,
                     )
-                    for lvl in ("nice_to_have", "optional", "recommended")
+                    for modality in ("nice_to_have", "optional", "recommended")
                 ]
             )
         )
 
-    src = auroc_cell(
+    source_modality_auroc = auroc_cell(
         summary,
         backend="mlx",
         text="reqonly",
@@ -430,7 +430,7 @@ def panel_readout(
         target="source_modality",
         model=model,
     )
-    dataset = auroc_cell(
+    dataset_variant_auroc = auroc_cell(
         summary,
         backend="mlx",
         text="reqonly",
@@ -439,8 +439,8 @@ def panel_readout(
         target="dataset_variant",
         model=model,
     )
-    strengthen_emb = within_mean("mlx")
-    strengthen_kw = within_mean("tfidf")
+    strengthened_embedding_auroc = within_mean("mlx")
+    strengthened_tfidf_auroc = within_mean("tfidf")
 
     labels = [
         "Original input strength",
@@ -448,7 +448,12 @@ def panel_readout(
         "Strengthened?\n(neural embedding)",
         "Strengthened?\n(keyword search)",
     ]
-    values = [src, dataset, strengthen_emb, strengthen_kw]
+    values = [
+        source_modality_auroc,
+        dataset_variant_auroc,
+        strengthened_embedding_auroc,
+        strengthened_tfidf_auroc,
+    ]
     colors = ["#009E73", "#009E73", "#D55E00", "#D55E00"]
     y = hbar_detection(ax, labels, values, colors)
     mid = (y[2] + y[3]) / 2.0
@@ -459,7 +464,7 @@ def panel_readout(
         arrowprops={"arrowstyle": "-", "lw": 0.0},
     )
     ax.text(
-        max(strengthen_emb, strengthen_kw) + 0.05,
+        max(strengthened_embedding_auroc, strengthened_tfidf_auroc) + 0.05,
         mid,
         "≈ coin flip\n(neither works)",
         va="center",

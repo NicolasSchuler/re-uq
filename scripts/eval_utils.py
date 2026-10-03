@@ -2418,12 +2418,12 @@ def auto_capability_text(requirement: str, *, preserve_subject: bool = False) ->
 
 def automatic_filter(requirement: str, capability: str) -> tuple[bool, str]:
     reasons: list[str] = []
-    wc = word_count(requirement)
+    requirement_word_count = word_count(requirement)
     cleaned_requirement = strip_final_punctuation(requirement)
     cleaned_capability = strip_final_punctuation(capability)
-    if wc < 5:
+    if requirement_word_count < 5:
         reasons.append("too_short")
-    if wc > 35:
+    if requirement_word_count > 35:
         reasons.append("too_long")
     if SENTENCE_END_RE.search(cleaned_requirement) or SENTENCE_END_RE.search(
         cleaned_capability
@@ -7832,7 +7832,7 @@ def exact_item_metric_pairs(rows_a, rows_b, eligible):
     resolved. Retries should already have been deduplicated by completion key.
     """
 
-    def indexed(rows):
+    def index_by_identity(rows):
         result = {}
         missing = 0
         for row in rows:
@@ -7851,31 +7851,31 @@ def exact_item_metric_pairs(rows_a, rows_b, eligible):
             result.setdefault(key, []).append(row)
         return result, missing
 
-    a, missing_a = indexed(rows_a)
-    b, missing_b = indexed(rows_b)
+    index_a, missing_a = index_by_identity(rows_a)
+    index_b, missing_b = index_by_identity(rows_b)
     duplicates = {
         key
-        for key in a.keys() | b.keys()
-        if len(a.get(key, [])) > 1 or len(b.get(key, [])) > 1
+        for key in index_a.keys() | index_b.keys()
+        if len(index_a.get(key, [])) > 1 or len(index_b.get(key, [])) > 1
     }
-    common = (a.keys() & b.keys()) - duplicates
+    common = (index_a.keys() & index_b.keys()) - duplicates
     paired = sorted(
-        key for key in common if eligible(a[key][0]) and eligible(b[key][0])
+        key for key in common if eligible(index_a[key][0]) and eligible(index_b[key][0])
     )
     cohort_a, cohort_b = [], []
     for key in paired:
         pair_id = json.dumps(key)
-        cohort_a.append({**a[key][0], "exact_pair_id": pair_id})
-        cohort_b.append({**b[key][0], "exact_pair_id": pair_id})
+        cohort_a.append({**index_a[key][0], "exact_pair_id": pair_id})
+        cohort_b.append({**index_b[key][0], "exact_pair_id": pair_id})
     counts = {
         "n_matched_items": len(paired),
         "n_matched_capabilities": len({key[:4] for key in paired}),
-        "n_unmatched_items": len((a.keys() ^ b.keys()) - duplicates),
+        "n_unmatched_items": len((index_a.keys() ^ index_b.keys()) - duplicates),
         "n_duplicate_identities": len(duplicates),
         "n_excluded_ineligible_items": len(common) - len(paired),
         "n_missing_identity_rows": missing_a + missing_b,
     }
-    for arm, index, rows in (("bare", a, rows_a), ("document", b, rows_b)):
+    for arm, index, rows in (("bare", index_a, rows_a), ("document", index_b, rows_b)):
         counts[f"n_{arm}_duplicate_rows"] = sum(
             len(v) for v in index.values() if len(v) > 1
         )
@@ -7927,11 +7927,15 @@ def paired_request_clusters(rows_a, rows_b):
                 parent[root(i)] = root(seen[key])
             else:
                 seen[key] = i
-    a = [{**r, "paired_request_cluster": str(root(i))} for i, r in enumerate(rows_a)]
-    b = [{**r, "paired_request_cluster": str(root(i))} for i, r in enumerate(rows_b)]
+    clustered_a = [
+        {**r, "paired_request_cluster": str(root(i))} for i, r in enumerate(rows_a)
+    ]
+    clustered_b = [
+        {**r, "paired_request_cluster": str(root(i))} for i, r in enumerate(rows_b)
+    ]
     return (
-        a,
-        b,
+        clustered_a,
+        clustered_b,
         "paired_request_cluster",
         "connected components of requests in both arms",
     )

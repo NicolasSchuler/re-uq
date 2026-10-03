@@ -292,10 +292,12 @@ def delta_rows(
                 )
             )
 
-        a, b, counts = eu.exact_item_metric_pairs(grouped, other, eligible)
+        matched_baseline, matched_arm, counts = eu.exact_item_metric_pairs(
+            grouped, other, eligible
+        )
         paired = eu.bootstrap_seed_metric_delta(
-            a,
-            b,
+            matched_baseline,
+            matched_arm,
             metric,
             # Capability-conditional sensitivity interval: changing request
             # partitions can induce dependence across capabilities. This does
@@ -312,8 +314,10 @@ def delta_rows(
                 "stratum": stratum,
                 "metric": metric_name,
                 "baseline_arm": baseline_arm,
-                "baseline_value": _finite(metric(a)) if a else "",
-                "arm_value": _finite(metric(b)) if b else "",
+                "baseline_value": _finite(metric(matched_baseline))
+                if matched_baseline
+                else "",
+                "arm_value": _finite(metric(matched_arm)) if matched_arm else "",
                 "full_arm_baseline_descriptive": _finite(
                     metric([r for r in grouped if eligible(r)])
                 ),
@@ -354,7 +358,9 @@ def delta_rows(
                         "eligible_items",
                     )
                 },
-                "unavailable_reason": "" if a else "no jointly eligible exact items",
+                "unavailable_reason": ""
+                if matched_baseline
+                else "no jointly eligible exact items",
                 "delta_ci_unavailable_reason": "fewer than two capabilities"
                 if paired.n_clusters < 2
                 else "bootstrap disabled"

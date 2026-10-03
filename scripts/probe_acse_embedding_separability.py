@@ -531,22 +531,22 @@ def fold_metrics(
     hgb_budgets: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     metadata = sample_rows if sample_rows is not None else [{} for _ in y_raw]
-    names = (
+    class_names = (
         np.asarray(["0", "1"])
         if target in BINARY_TARGETS
         else np.asarray(sorted(expected_classes))
         if expected_classes
         else np.unique(y_raw.astype(str))
     )
-    encoded = {str(value): i for i, value in enumerate(names)}
+    encoded = {str(value): i for i, value in enumerate(class_names)}
     y = np.asarray([encoded[str(value)] for value in y_raw], dtype=int)
-    class_labels = np.arange(len(names))
+    class_labels = np.arange(len(class_names))
     n_splits = min(n_splits, len(np.unique(groups)))
     base = {
         "scope": scope,
         "target": target,
         "model": model_name,
-        "class_order": json.dumps(names.tolist()),
+        "class_order": json.dumps(class_names.tolist()),
         "n_eligible": len(y),
         "n_splits_requested": n_splits,
         "class_distribution_eligible": json.dumps(
@@ -555,7 +555,7 @@ def fold_metrics(
     }
     reason = (
         "missing target classes"
-        if len(np.unique(y)) < 2 or len(np.unique(y)) != len(names)
+        if len(np.unique(y)) < 2 or len(np.unique(y)) != len(class_names)
         else "insufficient capability groups"
         if n_splits < 2
         else ""
@@ -773,7 +773,7 @@ def fold_metrics(
                         if source
                         else str(groups[index]),
                         "split_group": str(groups[index]),
-                        "class_order": json.dumps(names.tolist()),
+                        "class_order": json.dumps(class_names.tolist()),
                         "target_value": str(y_raw[index]),
                         "probabilities": json.dumps(probability.tolist()),
                     }
@@ -919,9 +919,9 @@ def prediction_summary(predictions, folds, *, iterations=1000, seed=20260527):
         )
         result["ci_unavailable_reason"] = "no evaluable held-out predictions"
         return result
-    names = json.loads(rows[0]["class_order"])
-    classes = np.arange(len(names))
-    y = np.asarray([names.index(str(r["target_value"])) for r in rows])
+    class_names = json.loads(rows[0]["class_order"])
+    classes = np.arange(len(class_names))
+    y = np.asarray([class_names.index(str(r["target_value"])) for r in rows])
     probabilities = np.asarray([json.loads(r["probabilities"]) for r in rows])
     fold_ids = np.asarray([int(r["fold"]) for r in rows])
     capabilities, group_index = np.unique(
@@ -935,18 +935,18 @@ def prediction_summary(predictions, folds, *, iterations=1000, seed=20260527):
             index = np.repeat(
                 np.flatnonzero(fold_ids == fold), weights[fold_ids == fold]
             )
-            yt, pt = y[index], probabilities[index]
-            if not ranking_metric_is_defined(yt, classes):
+            y_test, probabilities_test = y[index], probabilities[index]
+            if not ranking_metric_is_defined(y_test, classes):
                 return None
             values.append(
                 (
-                    probe_auroc(yt, pt, classes),
-                    float(average_precision_score(yt, pt[:, 1]))
+                    probe_auroc(y_test, probabilities_test, classes),
+                    float(average_precision_score(y_test, probabilities_test[:, 1]))
                     if binary
-                    else probe_average_precision(yt, pt, classes),
+                    else probe_average_precision(y_test, probabilities_test, classes),
                 )
             )
-            baselines.append(float(np.mean(yt)) if binary else 1 / len(classes))
+            baselines.append(float(np.mean(y_test)) if binary else 1 / len(classes))
         return np.mean(values, axis=0), float(np.mean(baselines))
 
     point, baseline = score(np.ones(len(rows), dtype=int))
@@ -954,7 +954,7 @@ def prediction_summary(predictions, folds, *, iterations=1000, seed=20260527):
         auroc_mean=float(point[0]),
         auprc_mean=float(point[1]),
         baseline_auprc=baseline,
-        class_order=json.dumps(names),
+        class_order=json.dumps(class_names),
     )
     if len(capabilities) < 2 or iterations <= 0:
         result["ci_unavailable_reason"] = (

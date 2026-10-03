@@ -82,7 +82,7 @@ def read_resume_log(root: str | Path, run_id: str) -> list[str]:
 
 
 def record_resume(
-    root: str | Path, run_id: str, at: str, *, started_at_utc: str = ""
+    root: str | Path, run_id: str, timestamp: str, *, started_at_utc: str = ""
 ) -> list[str]:
     """Append one resume timestamp for `run_id` and return the full list.
 
@@ -92,7 +92,7 @@ def record_resume(
     path = resume_log_path(root, run_id)
     with eu.file_lock(path):
         resumed_at = read_resume_log(root, run_id)
-        resumed_at.append(str(at))
+        resumed_at.append(str(timestamp))
         eu.write_json(
             path,
             {

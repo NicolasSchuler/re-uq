@@ -61,7 +61,7 @@ def lock_is_held(path: Path) -> bool:
     return False
 
 
-def human(size: int) -> str:
+def human_size(size: int) -> str:
     value = float(size)
     for unit in ("B", "KB", "MB", "GB"):
         if value < 1024 or unit == "GB":
@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
             failures += 1
             continue
         if args.dry_run:
-            print(f"would  {path}: {human(tail_bytes)} of JSONL tail")
+            print(f"would  {path}: {human_size(tail_bytes)} of JSONL tail")
             total_before += tail_bytes
             continue
         try:
@@ -117,16 +117,16 @@ def main(argv: list[str] | None = None) -> int:
         total_after += summary["store_bytes_after"]
         print(
             f"done   {path}: {summary['tail_rows']} rows, "
-            f"{human(summary['tail_bytes_before'])} -> "
-            f"{human(summary['store_bytes_after'])} "
+            f"{human_size(summary['tail_bytes_before'])} -> "
+            f"{human_size(summary['store_bytes_after'])} "
             f"({summary['store_rows_after']} rows in store)"
         )
     if args.dry_run:
-        print(f"\n{human(total_before)} of JSONL tail would be compacted.")
+        print(f"\n{human_size(total_before)} of JSONL tail would be compacted.")
     else:
         print(
-            f"\nCompacted {human(total_before)} of JSONL into "
-            f"{human(total_after)} of Parquet."
+            f"\nCompacted {human_size(total_before)} of JSONL into "
+            f"{human_size(total_after)} of Parquet."
         )
     return 1 if failures else 0
 

@@ -598,7 +598,7 @@ class SmokeArtifactIsolationTest(unittest.TestCase):
         full_id = "full-20260523-014135-78ceaa43"
         self.assertTrue(eu.is_smoke_run_id(smoke_id))
         self.assertFalse(eu.is_smoke_run_id(full_id))
-        for helper in (
+        for path_for in (
             eu.model_outputs_raw_path,
             eu.run_registry_path,
             eu.run_events_path,
@@ -608,12 +608,12 @@ class SmokeArtifactIsolationTest(unittest.TestCase):
             eu.task3_progress_path,
             eu.task3_events_path,
         ):
-            smoke_path = helper(root, "mlm_tapt", "must", run_id=smoke_id)
-            full_path = helper(root, "mlm_tapt", "must", run_id=full_id)
+            smoke_path = path_for(root, "mlm_tapt", "must", run_id=smoke_id)
+            full_path = path_for(root, "mlm_tapt", "must", run_id=full_id)
             self.assertEqual(smoke_path.parent.name, "smoke")
             self.assertEqual(smoke_path.name, full_path.name)
             self.assertEqual(full_path.parent.name, "processed")
-            self.assertEqual(helper(root, "mlm_tapt", "must", smoke=True), smoke_path)
+            self.assertEqual(path_for(root, "mlm_tapt", "must", smoke=True), smoke_path)
 
     def test_smoke_tree_mapping_is_idempotent(self):
         once = eu.smoke_tree_path(Path("/tmp/x/data/processed/run_registry.csv"))
