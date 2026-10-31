@@ -22,6 +22,21 @@ def selected_registry_row(
     model: str | None = None,
     profile_id: str | None = None,
 ) -> dict[str, str]:
+    """Return the registry row of `run_id`, narrowed by model and profile.
+
+    Args:
+        rows: Rows of the run registry CSV.
+        run_id: Run to look up.
+        model: Model the row must carry; None accepts any model.
+        profile_id: Profile the row must carry; None accepts any profile.
+
+    Returns:
+        The single matching row, or {} when no row matches.
+
+    Raises:
+        ValueError: If more than one row matches, so `--model` or `--profile`
+            is needed to choose.
+    """
     matches = [
         row
         for row in rows
@@ -43,6 +58,21 @@ def selected_registry_row(
 def expected_stochastic_samples(
     registry_row: dict[str, Any], benchmark_count: int
 ) -> int:
+    """Infer the stochastic samples per item from a registry row's plan.
+
+    Each item and task is planned as one deterministic record plus the
+    stochastic samples, so the count is `expected_records` divided by items
+    times tasks, minus one.
+
+    Args:
+        registry_row: Registry row with `expected_records` and `tasks`; an
+            empty row falls back to the default.
+        benchmark_count: Number of items the plan is divided by.
+
+    Returns:
+        The inferred sample count, or 5 when `expected_records` is missing,
+        unreadable, or not a whole multiple of items times tasks.
+    """
     try:
         expected_records = int(registry_row.get("expected_records", 0))
     except (TypeError, ValueError):
@@ -66,6 +96,23 @@ def raw_rows_for_selection(
     model: str | None = None,
     profile_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Select the raw rows of `run_id` for one model and profile.
+
+    The model and profile come from the arguments or, when not given, from the
+    registry row. Raw rows without a `profile_id` (written before it was
+    recorded) are kept under any profile.
+
+    Args:
+        rows: Raw rows of the dataset and variant.
+        run_id: Run whose rows are selected.
+        registry_row: Selected registry row, used for the model and profile
+            when the arguments leave them unset; may be empty.
+        model: Model to keep; None falls back to the registry row's.
+        profile_id: Profile to keep; None falls back to the registry row's.
+
+    Returns:
+        The matching raw rows, in file order.
+    """
     selected_model = model or str(registry_row.get("model", "") or "")
     selected_profile_id = profile_id or str(registry_row.get("profile_id", "") or "")
     return [
@@ -86,13 +133,23 @@ def planned_benchmark_rows(
     registry_row: dict[str, Any],
     raw_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Benchmark rows this run actually planned, not the whole benchmark.
+    """Return the benchmark rows this run actually planned, not the whole benchmark.
 
-    Smoke runs plan only the first ``--smoke-items`` benchmark rows, so scoring
+    Smoke runs plan only the first `--smoke-items` benchmark rows, so scoring
     their per-task progress against the full benchmark reported nonsense such as
-    ``records=12/4320``. Prefer the planned item count implied by the registry
-    row's own ``expected_records``; otherwise fall back to the item ids the run
+    `records=12/4320`. Prefer the planned item count implied by the registry
+    row's own `expected_records`; otherwise fall back to the item ids the run
     actually produced.
+
+    Args:
+        benchmark: Every benchmark row of the dataset and variant.
+        registry_row: Selected registry row; may be empty.
+        raw_rows: Raw rows of the run, used for the observed item ids.
+
+    Returns:
+        The first planned rows of `benchmark`, else the rows whose item ids
+        the run produced when those are fewer than all, else the whole
+        benchmark.
     """
     if not benchmark:
         return benchmark
@@ -129,6 +186,23 @@ def print_progress(
     profile_id: str | None = None,
     reader: RawRowReader | None = None,
 ) -> None:
+    """Print a progress snapshot of one run without writing anything.
+
+    Prints the live progress line, the registry row, the logical-versus-raw
+    attempt counts, parse status and run quality over every attempt, per-task
+    progress over the latest logical observations, and the artifact paths.
+
+    Args:
+        root: Project root the artifacts are resolved under.
+        dataset_id: Normalized dataset of the run.
+        variant: Normalized benchmark variant of the run.
+        run_id: Run to report; a smoke run id reads the smoke tree.
+        model: Model to report when the run id is reused across models.
+        profile_id: Profile to report when the run id is reused across
+            profiles.
+        reader: Incremental reader kept across `--watch` ticks; None reads the
+            whole raw store each time.
+    """
     benchmark_path = eu.artifact_path(
         root / "data/processed/benchmark_items.csv", dataset_id, variant
     )
@@ -231,7 +305,7 @@ def print_progress(
 
 
 class RawRowReader:
-    """Incremental raw-store reader for ``--watch``.
+    """Incremental raw-store reader for `--watch`.
 
     Loads the compacted Parquet rows once, then remembers the JSONL byte offset
     already consumed so each tick parses only rows appended since the previous
@@ -244,6 +318,17 @@ class RawRowReader:
         self._path: Path | None = None
 
     def read(self, path: Path) -> list[dict[str, Any]]:
+        """Return every raw row of `path`, parsing only lines new since last call.
+
+        A partial trailing line is left for the next call.
+
+        Args:
+            path: Raw JSONL file; a different path from the previous call
+                starts over from its Parquet rows.
+
+        Returns:
+            A copy of all rows read so far, Parquet rows first.
+        """
         path = Path(path)
         if path != self._path:
             self._path, self._offset = path, 0
@@ -269,6 +354,7 @@ class RawRowReader:
 
 
 def main() -> None:
+    """Print one progress snapshot, or refresh it every `--watch` seconds."""
     parser = argparse.ArgumentParser(
         description="Show read-only progress for a provider-aware benchmark run."
     )

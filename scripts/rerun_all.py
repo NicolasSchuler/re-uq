@@ -16,8 +16,9 @@ It adds no execution logic: every step shells out to the CLI that already owns
 it (`scripts/run.py` for provider runs, the analysis scripts for everything
 after), so a stage can always be re-run by hand exactly as printed.
 
-**Resumable.** `outputs/rerun/<run_group_id>/state.json` records status, configuration and run IDs.
-Re-invoking the command skips what is done and continues. A cell that fails is
+**Resumable.** `outputs/rerun/<run_group_id>/state.json` records status,
+configuration and run IDs. Re-invoking the command skips what is done and
+continues. A cell that fails is
 retried once as `mode=resume` on the same run id -- never as a fresh `mode=full`,
 which would re-request everything it already paid for -- and then left failed
 so the rest of the cohort still runs. The failures are listed at the end.
@@ -68,7 +69,17 @@ class StageError(RuntimeError):
 
 @dataclass
 class RerunState:
-    """What has already run, so a second invocation continues instead of repeating."""
+    """What has already run, so a second invocation continues instead of repeating.
+
+    Attributes:
+        path: State JSON file shared by every driver of the run group.
+        cells: Bookkeeping per cell key (`<stage>:...`): `status`, `run_id`,
+            timestamps and attempts.
+        dry_run: Whether bookkeeping stays in memory. A dry run must never
+            mark cells complete, or the next real invocation would skip them.
+        configuration: Recorded configuration the state belongs to, checked by
+            `bind_configuration`.
+    """
 
     path: Path
     cells: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -79,6 +90,15 @@ class RerunState:
 
     @classmethod
     def load(cls, path: Path, *, dry_run: bool = False) -> RerunState:
+        """Load the state file, or start empty when it does not exist yet.
+
+        Args:
+            path: State JSON file.
+            dry_run: Whether the loaded state keeps its bookkeeping in memory.
+
+        Returns:
+            The state with the recorded cells and configuration.
+        """
         payload = cls._read_payload(path)
         return cls(
             path=path,
@@ -98,12 +118,19 @@ class RerunState:
 
     @staticmethod
     def experiment_identity(configuration: dict[str, Any]) -> dict[str, Any]:
-        """The recorded configuration without deployment details.
+        """Return the recorded configuration without deployment details.
 
-        An endpoint address (``base_url``) says where a profile was served
+        An endpoint address (`base_url`) says where a profile was served
         from, not what was asked of it; the run registries keep the address
         each run actually used. Leaving it out lets a moved server, or the
         published placeholder, resume the same experiment.
+
+        Args:
+            configuration: Recorded driver configuration, with the generated
+                run config under `run_config`.
+
+        Returns:
+            A deep copy with `base_url` removed from every profile.
         """
         identity = copy.deepcopy(configuration)
         for profile in identity.get("run_config", {}).get("profiles", []):
@@ -111,6 +138,16 @@ class RerunState:
         return identity
 
     def bind_configuration(self, configuration: dict[str, Any]) -> None:
+        """Attach this invocation's configuration, refusing a different experiment.
+
+        Args:
+            configuration: Driver configuration of this invocation.
+
+        Raises:
+            StageError: If the state already records cells and its
+                configuration differs from `configuration` in anything but
+                endpoint addresses.
+        """
         if self.cells and self.experiment_identity(
             self.configuration
         ) != self.experiment_identity(configuration):
@@ -122,6 +159,7 @@ class RerunState:
         self.configuration = configuration
 
     def save(self) -> None:
+        """Write the state file atomically; a dry run writes nothing."""
         if self.dry_run:
             return
         payload = {
@@ -135,12 +173,37 @@ class RerunState:
         )
 
     def status(self, key: str) -> str:
+        """Return a cell's recorded status.
+
+        Args:
+            key: Cell key.
+
+        Returns:
+            `pending`, `running`, `complete` or `failed`, or "" for an unknown
+            cell.
+        """
         return str(self.cells.get(key, {}).get("status", ""))
 
     def run_id(self, key: str) -> str:
+        """Return the run id recorded for a cell.
+
+        Args:
+            key: Cell key.
+
+        Returns:
+            The run id, or "" when none is recorded.
+        """
         return str(self.cells.get(key, {}).get("run_id", ""))
 
     def record(self, key: str, status: str, **fields: Any) -> None:
+        """Update one cell's entry and persist it.
+
+        Args:
+            key: Cell key.
+            status: New status of the cell.
+            **fields: Further entry fields to set, such as `run_id`,
+                `started_at_utc` or `attempts`.
+        """
         entry = dict(self.cells.get(key, {}))
         entry.update(fields)
         entry["status"] = status
@@ -159,10 +222,28 @@ class RerunState:
             self.save()
 
     def done(self, key: str) -> bool:
+        """Return whether a cell is recorded as complete.
+
+        Args:
+            key: Cell key.
+
+        Returns:
+            True if the cell's status is `complete`.
+        """
         return self.status(key) == "complete"
 
     def failures(self, profile_ids: Iterable[str] = ()) -> list[str]:
-        """Failed cells, on disk now; narrowed to `profile_ids` when given."""
+        """Return the failed cells, on disk now; narrowed to `profile_ids` when given.
+
+        Reading the file picks up cells another driver recorded since this one
+        loaded the state; a dry run reads only its in-memory cells.
+
+        Args:
+            profile_ids: Profiles whose cells to report; empty reports all.
+
+        Returns:
+            The sorted keys of failed cells.
+        """
         cells = (
             self.cells
             if self.dry_run
@@ -183,6 +264,18 @@ class RerunState:
 
 
 def load_rerun_config(root: Path, path: Path) -> dict[str, Any]:
+    """Load the rerun config with its interpolations resolved.
+
+    Args:
+        root: Project root a relative `path` is resolved against.
+        path: Rerun config YAML, such as `conf/rerun/default.yaml`.
+
+    Returns:
+        The config as a plain dictionary.
+
+    Raises:
+        StageError: If the config file does not exist.
+    """
     resolved = path if path.is_absolute() else root / path
     if not resolved.is_file():
         raise StageError(f"rerun config not found: {resolved}")
@@ -190,7 +283,18 @@ def load_rerun_config(root: Path, path: Path) -> dict[str, Any]:
 
 
 def load_profile(root: Path, profile_id: str) -> dict[str, Any]:
-    """One `conf/profile/<id>.yaml`, with its `${oc.env:...}` names resolved."""
+    """Load one `conf/profile/<id>.yaml`, with its `${oc.env:...}` names resolved.
+
+    Args:
+        root: Project root that contains `conf/profile`.
+        profile_id: Profile whose YAML file is loaded.
+
+    Returns:
+        The profile as a plain dictionary.
+
+    Raises:
+        StageError: If the profile file does not exist.
+    """
     path = root / "conf/profile" / f"{profile_id}.yaml"
     if not path.is_file():
         raise StageError(f"profile config not found: {path}")
@@ -200,11 +304,21 @@ def load_profile(root: Path, profile_id: str) -> dict[str, Any]:
 def generated_run_config(
     root: Path, rerun: dict[str, Any], profiles: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """The JSON-shaped run config the non-Hydra tools read.
+    """Build the JSON-shaped run config the non-Hydra tools read.
 
     Derived from `conf/`, not from `run_configs/current_run.json`, so the
     driver has exactly one source of truth and leaves the hand-maintained
     working config alone.
+
+    Args:
+        root: Project root that contains `conf/`.
+        rerun: Rerun config supplying the run group, datasets, variants,
+            embedding choice and ablations.
+        profiles: Resolved provider profiles of this rerun.
+
+    Returns:
+        The normalized run config. Its dataset and variant lists also cover
+        the ablation cells, and every logging artifact is switched on.
     """
     sampling = OmegaConf.to_container(
         OmegaConf.load(root / "conf/sampling/default.yaml"), resolve=True
@@ -255,7 +369,22 @@ def generated_run_config(
 def cohort_models(
     root: Path, rerun: dict[str, Any], *, profiles: list[dict[str, Any]] | None = None
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """(profile, model) pairs of the official cohort and of the local cohort."""
+    """Return the (profile, model) pairs of the official cohort and the local cohort.
+
+    Args:
+        root: Project root the profile files are loaded from when `profiles`
+            is None.
+        rerun: Rerun config listing `cohort_profiles` and `local_profiles`.
+        profiles: Recorded profiles to take the model lists from instead of
+            `conf/profile/`; None loads the profile files.
+
+    Returns:
+        The cohort pairs and the local pairs, each in profile and model order.
+
+    Raises:
+        StageError: If a recorded configuration lacks a listed profile, or a
+            listed profile has no models.
+    """
 
     def pairs(profile_ids: list[str]) -> list[tuple[str, str]]:
         selected: list[tuple[str, str]] = []
@@ -286,7 +415,20 @@ def cohort_models(
 def resolve_ablation_models(
     rerun: dict[str, Any], profiles: list[dict[str, Any]]
 ) -> None:
-    """Resolve representative models from the same lists used for the cohort."""
+    """Resolve representative models from the same lists used for the cohort.
+
+    An ablation without an explicit `models` list gets the first model of each
+    of its `profiles` (or of every configured profile). The rerun config is
+    updated in place.
+
+    Args:
+        rerun: Rerun config whose `ablations` entries receive their `models`.
+        profiles: Resolved cohort and local profiles of this rerun.
+
+    Raises:
+        StageError: If an ablation names a profile outside this rerun, a
+            profile without models, or a model the profile does not list.
+    """
     configured = {str(p["profile_id"]): list(p["models"]) for p in profiles}
     for name, ablation in rerun.get("ablations", {}).items():
         if "models" not in ablation:
@@ -314,11 +456,21 @@ def resolve_ablation_models(
 
 
 def select_profiles(requested: list[str], rerun: dict[str, Any]) -> list[str]:
-    """The profiles this invocation drives: `--profile` values, or all of them.
+    """Return the profiles this invocation drives: `--profile` values, or all of them.
 
     The hosted and the local endpoint are independent, so one driver per
     profile can run at the same time against the same state file; each only
     touches its own cells (the state merges per key).
+
+    Args:
+        requested: Profiles given with `--profile`; empty selects all.
+        rerun: Rerun config listing the cohort and local profiles.
+
+    Returns:
+        The requested profiles in config order, or every known profile.
+
+    Raises:
+        StageError: If a requested profile is not a cohort or local profile.
     """
     known = [
         str(profile_id)
@@ -340,7 +492,18 @@ def select_profiles(requested: list[str], rerun: dict[str, Any]) -> list[str]:
 
 @dataclass
 class Runner:
-    """Runs the project's CLIs, or prints them under --dry-run."""
+    """Runs the project's CLIs, or prints them under `--dry-run`.
+
+    Attributes:
+        root: Project root the commands run in.
+        dry_run: Whether commands are only printed.
+        fake: Whether to synthesize every answer locally and route every
+            artifact into the smoke tree. This is how the whole chain is
+            verified before any budget is spent.
+        smoke_items: Items per cell in a fake run.
+        embedding: Embedding config group the real provider runs select.
+        environment: Extra environment variables for every command.
+    """
 
     root: Path
     dry_run: bool = False
@@ -353,10 +516,16 @@ class Runner:
 
     @property
     def mode(self) -> str:
+        """Return the run mode of this invocation: `smoke` when fake, else `full`."""
         return "smoke" if self.fake else "full"
 
     def run_overrides(self) -> list[str]:
-        """Overrides every provider run of this invocation carries."""
+        """Return the Hydra overrides every provider run of this invocation carries.
+
+        Returns:
+            The mode, embedding and logging overrides; a fake run also sets the
+            smoke item count, fake completions and the TF-IDF embedding.
+        """
         common = [
             "logging.write_progress_csv=true",
             "logging.write_event_jsonl=true",
@@ -376,9 +545,24 @@ class Runner:
 
     @property
     def python(self) -> str:
+        """Return the project's virtual-environment interpreter."""
         return str(self.root / ".venv/bin/python")
 
     def run(self, argv: list[str], *, label: str) -> int:
+        """Run one project script, streaming its output to the console and a log.
+
+        Output is appended to `outputs/rerun/logs/<label>.log` (the smoke tree
+        for a fake run). On Ctrl-C the child is terminated and the interrupt
+        re-raised.
+
+        Args:
+            argv: Script path and arguments, run with the project interpreter.
+            label: Name for the console prefix and the log file.
+
+        Returns:
+            The child's exit code, or 0 in a dry run, which only prints the
+            command.
+        """
         command = [self.python, "-u", *argv]
         printable = shlex.join(command)
         if self.dry_run:
@@ -420,6 +604,14 @@ class Runner:
 
 
 def hydra_run(overrides: list[str]) -> list[str]:
+    """Return the `scripts/run.py` argument list for a set of Hydra overrides.
+
+    Args:
+        overrides: Hydra overrides of one provider run.
+
+    Returns:
+        The script path followed by the overrides, for `Runner.run`.
+    """
     return ["scripts/run.py", *overrides]
 
 
@@ -435,7 +627,7 @@ def latest_run_id(
     registry_path: Path,
     arm: Mapping[str, str] | None = None,
 ) -> str:
-    """The run this invocation just wrote for this cell, whatever its status.
+    """Return the run this invocation just wrote for this cell, whatever its status.
 
     The runner always leaves a terminal registry row behind, so this is how the
     driver learns the id to resume or to hand to the analysis. It is pinned to
@@ -449,6 +641,21 @@ def latest_run_id(
     arms and the two context arms share everything above, and a driver that
     resumed after an early failure would otherwise hand one arm's run to the
     next, which would resume it, find nothing pending, and report a null effect.
+
+    Args:
+        root: Project root; not read by the lookup itself.
+        profile_id: Profile of the cell.
+        model: Model of the cell.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        tasks: Registry `tasks` value of the run, such as `task1,task2`.
+        since_utc: Launch time; only runs started at or after it count.
+        registry_path: Registry CSV the runner writes this cell's rows to.
+        arm: Registry columns and values that identify an ablation arm.
+
+    Returns:
+        The run id of the newest matching row, or "" when the registry does
+        not exist or holds no match.
     """
     if not registry_path.exists():
         return ""
@@ -480,7 +687,14 @@ ARM_OVERRIDE_COLUMNS = {
 
 
 def arm_columns(overrides: list[str]) -> dict[str, str]:
-    """The registry values an arm's overrides pin, for `latest_run_id`."""
+    """Return the registry values an arm's overrides pin, for `latest_run_id`.
+
+    Args:
+        overrides: Hydra overrides of one run, as `name=value` strings.
+
+    Returns:
+        Registry column to value for every override in `ARM_OVERRIDE_COLUMNS`.
+    """
     columns: dict[str, str] = {}
     for override in overrides:
         name, _, value = override.partition("=")
@@ -502,7 +716,28 @@ def run_cell_with_retry(
     variant: str,
     tasks: str,
 ) -> bool:
-    """Run one cell, retrying once as a resume; record the outcome either way."""
+    """Run one cell, retrying once as a resume; record the outcome either way.
+
+    A complete cell is skipped. A cell this state already knows (from an
+    earlier, interrupted invocation) is continued as `mode=resume` on its run
+    id from the start.
+
+    Args:
+        runner: Command runner of this invocation.
+        state: Rerun state the outcome is recorded in.
+        key: Cell key in the state.
+        overrides: Hydra overrides of the run; `mode` and `run_id` are
+            replaced for a resume.
+        registry_path: Registry CSV the run writes, searched for its run id.
+        profile_id: Profile of the cell.
+        model: Model of the cell.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        tasks: Registry `tasks` value the run writes.
+
+    Returns:
+        True if the cell is complete, False if it was recorded as failed.
+    """
     if state.done(key):
         print(f"[skip] {key} already complete ({state.run_id(key)})")
         return True
@@ -561,11 +796,20 @@ def run_cell_with_retry(
 
 
 def embedding_backend_problems(root: Path, *, fake: bool = False) -> list[str]:
-    """The ACSE backend the analysis stage will use, checked before any run.
+    """Check the ACSE backend the analysis stage will use, before any run.
 
     `conf/config.yaml` defaults to the MLX backend, whose package is optional
     and not a project dependency. Without it the runs succeed and the analysis
     stage fails hours later, so it is checked up front.
+
+    Args:
+        root: Project root that contains `conf/config.yaml`.
+        fake: Whether to skip the check (fake runs, dry runs, and invocations
+            that do not reach the analysis stage pass true).
+
+    Returns:
+        One problem message if the configured MLX backend cannot be imported
+        in a child process, otherwise [].
     """
     if fake:
         return []
@@ -597,6 +841,16 @@ def embedding_backend_problems(root: Path, *, fake: bool = False) -> list[str]:
 def primary_protocol_problems(
     rerun: dict[str, Any], profiles: list[dict[str, Any]]
 ) -> list[str]:
+    """List every profile setting that departs from the primary protocol.
+
+    Args:
+        rerun: Rerun config whose `primary_protocol` maps profile fields to
+            required values.
+        profiles: Resolved profiles of this rerun.
+
+    Returns:
+        One message per profile and mismatching field.
+    """
     return [
         f"{profile['profile_id']}: primary protocol requires {field}={expected!r}, got {profile.get(field)!r}"
         for profile in profiles
@@ -608,6 +862,16 @@ def primary_protocol_problems(
 def primary_sampling_problems(
     rerun: dict[str, Any], run_config: dict[str, Any]
 ) -> list[str]:
+    """List every sampling block whose sample count departs from the primary one.
+
+    Args:
+        rerun: Rerun config whose `primary_sampling` maps `deterministic` or
+            `stochastic` to the required sample count.
+        run_config: Generated run config whose sampling blocks are checked.
+
+    Returns:
+        One message per mismatching sampling block.
+    """
     return [
         f"primary sampling requires {kind}.samples={expected}, got {run_config.get(kind, {}).get('samples')!r}"
         for kind, expected in rerun.get("primary_sampling", {}).items()
@@ -626,11 +890,27 @@ def stage_preflight(
     dry_run: bool = False,
     analysis: bool = True,
 ) -> None:
-    """Every problem that would stop the rerun, reported at once.
+    """Report every problem that would stop the rerun, all at once.
 
     The MLX check only applies when this invocation will reach the analysis
     stage: generation runs on any host that can reach the endpoints, and the
     analysis is run separately on a Mac with Metal (docs/experiment_runbook.md).
+
+    Args:
+        root: Project root the benchmarks and configs are read from.
+        rerun: Rerun config with the datasets, variants, primary protocol and
+            ablations.
+        profiles: Resolved profiles of this invocation.
+        cohort: (profile, model) pairs of the official cohort.
+        local: (profile, model) pairs of the local cohort.
+        fake: Whether this is a fake run, which needs no API keys, no PURE
+            benchmark validation and no MLX backend.
+        dry_run: Whether only a plan is printed; missing keys and an invalid
+            PURE benchmark are then warnings, and MLX is not checked.
+        analysis: Whether this invocation will reach the analysis stage.
+
+    Raises:
+        StageError: If any problem was found; the message lists all of them.
     """
     problems = primary_protocol_problems(rerun, profiles)
     for profile in profiles:
@@ -691,7 +971,14 @@ def stage_cohort(
     rerun: dict[str, Any],
     models: list[tuple[str, str]],
 ) -> None:
-    """Task 1 + Task 2 for every (profile, model, dataset, variant)."""
+    """Run Task 1 + Task 2 for every (profile, model, dataset, variant).
+
+    Args:
+        runner: Command runner of this invocation.
+        state: Rerun state the cells are recorded in.
+        rerun: Rerun config with the run group, datasets and variants.
+        models: (profile, model) pairs to run.
+    """
     for profile_id, model in models:
         for dataset_id in rerun["datasets"]:
             for variant in rerun["variants"]:
@@ -725,7 +1012,17 @@ def stage_task3(
     rerun: dict[str, Any],
     run_config: dict[str, Any],
 ) -> None:
-    """Blind audits, each pinned to the Task 2 run it reads."""
+    """Run the blind audits, each pinned to the Task 2 run it reads.
+
+    A cell whose cohort run is not complete yet is skipped with a message.
+
+    Args:
+        runner: Command runner of this invocation.
+        state: Rerun state holding the cohort run ids and recording the audits.
+        rerun: Rerun config with the run group, datasets, variants and the
+            Task 3 audit mode.
+        run_config: Run config whose profiles and models are audited.
+    """
     audit_mode = str(rerun.get("task3", {}).get("audit_mode", "blind"))
     for profile in run_config["profiles"]:
         profile_id = str(profile["profile_id"])
@@ -765,7 +1062,22 @@ def stage_task3(
 
 
 def batching_arm_specs(config: dict[str, Any]) -> list[tuple[str, int, str]]:
-    """Explicit size/composition sweep; old states retain their three arms."""
+    """Expand the batching ablation into its size/composition arms.
+
+    Explicit size/composition sweep; old states retain their three arms.
+
+    Args:
+        config: Batching ablation config with `batch_sizes`, `batch_orders`
+            and `baseline_arm`; the defaults give the three historical arms.
+
+    Returns:
+        One (arm name, batch size, batch order) per distinct arm name; a batch
+        of one item is always sent as `grouped`.
+
+    Raises:
+        StageError: If the sizes or orders are empty, or the baseline arm is
+            not among the arms.
+    """
     sizes = config.get("batch_sizes", [16, 1])
     orders = config.get("batch_orders", ["grouped", "shuffled"])
     if not sizes or not orders:
@@ -789,7 +1101,14 @@ def stage_ablations(
     rerun: dict[str, Any],
     run_config_path: Path,
 ) -> None:
-    """Batching, document context, and the weak-phrasing probe."""
+    """Run the batching, document-context and weak-phrasing ablations.
+
+    Args:
+        runner: Command runner of this invocation.
+        state: Rerun state the ablation cells are recorded in.
+        rerun: Rerun config with the resolved `ablations` and the run group.
+        run_config_path: Generated JSON run config the probe reads.
+    """
     ablations = rerun.get("ablations", {})
 
     batching = ablations.get("batching", {})
@@ -917,7 +1236,27 @@ def stage_analysis(
     *,
     refresh: bool = False,
 ) -> None:
-    """Every table, macro and figure, in dependency order."""
+    """Build every table, macro and figure, in dependency order.
+
+    Refuses to start while any cohort, Task 3 or configured ablation cell is
+    incomplete. A fake run writes into the smoke tree and skips the steps that
+    need MLX embeddings or complete cells. The first failing step stops the
+    stage, because the later steps read its output.
+
+    Args:
+        runner: Command runner of this invocation.
+        state: Rerun state holding the run ids and recording the steps.
+        rerun: Rerun config with the run group, datasets, variants, ablations
+            and analysis settings.
+        cohort: (profile, model) pairs of the official cohort.
+        local: (profile, model) pairs of the local cohort.
+        refresh: Whether to mark every step pending first and recompute all
+            of them, even those recorded as complete.
+
+    Raises:
+        StageError: If a required cell is incomplete, the cohort profiles do
+            not share one request protocol, or an analysis step fails.
+    """
     incomplete = [
         key for key in state.cells if key.startswith("cohort:") and not state.done(key)
     ]
@@ -1329,6 +1668,11 @@ def stage_analysis(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the driver's CLI.
+
+    Returns:
+        The argument parser, with the module summary as its description.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--config",
@@ -1389,6 +1733,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the requested stages, reporting a stage that cannot run as an error.
+
+    Args:
+        argv: Command-line arguments; None reads `sys.argv`.
+
+    Returns:
+        The process exit status: 0 when every requested stage completed, 1
+        when some cells failed, 2 when a stage could not run.
+    """
     try:
         return _main(argv)
     except StageError as error:

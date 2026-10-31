@@ -8,7 +8,16 @@ SOURCE_CUES = ("wish", "may", "should", "must/shall")
 
 
 def percentage_label(value: float) -> str:
-    """Keep rare observed transitions visible after display rounding."""
+    """Keep rare observed transitions visible after display rounding.
+
+    Args:
+        value: Transition rate in percent.
+
+    Returns:
+        A LaTeX label: `<0.1%` in math mode for a positive rate that would
+        display as 0.0, otherwise the rate with one decimal; the percent sign is
+        escaped for LaTeX.
+    """
     return r"$<0.1\%$" if 0 < value < 0.05 else rf"{value:.1f}\%"
 
 
@@ -18,7 +27,29 @@ def render_tikz(
     model_count: int,
     cell_count: int,
 ) -> str:
-    """Use pooled source denominators and draw only strict upward transitions."""
+    """Use pooled source denominators and draw only strict upward transitions.
+
+    Args:
+        matrix_rows: Transition rows from
+            `export_commitment_transitions.aggregate_observations`; only pooled
+            rows (model, dataset and variant all `all`) with a strict count are
+            drawn.
+        accounting_rows: Accounting rows from the same call; the pooled rows give
+            each source level its readable denominator `N`.
+        model_count: Number of models, stated in the generated header comment.
+        cell_count: Number of benchmark cells, stated in the generated header
+            comment.
+
+    Returns:
+        The TikZ picture source: one node per modality level and one arrow per
+        strict upward transition, labelled with its rate. The arrow from weak
+        intent to optional (wish framing removed) is dashed.
+
+    Raises:
+        ValueError: If the pooled accounting does not cover all four source
+            levels, or a strict transition is not upward or has no readable
+            denominator.
+    """
 
     def pooled(row: dict[str, Any]) -> bool:
         return all(row[key] == "all" for key in ("model", "dataset", "variant"))

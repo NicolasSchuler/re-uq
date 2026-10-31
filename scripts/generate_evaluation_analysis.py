@@ -72,6 +72,15 @@ PAPER_RESULT_FIELDS = [
 
 
 def task3_audit_modes_in_rows(rows: list[dict[str, Any]]) -> set[str]:
+    """Return the Task 3 audit modes present in raw rows.
+
+    Args:
+        rows: Task 3 raw rows; a row without `task3_audit_mode` counts as the
+            legacy mode.
+
+    Returns:
+        The normalized audit modes.
+    """
     modes: set[str] = set()
     for row in rows:
         raw_mode = str(row.get("task3_audit_mode", "")).strip()
@@ -83,6 +92,16 @@ def task3_audit_modes_in_rows(rows: list[dict[str, Any]]) -> set[str]:
 
 
 def require_task3_audit_mode(rows: list[dict[str, Any]], requested_mode: str) -> None:
+    """Check that every Task 3 row was produced under the requested audit mode.
+
+    Args:
+        rows: Task 3 raw rows.
+        requested_mode: Audit mode the analysis was asked for, normalized before
+            the comparison.
+
+    Raises:
+        ValueError: If the rows hold any other mode, alone or mixed in.
+    """
     requested_mode = eu.normalize_task3_audit_mode(requested_mode)
     modes = task3_audit_modes_in_rows(rows)
     if modes == {requested_mode}:
@@ -103,6 +122,27 @@ def load_task3_items_for_analysis(
     model: str | None,
     audit_mode: str,
 ) -> tuple[list[dict[str, Any]], Path | None]:
+    """Load the Task 3 verification items that the audit rows refer to.
+
+    Items are reconstructed from the raw rows when those carry item provenance.
+    Otherwise the run-specific item CSV of the requested or only model is read,
+    and in the legacy audit mode the shared legacy item CSV as a last resort.
+
+    Args:
+        root: Checkout root locating the item CSVs.
+        dataset_id: Dataset of the run.
+        variant: Benchmark variant of the run.
+        source_run_id: Task 2 run the audited items came from.
+        task3_rows: Task 3 raw rows.
+        model: Model whose run-specific item CSV is read; `None` uses the only
+            model in the rows when there is exactly one.
+        audit_mode: Audit mode of the rows.
+
+    Returns:
+        The items and the CSV they were read from, `None` when they were
+        reconstructed from the rows. An empty list and `None` when no source
+        exists.
+    """
     reconstructed = eu.task3_items_from_raw_rows(task3_rows)
     if reconstructed:
         return reconstructed, None
@@ -139,10 +179,26 @@ def load_task3_items_for_analysis(
 
 
 def parse_status_counts(rows: Iterable[dict[str, Any]]) -> dict[str, int]:
+    """Count raw rows per parse status.
+
+    Args:
+        rows: Raw rows.
+
+    Returns:
+        The number of rows per `parse_status` value.
+    """
     return dict(Counter(str(row.get("parse_status", "")) for row in rows))
 
 
 def parse_failure_rate(rows: list[dict[str, Any]]) -> float:
+    """Return the share of rows whose parse status is not `ok`.
+
+    Args:
+        rows: Raw rows or deduplicated observations.
+
+    Returns:
+        The failure share, NaN when there are no rows.
+    """
     if not rows:
         return math.nan
     return sum(1 for row in rows if str(row.get("parse_status", "")) != "ok") / len(
@@ -157,8 +213,17 @@ def require_parse_quality(
 
     A raw file is append-only, so a resumed run keeps every failed attempt next
     to the retry that superseded it. Scoring reads the latest attempt per
-    planned observation (:func:`eu.dedupe_raw_rows`), so the gate measures the
+    planned observation (`eu.dedupe_raw_rows`), so the gate measures the
     same view: an observation counts as failed only when no attempt parsed.
+
+    Args:
+        name: Label of the run in the error message.
+        rows: Every raw attempt of the run.
+        max_failure_rate: Highest accepted failure share.
+
+    Raises:
+        ValueError: If there are no rows or the failure share of the
+            deduplicated observations exceeds `max_failure_rate`.
     """
     if not rows:
         raise ValueError(f"{name} has no raw rows.")
@@ -173,6 +238,16 @@ def require_parse_quality(
 
 
 def require_probability_confidence(name: str, rows: list[dict[str, Any]]) -> None:
+    """Check that parsed rows of 0-1 confidence prompts carry a valid confidence.
+
+    Args:
+        name: Label of the run in the error message.
+        rows: Raw rows; only parsed rows whose prompt version asks for a 0-1
+            confidence are checked.
+
+    Raises:
+        ValueError: If such a row's confidence does not parse on the 0-1 scale.
+    """
     bad_rows: list[str] = []
     for row in rows:
         if str(row.get("parse_status", "")) != "ok" or not isinstance(
@@ -203,6 +278,20 @@ def require_registry_complete(
     model: str | None = None,
     profile_id: str | None = None,
 ) -> list[dict[str, str]]:
+    """Check that the run registry marks every matching entry of a run complete.
+
+    Args:
+        registry_path: Run registry CSV; a missing file counts as empty.
+        run_id: Run to look up.
+        model: Restrict the entries to this model, when given.
+        profile_id: Restrict the entries to this profile, when given.
+
+    Returns:
+        The matching registry rows.
+
+    Raises:
+        ValueError: If no entry matches or a matching entry is not complete.
+    """
     rows = eu.read_csv_rows(registry_path) if registry_path.exists() else []
     matches = [row for row in rows if str(row.get("run_id", "")) == str(run_id)]
     if model:
@@ -225,6 +314,17 @@ def require_registry_complete(
 
 
 def require_construct_review_complete(path: Path) -> None:
+    """Check that the weak-modality construct review is complete and unanimous.
+
+    Args:
+        path: Construct review CSV.
+
+    Raises:
+        ValueError: If the file is missing or the review is not valid: a weak
+            template without rows, with too few distinct reviewers, with an
+            empty or non-`yes` `weaker_than_should` cell, or with a reviewer
+            answering `no`.
+    """
     if not path.exists():
         raise ValueError(f"Weak-modality construct review is missing: {path}")
     status = eu.weak_modality_construct_review_status(eu.read_csv_rows(path))
@@ -263,6 +363,17 @@ def require_construct_review_complete(path: Path) -> None:
 def ci_rows_for_scores(
     scores: list[dict[str, Any]], iterations: int
 ) -> list[dict[str, Any]]:
+    """Bootstrap accuracy, Brier score and headline risk intervals per method.
+
+    Args:
+        scores: Score rows of all models, tasks and uncertainty methods.
+        iterations: Bootstrap draws per interval.
+
+    Returns:
+        One row per model, task and uncertainty method with the point estimate
+        and interval of accuracy and Brier score, and the headline risk
+        interval fields of `eu.headline_risk_ci_fields`.
+    """
     rows: list[dict[str, Any]] = []
     for key, grouped_rows in eu.grouped(scores, ["model", "task", "uq_method"]).items():
         model, task, uq_method = key
@@ -305,6 +416,14 @@ def ci_rows_for_scores(
 
 
 def write_result_notes_template(path: Path) -> None:
+    """Write a Markdown template for the result notes of one analysis.
+
+    The template holds placeholder observations, an interpretation, standing
+    caveats and a recommended next step, to be filled in by hand.
+
+    Args:
+        path: Output Markdown path.
+    """
     notes = [
         "# Result Notes for JSS Manuscript",
         "",
@@ -330,6 +449,20 @@ def write_result_notes_template(path: Path) -> None:
 
 
 def main() -> None:
+    """Score one completed run and write its analysis artifacts.
+
+    Checks the benchmark manifest, the run registry and the construct review
+    (each unless skipped), then parse quality and the confidence scale, builds
+    the uncertainty scores, with Task 3 when `--task3-run-id` is given, and
+    writes scores, summaries, bootstrap intervals, figures, reports and
+    `provenance_manifest.json` to the output directory.
+
+    Raises:
+        ValueError: If the benchmark or the run has no rows, items lack current
+            raw outputs without `--allow-partial`, or a Task 3 input is missing.
+        AssertionError: If the meaning-variation scores were computed with
+            another embedding backend than the run recorded.
+    """
     parser = argparse.ArgumentParser(
         description="Generate paper-facing evaluation artifacts from completed raw outputs."
     )

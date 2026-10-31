@@ -1,4 +1,4 @@
-"""Hydra entry point for the Task 1/2/3 runners.
+r"""Hydra entry point for the Task 1/2/3 runners.
 
 This is the composition-friendly front door to the same runners the JSON CLIs
 drive. It composes `conf/`, converts the result into the canonical run-config
@@ -7,17 +7,16 @@ dictionary (`scripts/hydra_bridge.py`), and dispatches:
     task=task1|task2|both  -> scripts/run_experiment_from_config.py
     task=task3             -> scripts/run_task3_verification_from_config.py
 
-Examples
---------
-    .venv/bin/python scripts/run.py profile=zai model=glm-5.1 dataset=nice
-    .venv/bin/python scripts/run.py --multirun profile=zai \
-        model=glm-5.1,glm-4.7 dataset=nice,mlm_tapt mode=smoke fake_completion=true
-    .venv/bin/python scripts/run.py task=task3 source_run_id=full-... mode=full
-
 Hydra never changes the process working directory (`hydra.job.chdir: false`):
 every path in this project is resolved through `eval_utils.project_root()`.
 The legacy JSON path (`--config run_configs/*.json`) is unchanged and remains
 the provenance record for the published runs.
+
+Examples:
+    .venv/bin/python scripts/run.py profile=zai model=glm-5.1 dataset=nice
+    .venv/bin/python scripts/run.py --multirun profile=zai \
+        model=glm-5.1,glm-4.7 dataset=nice,mlm_tapt mode=smoke fake_completion=true
+    .venv/bin/python scripts/run.py task=task3 source_run_id=full-... mode=full
 """
 
 from __future__ import annotations
@@ -40,7 +39,18 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 def dispatch(cfg: DictConfig) -> None:
-    """Run one composed cell (one Hydra job)."""
+    """Run one composed cell (one Hydra job).
+
+    Task 3 goes to the verification runner; every other task filter goes to the
+    Task 1/2 experiment runner.
+
+    Args:
+        cfg: Composed Hydra configuration for this job, including `task`,
+            `log_level` and, for Task 3, `source_run_id`.
+
+    Raises:
+        ValueError: If `task=task3` is requested without a `source_run_id`.
+    """
     eu.configure_run_logging(str(cfg.log_level))
     run_config = eu.normalize_run_config(hb.hydra_config_to_run_config(cfg))
     args = hb.run_args_namespace(cfg, hb.resolved_config_yaml(cfg))
@@ -57,6 +67,12 @@ def dispatch(cfg: DictConfig) -> None:
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig) -> None:
+    """Dispatch the configuration Hydra composed from `conf/` and the overrides.
+
+    Args:
+        cfg: Composed configuration Hydra passes in, one per job under
+            `--multirun`.
+    """
     dispatch(cfg)
 
 

@@ -3,14 +3,14 @@
 
 The reported score clusters the five sampled Task 2 answers of an item at a
 cosine-distance threshold and mixes normalized cluster entropy with a
-dispersion term (``(1 - w) * H + w * D``). This script re-scores every item of
+dispersion term (`(1 - w) * H + w * D`). This script re-scores every item of
 the frozen main study over a grid of thresholds and dispersion weights and
 reports how the strict-strengthening AUROC moves, with a paired
 capability-clustered bootstrap for the differences from the reported setting.
 
 Everything is read-only with respect to the data: the frozen snapshot
-(``outputs/paper_snapshot_provenance.json``) names the runs, the cached
-``mlx:Qwen3-Embedding-0.6B-8bit`` sample embeddings are reused after their text
+(`outputs/paper_snapshot_provenance.json`) names the runs, the cached
+`mlx:Qwen3-Embedding-0.6B-8bit` sample embeddings are reused after their text
 and identity are verified row by row, and the cohort (readable deterministic
 extractions joined to their sampled group) is built once and held fixed across
 every setting. No embeddings are regenerated and no provider is called.
@@ -55,6 +55,16 @@ ITEM_FIELD = eu.BOOTSTRAP_ITEM_CLUSTER_FIELD  # item_id
 
 
 def setting_label(threshold: float, weight: float) -> str:
+    """Return the label of one grid setting, such as `t0.35_w0.2`.
+
+    Args:
+        threshold: Cosine-distance threshold of the setting.
+        weight: Dispersion weight of the setting.
+
+    Returns:
+        `t<threshold>_w<weight>` with two and one decimals, the suffix of the
+        per-item score columns.
+    """
     return f"t{threshold:.2f}_w{weight:.1f}"
 
 
@@ -64,7 +74,17 @@ def setting_label(threshold: float, weight: float) -> str:
 
 
 def _path(root: Path, value: str) -> Path:
-    """Resolve a frozen-snapshot path (recorded absolute) inside ``root``."""
+    """Resolve a frozen-snapshot path (recorded absolute) inside `root`.
+
+    Args:
+        root: Checkout root the recorded path is relocated into.
+        value: Path as recorded in the snapshot. A relative path is joined to
+            `root`, an absolute path with a `data` component is re-rooted from
+            that component on, and any other absolute path is kept.
+
+    Returns:
+        The resolved path.
+    """
     path = Path(value)
     if path.is_absolute():
         if "data" in path.parts:
@@ -74,7 +94,16 @@ def _path(root: Path, value: str) -> Path:
 
 
 def _relative(root: Path, path: Path | str) -> str:
-    """A path as recorded in settings.json: checkout-relative when inside root."""
+    """Return a path as recorded in `settings.json`: checkout-relative in `root`.
+
+    Args:
+        root: Checkout root.
+        path: Path to record.
+
+    Returns:
+        The POSIX path relative to `root` when `path` resolves inside it,
+        otherwise `path` unchanged as a string.
+    """
     try:
         return Path(path).resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
@@ -82,6 +111,20 @@ def _relative(root: Path, path: Path | str) -> str:
 
 
 def load_snapshot(provenance_path: Path) -> dict[str, Any]:
+    """Load the frozen snapshot and check its model cohort and cell selection.
+
+    Args:
+        provenance_path: The frozen snapshot provenance JSON.
+
+    Returns:
+        The parsed snapshot.
+
+    Raises:
+        ValueError: If the model cohort is empty, repeats a model or contains
+            `all`, the sampling plan is not the planned one, a
+            `(dataset, variant)` cell appears twice, or a cell's runs do not
+            cover exactly the cohort models with distinct run ids.
+    """
     snapshot = json.loads(provenance_path.read_text(encoding="utf-8"))
     models = snapshot["models_cohort"]
     if not models or len(set(models)) != len(models) or "all" in models:
@@ -101,7 +144,19 @@ def load_snapshot(provenance_path: Path) -> dict[str, Any]:
 
 
 def load_cell_raw_rows(root: Path, cell: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """The raw rows of the cell's frozen runs, read through the raw store."""
+    """Return the raw rows of the cell's frozen runs, read through the raw store.
+
+    Args:
+        root: Checkout root used to resolve the cell's recorded `raw_path`.
+        cell: One snapshot cell with its `raw_path` and per-model `run_ids`.
+
+    Returns:
+        The raw rows whose `run_id` is one of the cell's frozen runs. A
+        non-empty JSONL file is read directly, otherwise the Parquet store.
+
+    Raises:
+        FileNotFoundError: If no raw store exists at the cell's `raw_path`.
+    """
     raw_path = _path(root, cell["raw_path"])
     if not eu.raw_store_exists(raw_path):
         raise FileNotFoundError(f"raw store missing for {raw_path}")
@@ -121,7 +176,28 @@ def load_cell_raw_rows(root: Path, cell: Mapping[str, Any]) -> list[dict[str, An
 
 @dataclass
 class SampleGroup:
-    """One item's stochastic Task 2 samples under one frozen run."""
+    """One item's stochastic Task 2 samples under one frozen run.
+
+    Attributes:
+        model: Model that produced the samples.
+        dataset: Dataset as named in the snapshot cell.
+        variant: Benchmark variant as named in the snapshot cell.
+        dataset_id: Normalized dataset id, part of the join key.
+        benchmark_variant: Normalized benchmark variant, part of the join key.
+        item_id: Benchmark item the samples answer.
+        run_id: Frozen run the samples belong to.
+        seed_id: Seed requirement of the item, the capability cluster of the
+            bootstrap.
+        source_modality: Modality of the item's source requirement.
+        valid_n: Number of parsed samples, the ones that are scored.
+        total_n: Sample count the group is measured against: the planned
+            stochastic samples, or more when more rows were written.
+        sample_indices: `sample_index` of each parsed sample, aligned with
+            `texts`.
+        texts: Semantic text of each parsed sample, the text that is embedded.
+        embeddings: Cached vector of each parsed sample, one row per text, or
+            `None` until `attach_cached_embeddings` binds them.
+    """
 
     model: str
     dataset: str
@@ -140,6 +216,12 @@ class SampleGroup:
 
     @property
     def join_key(self) -> paper.PaperJoinKey:
+        """Return the exporter's join key of the group's model, cell and item.
+
+        Returns:
+            The `paper.paper_join_key` of the group, which matches the key of
+            the item's deterministic row.
+        """
         return paper.paper_join_key(
             {
                 "model": self.model,
@@ -157,11 +239,22 @@ def deterministic_task2_rows(
     raw_rows: list[dict[str, Any]],
     plan: eu.SamplingPlan,
 ) -> list[dict[str, Any]]:
-    """The exporter's deterministic Task 2 score rows, without live embedding.
+    """Return the exporter's deterministic Task 2 score rows, without live embedding.
 
-    ``build_uq_scores`` embeds every stochastic group it sees, so it is handed
+    `build_uq_scores` embeds every stochastic group it sees, so it is handed
     the deterministic rows only. Dedupe keys include the sample kind, so the
     deterministic subset dedupes exactly as it does inside the full set.
+
+    Args:
+        dataset: Dataset of the cell, stamped on the score rows.
+        variant: Benchmark variant of the cell, stamped on the score rows.
+        scored_benchmark: Benchmark rows that have current raw outputs.
+        raw_rows: Raw rows of the cell; only the deterministic ones are scored.
+        plan: Sampling plan passed to `build_uq_scores`.
+
+    Returns:
+        The deterministic Task 2 rows as `paper.task2_deterministic_rows`
+        selects them.
     """
     det_raw = [row for row in raw_rows if row.get("sample_kind") == "deterministic"]
     scores = eu.build_uq_scores(scored_benchmark, det_raw, sampling_plan=plan)
@@ -176,10 +269,21 @@ def stochastic_groups(
     raw_rows: list[dict[str, Any]],
     plan: eu.SamplingPlan,
 ) -> tuple[list[SampleGroup], Counter[str]]:
-    """Stochastic Task 2 groups exactly as ``build_uq_scores`` forms them.
+    """Return the stochastic Task 2 groups exactly as `build_uq_scores` forms them.
 
-    Returns the groups with at least one parsed sample (the ones that receive
-    a score) and, per model, the number of groups with none (no score row).
+    Args:
+        dataset: Dataset of the cell, recorded on each group and normalized
+            into its join-key fields.
+        variant: Benchmark variant of the cell, handled like `dataset`.
+        scored_benchmark: Benchmark rows of the cell; groups whose item is not
+            among them are dropped.
+        raw_rows: Raw rows of the cell, deduplicated and filtered to the
+            current benchmark before grouping.
+        plan: Sampling plan that sets each group's expected sample count.
+
+    Returns:
+        The groups with at least one parsed sample (the ones that receive a
+        score) and, per model, the number of groups with none (no score row).
     """
     benchmark_by_item = {str(row["item_id"]): row for row in scored_benchmark}
     rows = eu.filter_raw_rows_to_current_benchmark(
@@ -240,6 +344,22 @@ def stochastic_groups(
 
 @dataclass
 class EmbeddingCache:
+    """One run's cached Task 2 sample embeddings, their identity and use counts.
+
+    Attributes:
+        artifact_dir: Directory with the run's `manifest.json`,
+            `task2_acse_samples.csv` and `task2_acse_sample_embeddings.npz`.
+        run_id: Run the cache belongs to, from its manifest.
+        model: Model the cache belongs to, from its manifest.
+        backend: Embedding backend recorded in the manifest.
+        embeddings: Cached vectors, one row per sample row.
+        index: Row in `embeddings` of each `(item_id, sample_index)`.
+        texts: Semantic text of each cached sample, compared with the text of
+            the sample it is bound to.
+        used: How often each cached vector was bound to a sample; zeros after
+            construction, checked by `check_cache_fully_used`.
+    """
+
     artifact_dir: Path
     run_id: str
     model: str
@@ -254,7 +374,22 @@ class EmbeddingCache:
 
 
 def load_embedding_cache(artifact_dir: Path, expected_backend: str) -> EmbeddingCache:
-    """Load one run's cached sample embeddings and check their internal identity."""
+    """Load one run's cached sample embeddings and check their internal identity.
+
+    Args:
+        artifact_dir: The run's cached-embedding directory.
+        expected_backend: Backend the manifest must record, as
+            `backend:model`.
+
+    Returns:
+        The cache, indexed by `(item_id, sample_index)`.
+
+    Raises:
+        ValueError: If the manifest records another backend, the embedding
+            count differs from the sample rows, a sample row's
+            `embedding_index` or item does not match its position, a row has
+            another `run_id` than the manifest, or a sample repeats.
+    """
     manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
     backend = str(manifest.get("embedding_backend", ""))
     if backend != expected_backend:
@@ -300,7 +435,18 @@ def load_embedding_cache(artifact_dir: Path, expected_backend: str) -> Embedding
 
 
 def attach_cached_embeddings(groups: list[SampleGroup], cache: EmbeddingCache) -> None:
-    """Bind every group's samples to cached vectors, failing on any mismatch."""
+    """Bind every group's samples to cached vectors, failing on any mismatch.
+
+    Args:
+        groups: Groups of the cache's run; each gets its `embeddings` set in
+            place.
+        cache: The run's cache; its `used` counts are incremented.
+
+    Raises:
+        ValueError: If a group belongs to another model or run than the cache,
+            a sample has no cached vector, or the cached text differs from the
+            sample text.
+    """
     for group in groups:
         if group.run_id != cache.run_id or group.model != cache.model:
             raise ValueError(
@@ -324,6 +470,15 @@ def attach_cached_embeddings(groups: list[SampleGroup], cache: EmbeddingCache) -
 
 
 def check_cache_fully_used(cache: EmbeddingCache) -> None:
+    """Check that every cached vector was bound to exactly one sample.
+
+    Args:
+        cache: A cache after `attach_cached_embeddings` has run for all groups
+            of its run.
+
+    Raises:
+        ValueError: If a cached sample was never used or used more than once.
+    """
     unused = int(np.sum(cache.used == 0))
     reused = int(np.sum(cache.used > 1))
     if unused or reused:
@@ -340,6 +495,18 @@ def check_cache_fully_used(cache: EmbeddingCache) -> None:
 
 @dataclass
 class GridScores:
+    """Meaning-variation scores and cluster diagnostics of every group on the grid.
+
+    Attributes:
+        thresholds: Cosine-distance thresholds of the grid, in axis order.
+        weights: Dispersion weights of the grid, in axis order.
+        scores: `[group, threshold, weight]` uncertainty scores.
+        cluster_counts: `[group, threshold]` cluster counts.
+        mean_pairwise: `[group, threshold]` mean pairwise cosine distance,
+            which does not depend on the threshold.
+        dominant_mean: `[group, threshold]` dominant-cluster mean distance.
+    """
+
     thresholds: tuple[float, ...]
     weights: tuple[float, ...]
     #: ``[group, threshold, weight]`` uncertainty scores.
@@ -352,6 +519,15 @@ class GridScores:
     dominant_mean: np.ndarray
 
     def setting_index(self, threshold: float, weight: float) -> tuple[int, int]:
+        """Return the grid position of one setting.
+
+        Args:
+            threshold: A threshold on the grid.
+            weight: A dispersion weight on the grid.
+
+        Returns:
+            The threshold index and the weight index.
+        """
         return self.thresholds.index(threshold), self.weights.index(weight)
 
 
@@ -361,7 +537,21 @@ def score_grid(
     weights: tuple[float, ...],
     backend: str = EXPECTED_BACKEND,
 ) -> GridScores:
-    """Score every group at every (threshold, weight) with the shared scorer."""
+    """Score every group at every (threshold, weight) with the shared scorer.
+
+    Args:
+        groups: Groups with their embeddings bound.
+        thresholds: Cosine-distance thresholds to score at.
+        weights: Dispersion weights to score at.
+        backend: Embedding backend label handed to
+            `eu.acse_semantic_diagnostics_from_embeddings`.
+
+    Returns:
+        The scores and per-threshold cluster diagnostics, in group order.
+
+    Raises:
+        ValueError: If a group has no embeddings bound.
+    """
     n = len(groups)
     scores = np.full((n, len(thresholds), len(weights)), np.nan)
     counts = np.zeros((n, len(thresholds)), dtype=int)
@@ -394,7 +584,18 @@ def score_grid(
 
 @dataclass
 class Cohort:
-    """The evaluated rows: readable deterministic extractions with a scored group."""
+    """The evaluated rows: readable deterministic extractions with a scored group.
+
+    Attributes:
+        rows: One record per evaluated row with its model, cell, item, seed,
+            source modality, strict label and join key, in the exporter's
+            pooled order.
+        group_index: Position of each row's group in the scored groups.
+        labels: Strict-strengthening label of each row, 1 when
+            `strict_text_overcommit` is true.
+        accounting: Per model and cell, the counts from planned items down to
+            evaluated rows, and the completeness of the scored groups.
+    """
 
     rows: list[dict[str, Any]]
     group_index: np.ndarray
@@ -404,6 +605,16 @@ class Cohort:
     def mask(
         self, *, model: str | None = None, cell: tuple[str, str] | None = None
     ) -> np.ndarray:
+        """Return a row mask for one model, one cell, or both.
+
+        Args:
+            model: Keep only rows of this model; `None` keeps every model.
+            cell: Keep only rows of this `(dataset, variant)`; `None` keeps
+                every cell.
+
+        Returns:
+            A boolean array over `rows`.
+        """
         keep = np.ones(len(self.rows), dtype=bool)
         for i, row in enumerate(self.rows):
             if model is not None and row["model"] != model:
@@ -420,10 +631,24 @@ def join_cohort(
 ) -> Cohort:
     """Join readable deterministic rows to their group, in the exporter's order.
 
-    ``cells`` holds ``(dataset, variant, deterministic rows, planned items)``
-    in snapshot order. Rows keep the order the exporter's pooled slice has
-    (cells in order, raw-row order within a cell), which is what makes the
-    bootstrap's cluster ordering reproducible.
+    Rows keep the order the exporter's pooled slice has (cells in order,
+    raw-row order within a cell), which is what makes the bootstrap's cluster
+    ordering reproducible.
+
+    Args:
+        cells: `(dataset, variant, deterministic rows, planned items)` in
+            snapshot order.
+        groups: All scored stochastic groups; each readable row is joined to
+            the group with its join key.
+        without_valid: Number of groups without a parsed sample per
+            `(model, dataset, variant)`, copied into the accounting.
+
+    Returns:
+        The cohort with its per-model and per-cell accounting.
+
+    Raises:
+        ValueError: If two groups share a join key or a readable row lacks its
+            `seed_id` or `item_id`.
     """
     group_by_key = {group.join_key: g for g, group in enumerate(groups)}
     if len(group_by_key) != len(groups):
@@ -517,11 +742,18 @@ def join_cohort(
 
 
 def rank_auroc(labels: np.ndarray, scores: np.ndarray) -> float:
-    """AUROC by the Mann-Whitney statistic with average ranks for ties.
+    """Compute AUROC by the Mann-Whitney statistic with average ranks for ties.
 
-    Equal to ``sklearn.metrics.roc_auc_score`` (trapezoid over tie-grouped
+    Equal to `sklearn.metrics.roc_auc_score` (trapezoid over tie-grouped
     thresholds) up to floating-point rounding, and cheap enough to evaluate
-    thousands of times per bootstrap. NaN when one class is absent.
+    thousands of times per bootstrap.
+
+    Args:
+        labels: Binary labels, 1 for a positive row.
+        scores: Score of each row; higher scores should rank positives first.
+
+    Returns:
+        The AUROC, NaN when one class is absent.
     """
     n_pos = int(labels.sum())
     n_neg = int(labels.size - n_pos)
@@ -535,7 +767,15 @@ def rank_auroc(labels: np.ndarray, scores: np.ndarray) -> float:
 
 @dataclass
 class PairedBootstrap:
-    """Point estimates and draw-wise AUROCs for every setting on one slice."""
+    """Point estimates and draw-wise AUROCs for every setting on one slice.
+
+    Attributes:
+        cluster_field: Row field whose values were resampled as clusters.
+        n_clusters: Number of distinct clusters in the slice.
+        point: AUROC of each setting on the full slice.
+        draws: AUROC of each setting on each draw, NaN where a draw holds one
+            class only.
+    """
 
     cluster_field: str
     n_clusters: int
@@ -543,6 +783,15 @@ class PairedBootstrap:
     draws: np.ndarray  # [iterations, settings], NaN where undefined
 
     def interval(self, setting: int) -> tuple[float, float]:
+        """Return the 95% percentile interval of one setting's AUROC.
+
+        Args:
+            setting: Column of the setting in `draws`.
+
+        Returns:
+            The 2.5% and 97.5% quantiles over the defined draws, or two NaNs
+            when no draw is defined.
+        """
         values = self.draws[:, setting]
         values = values[~np.isnan(values)]
         if values.size == 0:
@@ -551,6 +800,17 @@ class PairedBootstrap:
         return float(low), float(high)
 
     def delta_interval(self, setting: int, reference: int) -> tuple[float, float, int]:
+        """Return the 95% interval of the paired AUROC difference to a reference.
+
+        Args:
+            setting: Column of the compared setting in `draws`.
+            reference: Column of the reference setting in `draws`.
+
+        Returns:
+            The 2.5% and 97.5% quantiles of the draw-wise differences and the
+            number of draws where both are defined, or two NaNs and 0 when no
+            draw is.
+        """
         deltas = self.draws[:, setting] - self.draws[:, reference]
         deltas = deltas[~np.isnan(deltas)]
         if deltas.size == 0:
@@ -560,9 +820,16 @@ class PairedBootstrap:
 
 
 def cluster_keys_in_order(keys: list[str]) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-    """Cluster keys in first-appearance order and their row indices.
+    """Return cluster keys in first-appearance order and their row indices.
 
-    Mirrors ``pandas.groupby(sort=False)`` inside ``eu.bootstrap_seed_metric``.
+    Mirrors `pandas.groupby(sort=False)` inside `eu.bootstrap_seed_metric`.
+
+    Args:
+        keys: Cluster key of each row.
+
+    Returns:
+        The distinct keys as an object array in first-appearance order, and
+        the row indices of each key.
     """
     rows_by_key: dict[str, list[int]] = {}
     for i, key in enumerate(keys):
@@ -584,11 +851,27 @@ def paired_cluster_bootstrap(
 ) -> PairedBootstrap:
     """Cluster bootstrap of AUROC for every score column on the same draws.
 
-    Draws clusters exactly as ``eu.bootstrap_seed_metric`` does (same RNG seed,
-    same ``rng.choice`` over the first-appearance-ordered keys), so the column
+    Draws clusters exactly as `eu.bootstrap_seed_metric` does (same RNG seed,
+    same `rng.choice` over the first-appearance-ordered keys), so the column
     for the reported setting reproduces the exporter's interval, and every
     other column is evaluated on the identical resample, which is what makes
     the differences paired.
+
+    Args:
+        labels: Binary label of each row of the slice.
+        score_matrix: `[row, setting]` scores; every column is evaluated on
+            the same draws.
+        cluster_keys: Cluster key of each row; whole clusters are resampled.
+        cluster_field: Name of the field the keys come from, recorded in the
+            result.
+        iterations: Number of bootstrap draws.
+        seed: RNG seed; the snapshot's seed reproduces the exporter's draws.
+
+    Returns:
+        The point AUROCs and the per-draw AUROCs of every column.
+
+    Raises:
+        ValueError: If the score matrix and the labels differ in row count.
     """
     if score_matrix.shape[0] != labels.size:
         raise ValueError("score matrix and labels disagree on the row count")
@@ -622,7 +905,22 @@ def cluster_diagnostics_row(
     group_index: np.ndarray,
     labels: np.ndarray,
 ) -> dict[str, Any]:
-    """Cluster and component diagnostics over the evaluated rows at one threshold."""
+    """Cluster and component diagnostics over the evaluated rows at one threshold.
+
+    Args:
+        slice_name: Label written to the `slice` column.
+        threshold: Threshold on the grid to diagnose.
+        grid: Grid scores of all groups; its weights must include 0.0, 1.0 and
+            `REFERENCE_WEIGHT`.
+        group_index: Group of each evaluated row in the slice.
+        labels: Strict label of each evaluated row in the slice.
+
+    Returns:
+        One row with cluster-count fractions, the entropy and dispersion
+        components, pairwise-distance summaries, the AUROCs of the two rankings
+        the score collapses to when every item is one cluster, and zero-score
+        and one-cluster fractions per class.
+    """
     t = grid.thresholds.index(threshold)
     counts = grid.cluster_counts[group_index, t]
     entropy = grid.scores[group_index, t, grid.weights.index(0.0)]
@@ -681,14 +979,26 @@ def cluster_diagnostics_row(
 def load_live_reference_scores(
     manifest_rows: list[dict[str, Any]],
 ) -> dict[paper.PaperJoinKey, float]:
-    """The reported setting's per-item scores from each run's analysis dir.
+    """Load the reported setting's per-item scores from each run's analysis dir.
 
-    ``uq_scores.csv`` in the run's analysis dir holds the ACSE row the headless
+    `uq_scores.csv` in the run's analysis dir holds the ACSE row the headless
     analysis computed by embedding each five-sample group on its own, which is
     the path the paper exporter also takes. The cache embeds all of a run's
     texts in large padded batches, so its vectors differ from the live ones at
     the fourth decimal. These rows are what the reported AUROCs are made of and
     let the reproduction check separate the cohort from the embeddings.
+
+    Args:
+        manifest_rows: Selected-run manifest rows with `analysis_dir`,
+            `run_id`, `model`, `dataset_id` and `benchmark_variant`.
+
+    Returns:
+        The live Task 2 meaning-variation score per join key, NaN where the
+        stored score does not parse.
+
+    Raises:
+        FileNotFoundError: If a run's `uq_scores.csv` is missing.
+        ValueError: If a join key has two live scores.
     """
     scores: dict[paper.PaperJoinKey, float] = {}
     for record in manifest_rows:
@@ -730,6 +1040,15 @@ def _float_or_nan(value: Any) -> float:
 
 
 def reported_rq_rows(rq_table: Path) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """Index the reported per-model research-question table.
+
+    Args:
+        rq_table: The exporter's per-model research-question table CSV.
+
+    Returns:
+        Each table row keyed by `(model, dataset, variant)`, where `all` marks
+        a pooled level.
+    """
     return {
         (row["model"], row["dataset"], row["variant"]): row
         for row in eu.read_csv_rows(rq_table)
@@ -741,7 +1060,22 @@ def build_cohort(
     snapshot: Mapping[str, Any],
     manifest_rows: list[dict[str, Any]],
 ) -> tuple[Cohort, list[SampleGroup], list[dict[str, Any]]]:
-    """Load the frozen cells, rebuild the cohort and bind cached embeddings."""
+    """Load the frozen cells, rebuild the cohort and bind cached embeddings.
+
+    Args:
+        root: Checkout root that snapshot paths are resolved against.
+        snapshot: The validated frozen snapshot.
+        manifest_rows: Selected-run manifest rows with resolved
+            `artifact_dir` paths.
+
+    Returns:
+        The cohort, all scored groups with their embeddings bound, and one
+        record per cache with its identity and SHA-256 file hashes.
+
+    Raises:
+        ValueError: If a benchmark's size differs from the snapshot or a frozen
+            run has no cached embeddings in the manifest.
+    """
     artifact_by_run = {
         (
             row["dataset_id"],
@@ -821,7 +1155,16 @@ def build_cohort(
 def slices_for(
     cohort: Cohort, snapshot: Mapping[str, Any]
 ) -> list[tuple[str, str, np.ndarray]]:
-    """``(kind, name, mask)`` for the grand, per-model and per-cell slices."""
+    """Return `(kind, name, mask)` for the grand, per-model and per-cell slices.
+
+    Args:
+        cohort: The evaluated rows to slice.
+        snapshot: Frozen snapshot that sets the model and cell order.
+
+    Returns:
+        The `pooled` slice named `all`, one `model` slice per cohort model and
+        one `cell` slice per `dataset/variant`, in snapshot order.
+    """
     slices: list[tuple[str, str, np.ndarray]] = [("pooled", "all", cohort.mask())]
     for model in snapshot["models_cohort"]:
         slices.append(("model", model, cohort.mask(model=model)))
@@ -839,10 +1182,31 @@ def slices_for(
 def reported_row_value(
     reported: Mapping[tuple[str, str, str], Mapping[str, Any]], kind: str, name: str
 ) -> Any:
+    """Look up the reported meaning-variation AUROC of one slice.
+
+    Args:
+        reported: Reported table rows from `reported_rq_rows`.
+        kind: Slice kind: `pooled`, `model` or `cell`.
+        name: Slice name as built by `slices_for`.
+
+    Returns:
+        The `task2_meaning_variation_auroc` value as read from the CSV, or
+        `None` when the slice has no reported row.
+    """
     return reported.get(rq_key(kind, name), {}).get("task2_meaning_variation_auroc")
 
 
 def rq_key(kind: str, name: str) -> tuple[str, str, str]:
+    """Map a slice to its key in the reported table.
+
+    Args:
+        kind: Slice kind: `pooled`, `model` or `cell`.
+        name: Model for a model slice, `dataset/variant` for a cell slice;
+            ignored for the pooled slice.
+
+    Returns:
+        The `(model, dataset, variant)` key, with `all` for pooled levels.
+    """
     if kind == "pooled":
         return ("all", "all", "all")
     if kind == "model":
@@ -863,6 +1227,38 @@ def run(
     iterations: int | None,
     reproduce_only: bool,
 ) -> dict[str, Any]:
+    """Re-score the frozen cohort over the grid and write the sensitivity outputs.
+
+    Builds the cohort once, compares the cached-embedding scores with the live
+    reference scores and the reported table, and bootstraps every setting on
+    the same capability-clustered draws per slice. Writes
+    `cohort_accounting.csv`, `reproduction_check.csv`, `grid_auroc.csv`,
+    `cluster_diagnostics.csv`, `per_item_scores.csv` and `settings.json`.
+
+    Args:
+        root: Checkout root that recorded paths are resolved against.
+        provenance_path: Frozen snapshot provenance JSON.
+        manifest_path: Selected-run manifest with each run's analysis and
+            cached-embedding directories.
+        rq_table_path: Reported per-model research-question table; when it is
+            missing, the reported columns stay empty.
+        output_dir: Directory for the outputs, created when absent.
+        thresholds: Cosine-distance thresholds of the grid.
+        weights: Dispersion weights of the grid; 0.0 and 1.0 are added when
+            absent because they double as the entropy and dispersion
+            components.
+        iterations: Bootstrap draws per slice; `None` uses the snapshot's
+            `bootstrap_samples`.
+        reproduce_only: Score the reported setting only, in place of
+            `thresholds` and `weights`.
+
+    Returns:
+        The reproduction, grid and diagnostics rows and the cohort.
+
+    Raises:
+        ValueError: If an evaluated row has no live reference score or the grid
+            lacks the reported setting.
+    """
     snapshot = load_snapshot(provenance_path)
     seed = int(snapshot["bootstrap_seed"])
     iterations = (
@@ -1107,6 +1503,14 @@ def run(
 def write_per_item_scores(
     path: Path, cohort: Cohort, grid: GridScores, live: np.ndarray
 ) -> None:
+    """Write each evaluated row's scores and cluster diagnostics at every setting.
+
+    Args:
+        path: Output CSV path.
+        cohort: The evaluated rows; their join key is left out.
+        grid: Grid scores of all groups.
+        live: Live reference score of each evaluated row, in cohort order.
+    """
     rows: list[dict[str, Any]] = []
     for i, row in enumerate(cohort.rows):
         g = int(cohort.group_index[i])
@@ -1125,6 +1529,14 @@ def write_per_item_scores(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the command-line options.
+
+    Args:
+        argv: Arguments to parse; `None` reads `sys.argv`.
+
+    Returns:
+        The parsed options.
+    """
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
         "--root", type=Path, default=Path(__file__).resolve().parents[1]
@@ -1145,6 +1557,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the sensitivity analysis and print the reproduction check per slice.
+
+    Relative paths among the options are resolved under `--root`.
+
+    Args:
+        argv: Command-line arguments; `None` reads `sys.argv`.
+
+    Returns:
+        The process exit code, 0 on success.
+    """
     args = parse_args(argv)
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"

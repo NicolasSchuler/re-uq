@@ -22,7 +22,13 @@ from scripts import eval_utils as eu, rerun_all
 
 
 class RecordingRunner(rerun_all.Runner):
-    """A `Runner` that records commands instead of running them."""
+    """A `Runner` that records commands instead of running them.
+
+    Args:
+        root: Project root passed to `rerun_all.Runner`.
+        exit_codes: Exit codes to return per command label, consumed in order;
+            a label without codes left returns 0.
+    """
 
     def __init__(self, root: Path, exit_codes: dict[str, list[int]] | None = None):
         super().__init__(root=root)

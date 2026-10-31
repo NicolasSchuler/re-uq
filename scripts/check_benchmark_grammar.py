@@ -1,9 +1,9 @@
-"""Grammar check of every benchmark sentence a model saw, with LanguageTool.
+"""Check the grammar of every benchmark sentence a model saw, with LanguageTool.
 
 Covers the rendered source statements and Task 1 candidates of the NICE, MLM TAPT
 and PURE item files (both keyword variants) and the three alternative weak-intent
 phrasings of the phrasing probe. LanguageTool runs locally at its default rule
-level (no picky rules) through the optional ``language-tool-python`` package,
+level (no picky rules) through the optional `language-tool-python` package,
 which needs Java and downloads LanguageTool on first use:
 
     uv run --with language-tool-python python scripts/check_benchmark_grammar.py
@@ -50,7 +50,16 @@ FIELDNAMES = [
 
 
 def collect_sentences(items_dir: Path) -> dict[str, dict[str, object]]:
-    """Map each distinct sentence to its capability clause and where it occurs."""
+    """Map each distinct sentence to its capability clause and where it occurs.
+
+    Args:
+        items_dir: Directory holding the benchmark item files in `ITEM_FILES`.
+
+    Returns:
+        A dict from sentence text to its `capability_text` and the set of
+        `sources` it occurs in, tagged as `<item file>/<role>` (for example
+        `nice/must/candidate`) or `probe/<template_id>`.
+    """
     sentences: dict[str, dict[str, object]] = defaultdict(
         lambda: {"capability_text": "", "sources": set()}
     )
@@ -73,11 +82,28 @@ def collect_sentences(items_dir: Path) -> dict[str, dict[str, object]]:
 
 
 def in_clause(sentence: str, capability: str, offset: int, length: int) -> bool:
+    """Return whether a match span lies inside the sentence's capability clause.
+
+    Args:
+        sentence: Checked sentence.
+        capability: Capability clause the template copied into the sentence.
+        offset: Start of the LanguageTool match in `sentence`.
+        length: Length of the match.
+
+    Returns:
+        True when the span lies within the first occurrence of `capability`;
+        False when it does not or the clause does not occur.
+    """
     start = sentence.find(capability)
     return start >= 0 and start <= offset and offset + length <= start + len(capability)
 
 
 def main() -> None:
+    """Check every benchmark sentence with LanguageTool and write the results.
+
+    Every match goes to the `--output` CSV; a Markdown summary is written next
+    to it and printed.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--items-dir", type=Path, default=Path("data/processed"))
     parser.add_argument(

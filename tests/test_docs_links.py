@@ -1,7 +1,7 @@
 """Relative links in tracked Markdown must resolve to tracked files.
 
 The documentation is read on GitHub, where an ignored or moved file is a
-dead link. Every ``[text](path)`` and ``![alt](path)`` in a tracked ``.md``
+dead link. Every `[text](path)` and `![alt](path)` in a tracked `.md`
 file is resolved against that file's directory and must name a tracked file
 or a directory that holds tracked files. Fenced code blocks are skipped.
 """

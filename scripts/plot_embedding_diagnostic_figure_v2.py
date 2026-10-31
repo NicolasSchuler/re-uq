@@ -10,10 +10,10 @@ specifications below use capability grouping; different prediction targets
 remain separate diagnostics. Scores come from the current summary, never from
 historical constants. Points summarize held-out folds and intervals describe
 capability-bootstrap uncertainty conditional on the fitted classifiers and
-splits (see ``docs/figures/embedding_diagnostic.md``).
+splits (see `docs/figures/embedding_diagnostic.md`).
 
 The exploratory t-SNE projections are retained separately in the replication
-package by ``plot_embedding_diagnostic_tsne_supp.py``.
+package by `plot_embedding_diagnostic_tsne_supp.py`.
 """
 
 from __future__ import annotations
@@ -136,6 +136,7 @@ CHANCE = 0.5
 
 
 def set_style() -> None:
+    """Set the serif manuscript style for fonts, spines and resolution."""
     plt.rcParams.update(
         {
             "font.family": "serif",
@@ -156,6 +157,23 @@ def set_style() -> None:
 def resolve_bars(
     summary: list[dict[str, Any]], specs: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
+    """Look up each bar's AUROC, interval and fit diagnostics in the probe summary.
+
+    Only gradient-boosting (`hgb`) rows are considered.
+
+    Args:
+        summary: Rows of `probe_grid_summary.csv`.
+        specs: Bar specifications with a label and the backend, text variant,
+            grouping, scope and target that select one summary row.
+
+    Returns:
+        Each specification extended with `value`, `ci_low`, `ci_high`, the
+        unavailability reasons, `fit_review_required` and `folds`; empty
+        numbers become NaN.
+
+    Raises:
+        ValueError: If a specification matches no summary row or more than one.
+    """
     out = []
     for spec in specs:
         matches = [
@@ -210,7 +228,16 @@ def resolve_bars(
 
 
 def stack_positions(group_sizes: list[int], gap: float) -> list[list[float]]:
-    """Top-down y positions per group, stacked bottom-up with a gap between groups."""
+    """Return top-down y positions per group, stacked bottom-up with gaps between them.
+
+    Args:
+        group_sizes: Number of rows per group, top group first.
+        gap: Extra space between neighbouring groups.
+
+    Returns:
+        The y positions of each group's rows, top row first; the last group
+        sits at the bottom, starting at 1.
+    """
     positions: list[list[float]] = []
     top = 0.0
     for size in reversed(group_sizes):
@@ -220,7 +247,17 @@ def stack_positions(group_sizes: list[int], gap: float) -> list[list[float]]:
 
 
 def training_budget_note(diagnostic_dir: Path, bars: list[dict[str, Any]]) -> str:
-    """Only claim a common limit when all selected folds document reaching it."""
+    """Only claim a common limit when all selected folds document reaching it.
+
+    Args:
+        diagnostic_dir: Directory with `probe_grid_folds.csv`.
+        bars: Resolved bars from `resolve_bars`.
+
+    Returns:
+        A note that all displayed fits reached the same training limit when
+        every fold of every bar documents it. Otherwise a review notice when
+        any bar needs a fit review, or an empty string.
+    """
     path = diagnostic_dir / "probe_grid_folds.csv"
     fallback = "Fitting diagnostics require review. See the training-budget qualification in the text."
     if not path.exists():
@@ -264,6 +301,21 @@ def draw(
     control: list[dict[str, Any]],
     output_path: Path,
 ) -> None:
+    """Draw the three-panel AUROC figure and save it as PDF and PNG.
+
+    Panel A compares text alone with text plus the declared label across all
+    sources, panel B shows detection within each weaker source modality, and
+    panel C the auxiliary source probes. Points are the held-out AUROC means
+    with their 95% intervals; a missing interval is marked † and a collapsed
+    one ‡.
+
+    Args:
+        context: Resolved auxiliary source-probe bars for panel C.
+        target: Resolved strengthening bars; the first, global one goes to
+            panel A and the rest to panel B.
+        control: Resolved text-plus-declared-label bars for panel A.
+        output_path: PDF path; the PNG is written next to it.
+    """
     set_style()
     fig = plt.figure(figsize=(7.0, 3.9))
     # Keep the graphic focused on the three findings.
@@ -360,6 +412,11 @@ def draw(
 
 
 def main() -> None:
+    """Pull the bars from the probe summary, print them and draw the figure.
+
+    Also prints the training-budget note and every bar's reason for a missing
+    interval.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--diagnostic-dir", type=Path, default=Path("outputs/embedding_diagnostic")

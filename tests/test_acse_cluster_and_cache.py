@@ -2,7 +2,7 @@
 
 Four contracts are pinned here, all offline:
 
-* ``eval_utils`` exposes one clustering operation that normalizes once, builds the
+* `eval_utils` exposes one clustering operation that normalizes once, builds the
   cosine-distance matrix once, fits once, and returns the diagnostics dict and the
   size-ranked labels together. The recorded golden values below were captured from
   the pre-refactor implementation, so any drift in cluster labels, tie handling, or
@@ -39,7 +39,7 @@ THRESHOLD = 0.35
 
 
 def _boundary_matrix() -> np.ndarray:
-    """Two unit vectors whose cosine distance is exactly ``THRESHOLD``."""
+    """Return two unit vectors whose cosine distance is exactly `THRESHOLD`."""
     cos = 1.0 - THRESHOLD
     return np.asarray([[1.0, 0.0], [cos, float(np.sqrt(1.0 - cos * cos))]])
 
@@ -401,7 +401,16 @@ class AcseCentroidProjectionTest(unittest.TestCase):
 
     @staticmethod
     def _as_cached(embeddings: np.ndarray) -> np.ndarray:
-        """The cache stores float32, so the reference must round-trip too."""
+        """Round-trip `embeddings` through float32.
+
+        The cache stores float32, so the reference must round-trip too.
+
+        Args:
+            embeddings: Reference embeddings.
+
+        Returns:
+            The embeddings cast to float32 and back to float64.
+        """
         return np.asarray(np.asarray(embeddings, dtype=np.float32), dtype=float)
 
     def _assert_centroids_match_projected_mean(
@@ -448,7 +457,7 @@ class AcseCentroidProjectionTest(unittest.TestCase):
         self._assert_centroids_match_projected_mean(embeddings, 3)
 
     def test_centroids_match_the_re_projected_centroid_they_replaced(self) -> None:
-        """Equivalence with the old ``pca.transform(mean(embeddings))`` route."""
+        """Equivalence with the old `pca.transform(mean(embeddings))` route."""
         rng = np.random.default_rng(17)
         embeddings = rng.normal(size=(5, 6))
         projected, pca = acse_viz.projection_model(embeddings, 3)
@@ -547,7 +556,18 @@ class EmbeddingProjectionPrepTest(unittest.TestCase):
     def _legacy_prepare(
         diagnostic_dir: Path, manifest_path: Path, per_modality: int, random_state: int
     ) -> tuple[np.ndarray, list[dict[str, Any]], np.ndarray, np.random.Generator]:
-        """The block both scripts inlined before the helper was extracted."""
+        """Reproduce the block both scripts inlined before the helper was extracted.
+
+        Args:
+            diagnostic_dir: Directory holding `task2_reqonly_mlx_embeddings.npz`.
+            manifest_path: Manifest the embedding sample rows are read from.
+            per_modality: Rows kept per modality in the balanced subsample.
+            random_state: Seed of the subsampling RNG and of the projection.
+
+        Returns:
+            The projected coordinates, the selected rows, their global embedding
+            indices, and the RNG after the subsample was drawn.
+        """
         cache = np.load(
             diagnostic_dir / "task2_reqonly_mlx_embeddings.npz", allow_pickle=False
         )
@@ -598,7 +618,7 @@ class EmbeddingProjectionPrepTest(unittest.TestCase):
         )
         np.testing.assert_allclose(prepared.coords, expected_coords, atol=1e-12)
         # The RNG must be handed back mid-stream: both figures keep drawing from
-        # it for the jitter in panel (a).
+        # it to shuffle the draw order of the projection panels.
         self.assertEqual(prepared.rng.random(), expected_rng.random())
 
     def test_subsampling_actually_consumes_the_rng(self) -> None:
@@ -738,8 +758,12 @@ class AcseCacheValidityTest(unittest.TestCase):
     def _add_model(self, model: str) -> None:
         """Score a second model into the same analysis dir.
 
-        This is what an empty ``model_filter`` expands to, so it is the case the
+        This is what an empty `model_filter` expands to, so it is the case the
         cache layout has to keep apart.
+
+        Args:
+            model: Name of the added model; its raw rows are written and the
+                existing score rows are duplicated under its name.
         """
         self._write_raw_rows(model)
         rows = eu.read_csv_rows(self.analysis_dir / "uq_scores.csv")

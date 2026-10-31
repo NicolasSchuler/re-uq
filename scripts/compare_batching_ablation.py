@@ -101,10 +101,18 @@ DELTA_FIELDS = [
 
 
 def registry_arm(row: Any) -> str:
-    """Which arm a registry row belongs to, from its batching plan.
+    """Return the arm a registry row belongs to, from its batching plan.
 
     A registry row written before `batch_order` existed is a grouped paper run;
     that is the same reading `select_cell_runs` applies to the archive.
+
+    Args:
+        row: Run-registry row; its `batch_size` and `batch_order` columns decide
+            the arm, and an empty `batch_order` reads as grouped.
+
+    Returns:
+        The arm name from `eu.batching_arm_name`: `single`, `grouped`,
+        `shuffled`, or a size-suffixed name such as `grouped_4`.
     """
     return eu.batching_arm_name(
         row.get("batch_size", 0),
@@ -118,7 +126,20 @@ def select_arm_runs(
     run_group_id: str,
     include_smoke: bool,
 ) -> dict[tuple[str, str], dict[str, Any]]:
-    """Latest complete, fully covered run per (model, arm)."""
+    """Return the latest complete, fully covered run per (model, arm).
+
+    Args:
+        registry_rows: Run-registry rows to choose from.
+        run_group_id: Only rows of this run group are considered.
+        include_smoke: Whether runs whose ID starts with `smoke-` may be
+            selected.
+
+    Returns:
+        The selected registry row keyed by `(model, arm)`. A run qualifies when
+        its status is `complete` and its `deterministic_item_coverage` is at
+        least 1; among qualifying runs the latest `started_at_utc` wins, with
+        the run ID as tie-breaker.
+    """
     selected: dict[tuple[str, str], dict[str, Any]] = {}
     for row in registry_rows:
         if str(row.get("run_group_id", "")) != run_group_id:
@@ -150,7 +171,24 @@ def task2_scores(
     *,
     sampling_plan: eu.SamplingPlan,
 ) -> list[dict[str, Any]]:
-    """Deterministic Task 2 score rows of one arm."""
+    """Return the deterministic Task 2 score rows of one arm.
+
+    Args:
+        benchmark: Benchmark items the raw rows must match.
+        raw_rows: Raw model outputs of one run; only deterministic Task 2 rows
+            are scored, after deduplicating retries.
+        sampling_plan: Sampling plan passed to `eu.build_uq_scores`.
+
+    Returns:
+        One observation per deterministic raw row, carrying its score fields
+        when the row could be scored, its source identity, run metadata, and a
+        `response_status` that is `ok` for scored rows and the parse status (or
+        `missing_score`) otherwise.
+
+    Raises:
+        ValueError: If a raw row's item is missing from the benchmark or its
+            source differs from the current benchmark item.
+    """
     deterministic = [
         row
         for row in eu.dedupe_raw_rows(raw_rows)
@@ -192,6 +230,19 @@ def task2_scores(
 
 
 def stratum_rows(rows: list[dict[str, Any]], stratum: str) -> list[dict[str, Any]]:
+    """Restrict observation rows to one analysis stratum.
+
+    Args:
+        rows: Observation rows of one arm.
+        stratum: `all` keeps every row; `weak_intent` keeps the rows whose
+            source modality is `nice_to_have`.
+
+    Returns:
+        The rows in the stratum (the input list itself for `all`).
+
+    Raises:
+        ValueError: If `stratum` is neither `all` nor `weak_intent`.
+    """
     if stratum == "all":
         return rows
     if stratum == "weak_intent":
@@ -228,6 +279,23 @@ def arm_row(
     *,
     bootstrap_samples: int,
 ) -> dict[str, Any]:
+    """Build the summary row of one arm in one stratum.
+
+    Args:
+        model: Model name written to the row.
+        arm: Arm name written to the row.
+        stratum: Stratum name; the weak-intent strict strengthening rate at
+            confidence 0.90 is only filled for `weak_intent`.
+        registry_row: Registry row of the arm's run, the source of the run ID
+            and batching plan.
+        rows: Observation rows of the arm in this stratum, failed ones included.
+        bootstrap_samples: Cluster-bootstrap resamples for the intervals.
+
+    Returns:
+        A row with the `ARM_FIELDS` columns: counts, label accuracy, and strict
+        and broad text strengthening with request- and seed-clustered
+        intervals, all computed over the answered rows.
+    """
     # Failed observations (request, output-format or parse failures) carry no
     # prediction; they are counted, not scored. `n` stays the planned total.
     answered = [row for row in rows if row.get("response_status", "ok") == "ok"]
@@ -278,7 +346,24 @@ def delta_rows(
     bootstrap_samples: int,
     baseline_arm: str = ARM_GROUPED,
 ) -> list[dict[str, Any]]:
-    """`arm - baseline` per metric, paired by item and resampled by seed."""
+    """Compute `arm - baseline` per metric, paired by item and resampled by seed.
+
+    Args:
+        model: Model name written to each row.
+        arm: Name of the compared arm written to each row.
+        stratum: Stratum name written to each row.
+        grouped: Observation rows of the baseline arm (named after the
+            historical grouped reference; the baseline is `baseline_arm`).
+        other: Observation rows of the compared arm.
+        bootstrap_samples: Seed-bootstrap resamples for the delta interval; zero
+            or fewer marks the interval as disabled.
+        baseline_arm: Name of the reference arm written to each row.
+
+    Returns:
+        One row per metric in `METRICS` with the `DELTA_FIELDS` columns: the
+        values on the jointly eligible exact items, the delta and its interval,
+        and the pairing and exclusion counts.
+    """
     rows: list[dict[str, Any]] = []
     for metric_name, metric in METRICS:
 
@@ -383,6 +468,27 @@ def build_tables(
     sampling_plan: eu.SamplingPlan,
     baseline_arm: str = ARM_SINGLE,
 ) -> dict[str, Any]:
+    """Build the arm, delta and provenance tables of the batching ablation.
+
+    Args:
+        benchmark: Benchmark items the raw rows are scored against.
+        registry_rows: Run-registry rows; `select_arm_runs` picks one run per
+            model and arm from them.
+        raw_rows: Raw model outputs of all candidate runs.
+        run_group_id: Run group whose runs are compared.
+        include_smoke: Whether smoke runs may be selected.
+        bootstrap_samples: Bootstrap resamples for the per-arm and delta
+            intervals.
+        sampling_plan: Sampling plan the compared runs used.
+        baseline_arm: Reference arm every other arm is compared against. It is
+            listed first; when it has no run, the other arms' deltas report no
+            matched items instead of zeros.
+
+    Returns:
+        A dict with `arms` (rows of `ARM_FIELDS`), `deltas` (rows of
+        `DELTA_FIELDS`), `provenance` (one entry per selected run) and
+        `baseline_arm`.
+    """
     selected = select_arm_runs(
         registry_rows, run_group_id=run_group_id, include_smoke=include_smoke
     )
@@ -463,6 +569,18 @@ def build_tables(
 
 
 def write_outputs(tables: dict[str, Any], output_prefix: Path) -> dict[str, Path]:
+    """Write the batching ablation tables as CSV, Markdown and provenance JSON.
+
+    Args:
+        tables: Output of `build_tables`.
+        output_prefix: Path prefix; the arm table goes to `<prefix>.csv`, the
+            deltas to `<prefix>_deltas.csv`, the report to `<prefix>.md` and the
+            run provenance to `<prefix>_provenance.json`.
+
+    Returns:
+        The written paths under the keys `csv`, `deltas_csv`, `markdown` and
+        `provenance`.
+    """
     baseline_arm = tables.get("baseline_arm", ARM_GROUPED)
     csv_path = output_prefix.with_suffix(".csv")
     delta_csv_path = output_prefix.with_name(f"{output_prefix.name}_deltas.csv")
@@ -518,6 +636,14 @@ def write_outputs(tables: dict[str, Any], output_prefix: Path) -> dict[str, Path
 
 
 def main(argv: list[str] | None = None) -> dict[str, Path]:
+    """Compare the batching arms of one cell from the command line.
+
+    Args:
+        argv: Command-line arguments; `None` reads `sys.argv`.
+
+    Returns:
+        The written output paths, as returned by `write_outputs`.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dataset", default=DEFAULT_DATASET_ID)
     parser.add_argument("--variant", default=DEFAULT_VARIANT)

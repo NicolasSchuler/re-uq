@@ -513,7 +513,15 @@ class ParsingAndExternalProbeTest(unittest.TestCase):
 
 
 def _concurrent_append_worker(args):
-    """Append many oversized JSON records to a shared file (separate process)."""
+    """Append many oversized JSON records to a shared file (separate process).
+
+    Args:
+        args: `(path, worker_id, count)`: the shared JSONL file, the ID stored
+            in each record, and how many records to append.
+
+    Returns:
+        The number of records appended.
+    """
     import sys as _sys
 
     _sys.path.insert(0, "scripts")

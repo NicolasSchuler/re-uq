@@ -3,26 +3,26 @@
 The README "Results at a glance" section quotes five headline numbers
 (strict / broad text strengthening, weak-intent strict strengthening,
 high-confidence share, and repeated-sample agreement). This script derives
-them from the per-cell tables exported by ``scripts/export_paper_tables.py``.
+them from the per-cell tables exported by `scripts/export_paper_tables.py`.
 
 It reads three per-cell CSVs:
 
-* ``outputs/paper_task2_text_drift_metrics.csv`` -- per dataset x variant cell
-  broad (``text_over_commitment``) and strict (``strict_text_over_commitment``)
+* `outputs/paper_task2_text_drift_metrics.csv` -- per dataset x variant cell
+  broad (`text_over_commitment`) and strict (`strict_text_over_commitment`)
   text-strengthening rates.
-* ``outputs/paper_text_drift_confidence_and_stability.csv`` -- per-cell text
-  over-commitment counts (``broad_text_oc_n`` / ``strict_text_oc_n``), the
-  coverage-adjusted denominator ``n``, the p>=0.90 high-confidence share
-  (``strict_text_oc_conf_ge_90``) and the repeated-sample unanimity flag
-  (``strict_text_oc_unanimous_modality_samples``).
-* ``outputs/blind_task3_analysis_summary.csv`` -- per-cell weak-intent strict
-  strengthening at confidence >= 0.90 (``weak_strict_text_strengthening_90``).
+* `outputs/paper_text_drift_confidence_and_stability.csv` -- per-cell text
+  over-commitment counts (`broad_text_oc_n` / `strict_text_oc_n`), the
+  coverage-adjusted denominator `n`, the p>=0.90 high-confidence share
+  (`strict_text_oc_conf_ge_90`) and the repeated-sample unanimity flag
+  (`strict_text_oc_unanimous_modality_samples`).
+* `outputs/blind_task3_analysis_summary.csv` -- per-cell weak-intent strict
+  strengthening at confidence >= 0.90 (`weak_strict_text_strengthening_90`).
   This is the *fallback* source: when the Task 2 snapshot carries the same
-  column (``scripts/export_paper_tables.py`` recomputes it, alongside
-  ``weak_n`` / ``weak_n_readable``), the derived value is used instead of the
+  column (`scripts/export_paper_tables.py` recomputes it, alongside
+  `weak_n` / `weak_n_readable`), the derived value is used instead of the
   transcribed one.
 
-It writes a single small table ``outputs/paper_headline_metrics.csv`` (it never
+It writes a single small table `outputs/paper_headline_metrics.csv` (it never
 overwrites the legacy snapshots) with, per headline quantity: the pooled value
 where computable, the unweighted macro over cells, the per-cell values, the
 per-cell n where available, an aggregation label describing which figure the
@@ -32,38 +32,38 @@ against the five README numbers to stdout.
 Aggregation formula
 -------------------
 
-The full specification, with file:line pointers, is in ``docs/aggregation.md``.
+The full specification, with file:line pointers, is in `docs/aggregation.md`.
 In short:
 
 * **Scoring unit.** One deterministic Task 2 output for one benchmark item
-  (``item_id`` = seed x source modality) from one model, i.e. one row of
-  ``build_uq_scores`` with ``uq_method == "verbalized_confidence"``
-  (``eval_utils.build_uq_scores``). Repeated stochastic samples of the same item
+  (`item_id` = seed x source modality) from one model, i.e. one row of
+  `build_uq_scores` with `uq_method == "verbalized_confidence"`
+  (`eval_utils.build_uq_scores`). Repeated stochastic samples of the same item
   collapse into separate rows carrying the sampled label distribution; they never
   enter the strengthening denominators.
 * **Denominators.** The published text-strengthening rates use only rows whose
-  generated text yielded a modality (``text_modality_parse_status == "ok"``).
-  Rows whose text modality is ``unknown`` or ``negated`` are excluded and
-  reported as ``*_n_unknown_excluded``, with ``*_lower_bound`` /
-  ``*_upper_bound`` charging those rows to either side. Task 2 responses that
+  generated text yielded a modality (`text_modality_parse_status == "ok"`).
+  Rows whose text modality is `unknown` or `negated` are excluded and
+  reported as `*_n_unknown_excluded`, with `*_lower_bound` /
+  `*_upper_bound` charging those rows to either side. Task 2 responses that
   failed to parse never produce a score row at all and are visible only through
-  ``parse_failure_rate``.
-* **Pooled vs macro.** ``value_pooled`` sums per-cell numerators over per-cell
-  coverage-adjusted denominators (item-weighted). ``value_macro_over_cells`` is
+  `parse_failure_rate`.
+* **Pooled vs macro.** `value_pooled` sums per-cell numerators over per-cell
+  coverage-adjusted denominators (item-weighted). `value_macro_over_cells` is
   the unweighted mean of the four per-cell rates. Models are pooled inside a
   cell by concatenating their score rows, so a model contributes in proportion
   to the items it answered; there is no per-model macro step.
 * **Agreement.** Repeated-sample unanimity is computed only over items where
-  every stochastic sample parsed (``stochastic_complete``), with the excluded
-  count reported as ``agreement_n_incomplete_excluded``.
-* **Bootstrap.** ``--regenerate-snapshots`` appends a request-clustered
-  bootstrap CI (resampling recorded request clusters where available, 1000 resamples, fixed
-  seed 20260518, percentile interval) to the strict and broad headline rows,
-  pooled over all requested cells, as ``value_ci_low`` / ``value_ci_high``. The
-  capability-clustered pair travels alongside as ``value_seed_ci_low`` /
-  ``value_seed_ci_high``, and ``value_ci_cluster_field`` records which unit the
-  auxiliary interval used. The manuscript reports the capability-clustered
-  pair. See docs/aggregation.md Section 6.
+  every stochastic sample parsed (`stochastic_complete`), with the excluded
+  count reported as `agreement_n_incomplete_excluded`.
+* **Bootstrap.** `--regenerate-snapshots` appends a request-clustered
+  bootstrap CI (resampling recorded request clusters where available, 1000
+  resamples, fixed seed 20260518, percentile interval) to the strict and broad
+  headline rows, pooled over all requested cells, as `value_ci_low` /
+  `value_ci_high`. The capability-clustered pair travels alongside as
+  `value_seed_ci_low` / `value_seed_ci_high`, and `value_ci_cluster_field`
+  records which unit the auxiliary interval used. The manuscript reports the
+  capability-clustered pair. See docs/aggregation.md Section 6.
 """
 
 from __future__ import annotations
@@ -107,7 +107,14 @@ def _cell_id(row: dict[str, str]) -> tuple[str, str]:
 
 
 def _parse_ratio(value: str) -> float:
-    """Parse a snapshot cell that may be a decimal or a ``"29.8%"`` string."""
+    """Parse a snapshot cell that may be a decimal or a `"29.8%"` string.
+
+    Args:
+        value: Snapshot cell text; a trailing `%` marks a percentage.
+
+    Returns:
+        The value as a fraction, so `"29.8%"` and `"0.298"` both give 0.298.
+    """
     text = str(value).strip()
     if text.endswith("%"):
         return float(text[:-1]) / 100.0
@@ -139,7 +146,17 @@ def _has_column(
     cells: list[tuple[str, str]],
     column: str,
 ) -> bool:
-    """True when every requested cell carries a non-empty value for ``column``."""
+    """Return True when every requested cell carries a non-empty value for `column`.
+
+    Args:
+        rows_by_cell: Snapshot rows keyed by their (dataset, variant) cell.
+        cells: Cells that must carry the column; a cell absent from
+            `rows_by_cell` counts as empty.
+        column: Column to look up in each cell's row.
+
+    Returns:
+        True when no requested cell is missing or blank in `column`.
+    """
     return all(
         str(rows_by_cell.get(cell, {}).get(column, "")).strip() for cell in cells
     )
@@ -153,11 +170,32 @@ def build_headline_rows(
 ) -> list[dict[str, Any]]:
     """Reconstruct the headline table from the three per-cell snapshots.
 
-    ``bootstrap_ci_rows`` optionally carries request- and seed-clustered
-    bootstrap bounds (as written by ``scripts/export_paper_tables.py``) keyed by
-    ``headline_key``; matching headline rows gain ``value_ci_low`` /
-    ``value_ci_high`` / ``value_seed_ci_low`` / ``value_seed_ci_high`` /
-    ``value_ci_cluster_field`` / ``bootstrap_samples``.
+    Args:
+        task2_rows: Per-cell rows of `paper_task2_text_drift_metrics.csv` with the
+            strict and broad text-strengthening rates; regenerated snapshots also
+            carry the weak-intent headline column, which is then preferred.
+        confidence_rows: Per-cell rows of
+            `paper_text_drift_confidence_and_stability.csv` with the counts,
+            denominators, high-confidence shares and agreement; their order fixes
+            the cell order of every headline.
+        blind_rows: Per-cell rows of `blind_task3_analysis_summary.csv`, the
+            fallback source of the weak-intent headline; may be empty.
+        bootstrap_ci_rows: Optionally carries request- and seed-clustered
+            bootstrap bounds (as written by `scripts/export_paper_tables.py`)
+            keyed by `headline_key`; matching headline rows gain `value_ci_low` /
+            `value_ci_high` / `value_seed_ci_low` / `value_seed_ci_high` /
+            `value_ci_cluster_field` / `bootstrap_samples`.
+
+    Returns:
+        The five headline rows in README order, each with its pooled and macro
+        values, per-cell values and n, and the bootstrap CI columns (empty where
+        `bootstrap_ci_rows` does not cover a headline).
+
+    Raises:
+        SystemExit: If neither the Task 2 snapshot nor the blind Task 3 summary
+            carries the weak-intent headline column for every requested cell.
+        ValueError: If the requested cells have no complete repeated-sample
+            groups, so the agreement headline has no denominator.
     """
     task2 = _rows_by_cell(task2_rows)
     confidence = _rows_by_cell(confidence_rows)
@@ -325,9 +363,20 @@ def attach_bootstrap_cis(
 ) -> list[dict[str, Any]]:
     """Add both cluster bootstrap CI columns to the headline rows.
 
-    ``value_ci_low`` / ``value_ci_high`` are the reported request-clustered
-    interval and ``value_seed_ci_*`` the seed-clustered pair; every column is
+    `value_ci_low` / `value_ci_high` are the request-clustered interval, with
+    `value_ci_cluster_field` naming the unit actually used, and `value_seed_ci_*`
+    the seed-clustered pair, the one the manuscript reports; every column is
     empty for a headline the bootstrap rows do not cover.
+
+    Args:
+        rows: Headline rows from `build_headline_rows`; updated in place.
+        bootstrap_ci_rows: Bootstrap bounds keyed by `headline_key`, with
+            `ci_low`, `ci_high`, `seed_ci_low`, `seed_ci_high`,
+            `ci_cluster_field` and `bootstrap_samples`; None leaves every CI
+            column empty.
+
+    Returns:
+        The same `rows` list, now carrying the CI columns.
     """
     by_key = {str(row["headline_key"]): row for row in (bootstrap_ci_rows or [])}
     for row in rows:
@@ -346,8 +395,11 @@ def print_readme_comparison(
 ) -> None:
     """Print every headline next to the README figure it should reproduce.
 
-    ``expected`` overrides ``README_VALUES``; tests pass the figures their
-    fixtures were built from.
+    Args:
+        rows: Headline rows from `build_headline_rows`.
+        expected: Overrides `README_VALUES`; tests pass the figures their
+            fixtures were built from. A headline without an expected figure is
+            printed as `n/a`.
     """
     readme_values = README_VALUES if expected is None else expected
     print("Headline metric reconstruction vs. the README 'Results at a glance':")
@@ -379,10 +431,24 @@ def print_readme_comparison(
 
 
 def default_path(root: Path, name: str) -> Path:
+    """Return the default location of a snapshot or output table.
+
+    Args:
+        root: Project root.
+        name: File name of the table under `outputs/`.
+
+    Returns:
+        The path `root/outputs/name`.
+    """
     return root / "outputs" / name
 
 
 def main() -> None:
+    """Build the headline table, write it and print the README comparison.
+
+    With `--regenerate-snapshots`, the per-cell snapshots are first rebuilt from
+    the local raw outputs and the bootstrap CIs are attached.
+    """
     root = eu.project_root()
     parser = argparse.ArgumentParser(
         description="Aggregate the five README headline metrics from the per-cell paper snapshots.",

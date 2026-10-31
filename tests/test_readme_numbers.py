@@ -1,8 +1,8 @@
 """The README's results table quotes tracked numbers, never typed ones.
 
 Each row of the "Results at a glance" table ends in a marker naming the
-``outputs/paper_numbers.tex`` macros it quotes (``<!-- num:... -->``) or a
-column of a tracked CSV (``<!-- csv:file:row_key:column -->``). Every numeric
+`outputs/paper_numbers.tex` macros it quotes (`<!-- num:... -->`) or a
+column of a tracked CSV (`<!-- csv:file:row_key:column -->`). Every numeric
 token of the macro value must appear in the row. A second test checks that the
 tracked macro file regenerates from the tracked tables, so the chain from CSV
 to README stays closed.

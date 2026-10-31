@@ -12,8 +12,8 @@ strengthening with 95% intervals and a zero-change reference:
 * Phrasing: each alternative weak-intent template minus the anchor template on
   the deterministic pass.
 
-Values come from the comparison exports only (``compare_batching_ablation.py``,
-``compare_context_ablation.py``, ``run_weak_modality_probe.py``); nothing is
+Values come from the comparison exports only (`compare_batching_ablation.py`,
+`compare_context_ablation.py`, `run_weak_modality_probe.py`); nothing is
 typed in. Exact matched pair counts remain available in the comparison exports.
 """
 
@@ -82,6 +82,7 @@ MUTED = "#475569"
 
 
 def set_style() -> None:
+    """Set the serif manuscript style for fonts, spines and resolution."""
     plt.rcParams.update(
         {
             "font.family": "serif",
@@ -102,15 +103,46 @@ def set_style() -> None:
 
 
 def read_rows(path: Path) -> list[dict[str, str]]:
+    """Read a CSV file into rows of strings.
+
+    Args:
+        path: CSV file with a header row.
+
+    Returns:
+        One dict per data row, keyed by column name.
+    """
     with path.open(encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
 
 
 def to_percentage_points(value: str) -> float:
+    """Convert a proportion given as text to percentage points.
+
+    Args:
+        value: Proportion such as `"0.125"`.
+
+    Returns:
+        The value times 100.
+    """
     return float(value) * 100.0
 
 
 class Point:
+    """One paired change with its interval and pair count, in percentage points.
+
+    Args:
+        row: Comparison export row with a `delta` column given as a proportion.
+        low: Column holding the interval's lower bound.
+        high: Column holding the interval's upper bound.
+        pairs: Column holding the number of complete matched pairs.
+
+    Attributes:
+        delta: Paired change in percentage points.
+        low: Lower interval bound in percentage points.
+        high: Upper interval bound in percentage points.
+        pairs: Number of complete matched pairs.
+    """
+
     def __init__(self, row: dict[str, str], low: str, high: str, pairs: str):
         self.delta = to_percentage_points(row["delta"])
         self.low = to_percentage_points(row[low])
@@ -119,6 +151,19 @@ class Point:
 
 
 def batching_points(rows: list[dict[str, str]]) -> dict[str, dict[str, Point]]:
+    """Collect the batching panel's strict strengthening changes on weak intent.
+
+    Args:
+        rows: Rows of the batching comparison export, each batched arm against
+            the single-item baseline.
+
+    Returns:
+        The paired change per model and arm on weak-intent sources; rows with
+        an `unavailable_reason` are left out.
+
+    Raises:
+        SystemExit: If a row's baseline arm is not `single`.
+    """
     out: dict[str, dict[str, Point]] = {}
     for row in rows:
         if row["metric"] != METRIC or row["stratum"] != "weak_intent":
@@ -134,6 +179,16 @@ def batching_points(rows: list[dict[str, str]]) -> dict[str, dict[str, Point]]:
 
 
 def context_points(rows: list[dict[str, str]]) -> dict[str, dict[str, Point]]:
+    """Collect the context panel's strict strengthening changes per source stratum.
+
+    Args:
+        rows: Rows of the context comparison export, document arm against bare
+            arm.
+
+    Returns:
+        The paired change per model and stratum of `CONTEXT_STRATA`; rows with
+        an `unavailable_reason` are left out.
+    """
     out: dict[str, dict[str, Point]] = {}
     wanted = {stratum for stratum, _, _ in CONTEXT_STRATA}
     for row in rows:
@@ -148,6 +203,17 @@ def context_points(rows: list[dict[str, str]]) -> dict[str, dict[str, Point]]:
 
 
 def phrasing_points(run_dirs: list[Path]) -> dict[str, dict[str, Point]]:
+    """Collect the phrasing panel's strict changes against the anchor template.
+
+    Args:
+        run_dirs: Weak probe run directories, each with
+            `weak_modality_text_deltas.csv`.
+
+    Returns:
+        The paired change in strict text strengthening against the `useful_if`
+        anchor per model and alternative template. A later run overwrites an
+        earlier one for the same model and template.
+    """
     out: dict[str, dict[str, Point]] = {}
     for run_dir in run_dirs:
         for row in read_rows(run_dir / "weak_modality_text_deltas.csv"):
@@ -160,6 +226,14 @@ def phrasing_points(run_dirs: list[Path]) -> dict[str, dict[str, Point]]:
 
 
 def ordered_models(points: dict[str, Any]) -> list[str]:
+    """Order models as in the results tables, unknown models last.
+
+    Args:
+        points: Mapping keyed by model id.
+
+    Returns:
+        The model ids in `MODEL_ORDER`, followed by any others sorted by name.
+    """
     known = [m for m in MODEL_ORDER if m in points]
     unknown = sorted(set(points) - set(known))
     return known + unknown
@@ -172,6 +246,16 @@ def draw_panel(
     title: str,
     legend_loc: str = "center right",
 ) -> None:
+    """Draw one forest-plot panel with one row per model and one interval per series.
+
+    Args:
+        ax: Axes to draw into.
+        points: Paired changes per model and series key.
+        series: `(key, legend label, colour key, filled marker)` per series,
+            drawn top to bottom within each model row.
+        title: Panel heading, drawn left-aligned.
+        legend_loc: Matplotlib legend location.
+    """
     models = ordered_models(points)
     n_series = len(series)
     step = 0.8 / max(n_series, 1)
@@ -239,6 +323,19 @@ def build_figure(
     context: dict[str, dict[str, Point]],
     phrasing: dict[str, dict[str, Point]],
 ) -> plt.Figure:
+    """Build the three-panel ablation figure on one shared percentage-point scale.
+
+    Panel heights follow the number of model and series rows, and only the
+    bottom panel shows the x axis.
+
+    Args:
+        batching: Batching panel points from `batching_points`.
+        context: Context panel points from `context_points`.
+        phrasing: Phrasing panel points from `phrasing_points`.
+
+    Returns:
+        The figure.
+    """
     heights = [
         max(len(points), 1) * len(series)
         for points, series in (
@@ -297,6 +394,20 @@ def build_figure(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Plot the ablation figure from the comparison exports and save PDF and PNG.
+
+    Without `--weak-probe-dir`, the weak probe runs are the completed
+    `weak_phrasing:` cells of the rerun state file.
+
+    Args:
+        argv: Command-line arguments; `None` reads `sys.argv`.
+
+    Returns:
+        The process exit code, 0 on success.
+
+    Raises:
+        SystemExit: If a weak probe run lacks its deltas file.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--batching",

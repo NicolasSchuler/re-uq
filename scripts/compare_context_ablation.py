@@ -2,7 +2,7 @@
 
 Full-arm descriptions and matched-cohort estimates are exported separately.
 Request connected components preserve dependence in both arms; capability
-intervals are retained as sensitivity estimates. See docs/context_ablation.md.
+intervals are retained as sensitivity estimates. See `docs/context_ablation.md`.
 """
 
 from __future__ import annotations
@@ -116,7 +116,23 @@ def select_arm_runs(
     run_group_id: str,
     include_smoke: bool,
 ) -> dict[tuple[str, str], dict[str, Any]]:
-    """Latest complete, fully covered run per (model, item_context)."""
+    """Return the latest complete, fully covered run per (model, item_context).
+
+    Args:
+        registry_rows: Run-registry rows to choose from; rows of another
+            dataset or benchmark variant than the `pure` `must` cell are
+            skipped.
+        run_group_id: Only rows of this run group are considered.
+        include_smoke: Whether runs whose ID starts with `smoke-` may be
+            selected.
+
+    Returns:
+        The selected registry row keyed by `(model, item_context)`, where a
+        blank `item_context` reads as bare. A run qualifies when its status is
+        `complete` and its `deterministic_item_coverage` is at least 1; among
+        qualifying runs the latest `started_at_utc` wins, with the run ID as
+        tie-breaker.
+    """
     selected: dict[tuple[str, str], dict[str, Any]] = {}
     for row in registry_rows:
         if (
@@ -156,7 +172,31 @@ def task2_scores(
     *,
     sampling_plan: eu.SamplingPlan,
 ) -> list[dict[str, Any]]:
-    """Deterministic Task 2 score rows with the item's author marker joined on."""
+    """Return deterministic Task 2 score rows with the item's author marker joined on.
+
+    Each raw row is resolved to its current benchmark item by the recorded
+    source statement and modality (narrowed by requirement ID, original
+    requirement and corpus when recorded), falling back to the item ID for
+    records without source fields.
+
+    Args:
+        benchmark: Current benchmark items of the `pure` cell.
+        raw_rows: Raw model outputs of one run; only deterministic Task 2 rows
+            are scored, after deduplicating retries.
+        sampling_plan: Sampling plan passed to `eu.build_uq_scores`.
+
+    Returns:
+        One observation per deterministic raw row, carrying its score fields
+        when the row could be scored, a `source_identity` of the form
+        `corpus::requirement`, the gold modality, the `context_marker`, and a
+        `response_status` that is `ok` for scored rows and the parse status (or
+        `missing_score`) otherwise.
+
+    Raises:
+        ValueError: If a raw row's source matches no item or several items, its
+            item ID is unknown, or its source differs from the current benchmark
+            item.
+    """
     by_id = {str(r["item_id"]): r for r in benchmark}
     by_source = {}
     for item in benchmark:
@@ -255,6 +295,21 @@ def task2_scores(
 
 
 def stratum_rows(rows: list[dict[str, Any]], stratum: str) -> list[dict[str, Any]]:
+    """Restrict observation rows to one analysis stratum.
+
+    Args:
+        rows: Observation rows of one arm.
+        stratum: `all` keeps every row, `weak_intent` the rows with gold
+            modality `nice_to_have`, `marker_<marker>` the rows with that author
+            marker, and `modality_<modality>` the rows with that gold modality.
+            Two strata joined by `/` are applied in turn.
+
+    Returns:
+        The rows in the stratum (the input list itself for `all`).
+
+    Raises:
+        ValueError: If `stratum` is not one of these forms.
+    """
     if "/" in stratum:
         first, second = stratum.split("/", 1)
         return stratum_rows(stratum_rows(rows, first), second)
@@ -295,6 +350,22 @@ def arm_row(
     *,
     bootstrap_samples: int,
 ) -> dict[str, Any]:
+    """Build the full-arm descriptive row of one context arm in one stratum.
+
+    Args:
+        model: Model name written to the row.
+        arm: Item-context arm (`bare` or `document`) written to the row.
+        stratum: Stratum name; the weak-intent strict strengthening rate at
+            confidence 0.90 is only filled for `weak_intent`.
+        run_id: Run ID of the arm, written to the row.
+        rows: Observation rows of the arm in this stratum, failed ones included.
+        bootstrap_samples: Cluster-bootstrap resamples for the intervals.
+
+    Returns:
+        A row with the `ARM_FIELDS` columns, computed over the rows that are
+        eligible for label accuracy. An interval is left blank when fewer than
+        two clusters (or, for the seed interval, two capabilities) are readable.
+    """
     observed = rows
     rows = [r for r in rows if metric_eligible(r, "label_accuracy")]
     ci = eu.text_over_commitment_ci_fields(
@@ -351,6 +422,18 @@ def _finite(value: float) -> float | str:
 
 
 def metric_eligible(row, metric):
+    """Return whether an observation row can be scored for a metric.
+
+    Args:
+        row: Observation row from `task2_scores`.
+        metric: Metric name from `METRICS`; every metric except
+            `label_accuracy` also needs a readable text modality.
+
+    Returns:
+        True when the response succeeded, the predicted modality is one of
+        `MODALITIES` and, for the text strengthening metrics, the text modality
+        parsed.
+    """
     valid = (
         row.get("response_status", "ok") == "ok"
         and row.get("pred_modality") in MODALITIES
@@ -368,6 +451,22 @@ def delta_rows(
     *,
     bootstrap_samples: int,
 ) -> list[dict[str, Any]]:
+    """Compute `document - bare` per metric on the jointly eligible exact items.
+
+    Args:
+        model: Model name written to each row.
+        stratum: Stratum name written to each row.
+        bare: Observation rows of the bare arm in this stratum.
+        document: Observation rows of the document arm in this stratum.
+        bootstrap_samples: Bootstrap resamples for the delta intervals; zero or
+            fewer marks them as disabled.
+
+    Returns:
+        One row per metric in `METRICS` with the `DELTA_FIELDS` columns: both
+        arms on the matched cohort and in full, the delta with an interval
+        clustered on connected request components and a seed-clustered
+        sensitivity interval, and the pairing and exclusion counts.
+    """
     rows: list[dict[str, Any]] = []
     for metric_name, metric in METRICS:
 
@@ -462,6 +561,24 @@ def build_tables(
     bootstrap_samples: int,
     sampling_plan: eu.SamplingPlan,
 ) -> dict[str, Any]:
+    """Build the arm, delta and provenance tables of the context ablation.
+
+    Args:
+        benchmark: Current benchmark items of the `pure` cell.
+        registry_rows: Run-registry rows; `select_arm_runs` picks one run per
+            model and item context from them.
+        raw_rows: Raw model outputs of all candidate runs.
+        run_group_id: Run group whose runs are compared.
+        include_smoke: Whether smoke runs may be selected.
+        bootstrap_samples: Bootstrap resamples for the per-arm and delta
+            intervals.
+        sampling_plan: Sampling plan the compared runs used.
+
+    Returns:
+        A dict with `arms` (rows of `ARM_FIELDS`), `deltas` (rows of
+        `DELTA_FIELDS`, one set per model and stratum) and `provenance` (one
+        entry per selected run).
+    """
     selected = select_arm_runs(
         registry_rows, run_group_id=run_group_id, include_smoke=include_smoke
     )
@@ -530,6 +647,18 @@ def build_tables(
 
 
 def write_outputs(tables: dict[str, Any], output_prefix: Path) -> dict[str, Path]:
+    """Write the context ablation tables as CSV, Markdown and provenance JSON.
+
+    Args:
+        tables: Output of `build_tables`.
+        output_prefix: Path prefix; the arm table goes to `<prefix>.csv`, the
+            deltas to `<prefix>_deltas.csv`, the report to `<prefix>.md` and the
+            run provenance to `<prefix>_provenance.json`.
+
+    Returns:
+        The written paths under the keys `csv`, `deltas_csv`, `markdown` and
+        `provenance`.
+    """
     csv_path = output_prefix.with_suffix(".csv")
     delta_csv_path = output_prefix.with_name(f"{output_prefix.name}_deltas.csv")
     md_path = output_prefix.with_suffix(".md")
@@ -575,6 +704,14 @@ def write_outputs(tables: dict[str, Any], output_prefix: Path) -> dict[str, Path
 
 
 def main(argv: list[str] | None = None) -> dict[str, Path]:
+    """Compare the bare and document arms of the `pure` cell from the command line.
+
+    Args:
+        argv: Command-line arguments; `None` reads `sys.argv`.
+
+    Returns:
+        The written output paths, as returned by `write_outputs`.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run-group-id", default=DEFAULT_RUN_GROUP_ID)
     parser.add_argument("--include-smoke", action="store_true")

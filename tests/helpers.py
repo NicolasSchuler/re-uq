@@ -21,10 +21,23 @@ def raw_record(
     sample_kind="deterministic",
     parse_status="ok",
 ):
-    """Build a canonical raw completion record for a benchmark ``item``.
+    """Build a canonical raw completion record for a benchmark `item`.
 
     Only the fields that tests vary are exposed as parameters; every other
     field is fixed to the canonical value the inline copies used.
+
+    Args:
+        item: Benchmark item row; supplies `item_id`, `seed_id`,
+            `source_modality` and, when present, `template_id`.
+        task: Task name written to the record, such as `task1` or `task2`.
+        parsed_json: Parsed model answer stored under `parsed_json`.
+        run_id: Run ID written to the record.
+        model: Model name written to the record.
+        sample_kind: `deterministic` or `stochastic`.
+        parse_status: Parse outcome written to the record; `ok` by default.
+
+    Returns:
+        The raw record as a fresh dict.
     """
     record = {
         "run_id": run_id,
@@ -52,14 +65,22 @@ def raw_record(
 
 @dataclass(frozen=True, slots=True)
 class FakeMessage:
-    """The `message` of one chat-completion choice."""
+    """The `message` of one chat-completion choice.
+
+    Attributes:
+        content: Text of the model's reply.
+    """
 
     content: str
 
 
 @dataclass(frozen=True, slots=True)
 class FakeChoice:
-    """One entry of a chat-completion `choices` list."""
+    """One entry of a chat-completion `choices` list.
+
+    Attributes:
+        message: The choice's message.
+    """
 
     message: FakeMessage
 
@@ -69,8 +90,13 @@ class FakeResponse:
     """Minimal stand-in for an OpenAI chat-completion response object.
 
     `eval_utils.chat_completion` reads exactly two things off the SDK response:
-    ``response.choices[0].message.content`` and ``response.model_dump(mode=...)``.
-    Tests vary only the dumped payload, so that is the single parameter here.
+    `response.choices[0].message.content` and `response.model_dump(mode=...)`.
+    Both are fields here, but tests so far vary only the dumped payload and keep
+    the default `content`, an empty JSON object.
+
+    Attributes:
+        content: Reply text returned as `choices[0].message.content`.
+        dump: Payload a copy of which `model_dump` returns.
     """
 
     content: str = "{}"

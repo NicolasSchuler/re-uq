@@ -41,7 +41,14 @@ LEGACY_ROW = {
 
 
 def raw_attempt(**overrides: Any) -> dict[str, Any]:
-    """One raw row with a complete identity."""
+    """Return one raw row with a complete identity.
+
+    Args:
+        **overrides: Fields that replace or extend the default row.
+
+    Returns:
+        The row as a fresh dict.
+    """
     row = {
         "run_id": "full-1",
         "provider_id": "prov_a",
@@ -59,7 +66,14 @@ def raw_attempt(**overrides: Any) -> dict[str, Any]:
 
 
 def job_for(row: dict[str, Any]) -> dict[str, Any]:
-    """The planned job a runner would build for the same observation."""
+    """Return the planned job a runner would build for the same observation.
+
+    Args:
+        row: Raw row whose identity fields the job copies.
+
+    Returns:
+        The job, with the row's item ID wrapped in an `item` dict.
+    """
     return {
         "provider_id": row.get("provider_id", ""),
         "profile_id": row.get("profile_id", ""),
@@ -73,10 +87,17 @@ def job_for(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def sampled_real_raw_rows(limit: int = 200) -> tuple[list[dict[str, Any]], str]:
-    """A sample of the checkout's own raw rows, or `[]` when none are present.
+    """Return a sample of the checkout's own raw rows, or `([], "")` when none exist.
 
     The paper's raw JSONL files are large and not part of the repository, so
     this reads only the first `limit` lines of the first file that exists.
+
+    Args:
+        limit: Maximum number of lines read from the file.
+
+    Returns:
+        The parsed rows and the path they were read from; `([], "")` when no
+        raw file with rows exists.
     """
     processed = eu.project_root() / "data/processed"
     for path in sorted(processed.glob("model_outputs_raw*.jsonl")):
@@ -381,7 +402,7 @@ class AttemptLedgerTest(unittest.TestCase):
 
     @staticmethod
     def _retried_rows() -> list[dict[str, Any]]:
-        """One request that failed and was re-requested successfully on resume."""
+        """Return one failed request and its successful re-request on resume."""
         return [
             raw_attempt(parse_status="request_error", retry_count=1, latency_s=2.0),
             raw_attempt(parse_status="ok", retry_count=0, latency_s=1.0),

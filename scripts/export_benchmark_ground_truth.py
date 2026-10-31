@@ -1,11 +1,11 @@
 """Export the step-by-step benchmark ground-truth document.
 
-Writes ``docs/benchmark_ground_truth.md``: a human-readable, step-by-step
+Writes `docs/benchmark_ground_truth.md`: a human-readable, step-by-step
 derivation of every benchmark item, from the source corpora through seed
 selection and capability extraction to the four controlled modality variants
 and their gold labels. The document is generated from the same code path that
-builds the benchmark (``eval_utils.source_statement``,
-``eval_utils.build_benchmark_items``, ``eval_utils.WEAK_MODALITY_PROBE_TEMPLATES``)
+builds the benchmark (`eval_utils.source_statement`,
+`eval_utils.build_benchmark_items`, `eval_utils.WEAK_MODALITY_PROBE_TEMPLATES`)
 and from the shipped processed tables, so it cannot drift from the pipeline.
 
 Run:
@@ -218,6 +218,22 @@ def _doc_link(root: Path, path: Path) -> str:
 
 
 def build_document(root: Path, nice_seed: str | None, mlm_seed: str | None) -> str:
+    """Render the full ground-truth document for both datasets.
+
+    The document is the header, one derivation section per dataset (`nice` and
+    `mlm_tapt`, each with its `MUST` and `SHALL` items) and the validation
+    section listing the review tables.
+
+    Args:
+        root: Project root holding `data/processed`, `docs` and `outputs`.
+        nice_seed: Seed id of the worked example for the `nice` dataset; None
+            picks the first selected seed.
+        mlm_seed: Seed id of the worked example for the `mlm_tapt` dataset; None
+            picks the first selected seed.
+
+    Returns:
+        The Markdown document, ending in a single newline.
+    """
     processed = root / "data/processed"
     sections = [
         DOC_HEADER,
@@ -343,6 +359,15 @@ def _validation_section(root: Path) -> str:
 
 
 def main(argv: list[str] | None = None) -> Path:
+    """Write the ground-truth document and report where it went.
+
+    Args:
+        argv: Command-line arguments; None reads them from `sys.argv`.
+
+    Returns:
+        The path of the written document; a relative `--output` is resolved
+        against the project root.
+    """
     parser = argparse.ArgumentParser(
         description="Export the step-by-step benchmark ground-truth document."
     )

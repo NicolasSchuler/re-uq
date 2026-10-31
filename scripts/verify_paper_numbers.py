@@ -1,18 +1,18 @@
 """Check the paper's result tables against the archived per-item scores, without MLX.
 
-The full refresh (``rerun_all.py --only analysis --refresh-analysis``) rebuilds
+The full refresh (`rerun_all.py --only analysis --refresh-analysis`) rebuilds
 every score and needs Apple Silicon for the embeddings. This check does not
 re-embed anything. It reads the per-item score rows of the selected runs
-(``outputs/evaluation_*/uq_scores.csv``, shipped in the Zenodo raw archive),
+(`outputs/evaluation_*/uq_scores.csv`, shipped in the Zenodo raw archive),
 recomputes the counts behind Tables 4-6 per model and pooled with its own code,
-and compares them with the tracked ``paper_per_model_rq_table.csv`` and
-``paper_per_model_modality_pooled.csv``:
+and compares them with the tracked `paper_per_model_rq_table.csv` and
+`paper_per_model_modality_pooled.csv`:
 
     .venv/bin/python scripts/verify_paper_numbers.py
     .venv/bin/python scripts/verify_paper_numbers.py --raw-check
 
-``--raw-check`` also re-applies the wording rules to the models' raw Task 2
-answers (``data/processed/model_outputs_raw*``) and confirms that they reproduce
+`--raw-check` also re-applies the wording rules to the models' raw Task 2
+answers (`data/processed/model_outputs_raw*`) and confirms that they reproduce
 the strict and broad verdicts in the score rows. Confidence intervals and the
 embedding classifier are not checked; they need the full refresh.
 """
@@ -54,10 +54,27 @@ RQ_AUROCS = ("task2_meaning_variation_auroc", "task2_verbalized_confidence_auroc
 
 
 def truthy(value: Any) -> bool:
+    """Return whether a CSV cell holds a true flag.
+
+    Args:
+        value: Cell value from a score CSV; `1`, `1.0` and `true` count as true,
+            ignoring case and surrounding whitespace.
+
+    Returns:
+        True for those spellings, False for anything else.
+    """
     return str(value).strip().lower() in {"1", "1.0", "true"}
 
 
 def number(value: Any) -> float | None:
+    """Parse a CSV cell as a float.
+
+    Args:
+        value: Cell value to convert; empty or non-numeric cells are not numbers.
+
+    Returns:
+        The float value, or None when the cell cannot be converted.
+    """
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -65,7 +82,16 @@ def number(value: Any) -> float | None:
 
 
 def auroc(labels: list[int], scores: list[float]) -> float | None:
-    """Mann-Whitney AUROC; tied scores count half. None without both classes."""
+    """Return the Mann-Whitney AUROC; tied scores count half.
+
+    Args:
+        labels: Class label per item; a truthy label marks the positive class.
+        scores: Score per item, aligned with `labels`; higher scores rank an item
+            as more likely positive.
+
+    Returns:
+        The AUROC, or None without both classes.
+    """
     positives = [s for label, s in zip(labels, scores, strict=True) if label]
     negatives = [s for label, s in zip(labels, scores, strict=True) if not label]
     if not positives or not negatives:
@@ -85,6 +111,22 @@ def auroc(labels: list[int], scores: list[float]) -> float | None:
 
 
 def load_score_rows(manifest: Path, root: Path) -> list[dict[str, str]]:
+    """Load the per-item score rows of every run in the selected-runs manifest.
+
+    Args:
+        manifest: Selected-runs CSV; each entry's `analysis_dir` locates its
+            `uq_scores.csv`, and its `model`, `dataset_id` and
+            `benchmark_variant` label the rows.
+        root: Project root that the `analysis_dir` paths are relative to.
+
+    Returns:
+        The score rows of all runs, each tagged with its `model` and with its
+        `cell` (`dataset_id/benchmark_variant`).
+
+    Raises:
+        SystemExit: If any run's `uq_scores.csv` is missing, which means the
+            Zenodo raw archive has not been unpacked.
+    """
     rows: list[dict[str, str]] = []
     missing: list[str] = []
     for entry in eu.read_csv_rows(manifest):
@@ -106,7 +148,16 @@ def load_score_rows(manifest: Path, root: Path) -> list[dict[str, str]]:
 
 
 def rq_counts(rows: Iterable[Mapping[str, str]]) -> dict[str, Any]:
-    """Numerators, denominators and AUROCs of Tables 4-5 for one group of rows."""
+    """Count the numerators, denominators and AUROCs of Tables 4-5 for one group.
+
+    Args:
+        rows: Score rows of one group (one model, or all models pooled), tagged
+            as by `load_score_rows`.
+
+    Returns:
+        Mapping from each name in `RQ_RATES` to an `(n, denominator)` pair and
+        from each name in `RQ_AUROCS` to an AUROC, or None when it is undefined.
+    """
     rows = list(rows)
 
     def select(task: str, method: str) -> list[Mapping[str, str]]:
@@ -185,7 +236,17 @@ def rq_counts(rows: Iterable[Mapping[str, str]]) -> dict[str, Any]:
 
 
 def modality_counts(rows: Iterable[Mapping[str, str]]) -> dict[str, dict[str, int]]:
-    """Strict and broad n/N per source modality (Table 6)."""
+    """Count strict and broad n/N per source modality (Table 6).
+
+    Only Task 2 verbalized-confidence rows with a readable modality cue count.
+
+    Args:
+        rows: Score rows of one group, as passed to `rq_counts`.
+
+    Returns:
+        Mapping from source modality to its `strict`, `broad` and `denominator`
+        counts.
+    """
     counts: dict[str, dict[str, int]] = defaultdict(
         lambda: {"strict": 0, "broad": 0, "denominator": 0}
     )
@@ -204,7 +265,22 @@ def modality_counts(rows: Iterable[Mapping[str, str]]) -> dict[str, dict[str, in
 def compare(
     rows: list[dict[str, str]], rq_table: Path, modality_table: Path
 ) -> list[tuple[str, str, str, str, bool]]:
-    """One (group, metric, recomputed, tracked, match) line per checked number."""
+    """Return one (group, metric, recomputed, tracked, match) line per checked number.
+
+    Each model and the pooled `all` group are checked. A group without a tracked
+    row yields a single failing `row` line instead of its metric lines.
+
+    Args:
+        rows: Score rows from `load_score_rows`.
+        rq_table: Tracked `paper_per_model_rq_table.csv`; only its rows with
+            dataset and variant `all` are compared.
+        modality_table: Tracked `paper_per_model_modality_pooled.csv`; only its
+            rows with dataset and variant `all` are compared.
+
+    Returns:
+        One tuple per checked number: group, metric name, recomputed value,
+        tracked value (both as display strings) and whether they match.
+    """
     by_model: dict[str, list[dict[str, str]]] = defaultdict(list)
     for r in rows:
         by_model[r["model"]].append(r)
@@ -263,7 +339,22 @@ def compare(
 def raw_check(
     rows: list[dict[str, str]], manifest: Path, root: Path
 ) -> tuple[int, list[str]]:
-    """Re-apply the wording rules to the raw Task 2 answers; return checks, mismatches."""
+    """Re-apply the wording rules to the raw Task 2 answers; return checks, mismatches.
+
+    Only deterministic answers that parsed and have a matching score row are
+    re-scored.
+
+    Args:
+        rows: Score rows from `load_score_rows`; their Task 2
+            verbalized-confidence verdicts are the reference.
+        manifest: Selected-runs CSV naming the dataset, variant and run whose raw
+            store is read.
+        root: Project root that holds the raw stores.
+
+    Returns:
+        The number of re-scored answers and one `run_id item_id field` entry per
+        strict or broad verdict that differs from its score row.
+    """
     scored = {
         (r["run_id"], r["item_id"]): r
         for r in rows
@@ -301,6 +392,11 @@ def raw_check(
 
 
 def main() -> None:
+    """Run the table check, and the raw check with `--raw-check`, then exit.
+
+    Mismatches are printed; the process exits with status 1 if any number or
+    raw verdict mismatches and 0 otherwise.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--manifest",

@@ -1,9 +1,9 @@
 """Compact append-only raw JSONL files into their Parquet siblings.
 
-Every raw file under ``data/processed`` (model outputs, Task 3 audits, run
+Every raw file under `data/processed` (model outputs, Task 3 audits, run
 events, request transcripts) is appended one JSON line at a time while a run
 is in flight. Once the runs are finished, this moves the accumulated lines into
-``<stem>.parquet`` (zstd, ~40x smaller) and truncates the JSONL to an empty
+`<stem>.parquet` (zstd, ~40x smaller) and truncates the JSONL to an empty
 tail. Readers (`eval_utils.read_jsonl`, `read_raw_store`) return both halves,
 so nothing downstream changes; a later run appends to the empty tail and the
 next compaction folds it in.
@@ -15,7 +15,7 @@ next compaction folds it in.
 Never run this while a generation run is appending to the same file: the
 compaction takes the file's exclusive lock, so a runner would simply wait,
 but a runner that crashed mid-line would lose that line's tail. Refuses a
-file whose ``.lock`` sidecar is currently held.
+file whose `.lock` sidecar is currently held.
 """
 
 from __future__ import annotations
@@ -40,6 +40,15 @@ DEFAULT_GLOBS = (
 
 
 def default_targets(root: Path) -> list[Path]:
+    """List every raw JSONL file the default compaction covers.
+
+    Args:
+        root: Project root the `DEFAULT_GLOBS` patterns are matched under.
+
+    Returns:
+        The matching paths, sorted within each pattern and deduplicated in
+        pattern order.
+    """
     seen: dict[Path, None] = {}
     for pattern in DEFAULT_GLOBS:
         for path in sorted(root.glob(pattern)):
@@ -48,7 +57,16 @@ def default_targets(root: Path) -> list[Path]:
 
 
 def lock_is_held(path: Path) -> bool:
-    """Whether another process currently holds the raw file's advisory lock."""
+    """Return whether another process currently holds the raw file's advisory lock.
+
+    Args:
+        path: Raw JSONL file; its `<path>.lock` sidecar is probed with a
+            non-blocking exclusive lock that is released straight away.
+
+    Returns:
+        True if the lock is held elsewhere, False if it is free or the
+        sidecar does not exist.
+    """
     lock_path = Path(str(path) + ".lock")
     if not lock_path.exists():
         return False
@@ -62,6 +80,15 @@ def lock_is_held(path: Path) -> bool:
 
 
 def human_size(size: int) -> str:
+    """Format a byte count for the progress lines.
+
+    Args:
+        size: Number of bytes.
+
+    Returns:
+        The size in B, KB, MB or GB (powers of 1024), right-aligned to seven
+        characters with one decimal.
+    """
     value = float(size)
     for unit in ("B", "KB", "MB", "GB"):
         if value < 1024 or unit == "GB":
@@ -71,6 +98,18 @@ def human_size(size: int) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Compact the given raw files, or every default target, and report sizes.
+
+    Files without a JSONL tail are skipped; files whose lock is held or whose
+    compaction raises are reported and counted as failures, and the loop moves
+    on to the next file.
+
+    Args:
+        argv: Command-line arguments; None reads `sys.argv`.
+
+    Returns:
+        The process exit status: 1 if any file was busy or failed, else 0.
+    """
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
         "paths",

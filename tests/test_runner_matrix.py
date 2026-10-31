@@ -1,8 +1,8 @@
 """Characterization tests for the provider-matrix runner loops and lifecycle.
 
-``run_experiment_from_config.run_from_config`` fans a single config out over
+`run_experiment_from_config.run_from_config` fans a single config out over
 profiles x models x datasets x benchmark variants. The existing CLI smoke test
-in ``test_eval_utils`` only covers a single cell, so it cannot see whether the
+in `test_eval_utils` only covers a single cell, so it cannot see whether the
 per-cell state (run id, output routing, registry identity, live progress) stays
 correctly separated once more than one cell runs in the same process.
 
@@ -11,7 +11,7 @@ complete artifact set a fake multi-cell run produces, so a refactor of the
 runner has to keep every cell writing the same rows to the same places.
 
 The second half pins the lifecycle protocol both runners now share through
-``scripts/runner_lifecycle.py``: the CLI option contract, the resume rules
+`scripts/runner_lifecycle.py`: the CLI option contract, the resume rules
 (a run id must exist and match, and its start time and provenance survive the
 resume), terminal-state reconciliation after a failure or a Ctrl-C, and the
 per-cell lease that stops a second runner from paying for the same cell twice.
@@ -68,7 +68,21 @@ def _run_config(
     models: list[str] = MODELS,
     logging_overrides: dict[str, object] | None = None,
 ) -> Path:
-    """Write a matrix run config and return its path."""
+    """Write a matrix run config and return its path.
+
+    The config has one fake profile with concurrency 1 and batch size 2.
+
+    Args:
+        root: Directory the config is written to, as `run_config.json`.
+        datasets: Datasets of the matrix.
+        variants: Benchmark variants of the matrix.
+        models: Models of the fake profile.
+        logging_overrides: Entries that replace or extend the default
+            `logging` block.
+
+    Returns:
+        The path of the written config.
+    """
     path = root / "run_config.json"
     path.write_text(
         json.dumps(
@@ -102,7 +116,15 @@ def _run_config(
 
 
 def _runner_args(**overrides: object) -> mock.Mock:
-    """Build the argparse-shaped options object both runner front doors pass."""
+    """Build the argparse-shaped options object both runner front doors pass.
+
+    Args:
+        **overrides: Options that replace the defaults (a fake smoke run over
+            all models of the `fake` profile).
+
+    Returns:
+        A `mock.Mock` with one attribute per option.
+    """
     defaults: dict[str, object] = {
         "profile": "fake",
         "model": None,
@@ -132,7 +154,12 @@ def _runner_args(**overrides: object) -> mock.Mock:
 
 
 def _scaffold(root: Path) -> None:
-    """Create the temp project layout with one benchmark CSV per matrix cell."""
+    """Create the temp project layout with one benchmark CSV per matrix cell.
+
+    Args:
+        root: Temporary directory that becomes the project root; the prompts
+            are copied from this checkout.
+    """
     (root / "prompts").mkdir(parents=True)
     (root / "data/processed").mkdir(parents=True)
     for name in (
@@ -591,7 +618,15 @@ TASK3_ONLY_CLI_OPTIONS: dict[str, CliOption] = {
 
 
 def _cli_options(parser: argparse.ArgumentParser) -> dict[str, CliOption]:
-    """Every option of `parser` except `-h`, as the pinned tuple shape."""
+    """Return every option of `parser` except `-h`, as the pinned tuple shape.
+
+    Args:
+        parser: Runner argument parser to describe.
+
+    Returns:
+        A `CliOption` tuple (flag, default, type name, choices, required, help)
+        per option, keyed by its destination.
+    """
     options: dict[str, CliOption] = {}
     # `_actions` is the only complete view argparse exposes.
     for action in parser._actions:
@@ -690,7 +725,15 @@ class RunnerCliParityTest(unittest.TestCase):
 
 
 def _processed_tree(root: Path) -> dict[str, bytes]:
-    """Every file under `data/processed`, so a test can prove nothing changed."""
+    """Return every file under `data/processed`, so a test can prove nothing changed.
+
+    Args:
+        root: Project root whose `data/processed` tree is read.
+
+    Returns:
+        The bytes of each file keyed by its path relative to `data/processed`;
+        empty when the directory does not exist.
+    """
     base = root / "data/processed"
     if not base.exists():
         return {}
@@ -702,7 +745,7 @@ def _processed_tree(root: Path) -> dict[str, bytes]:
 
 
 def _dead_pid() -> int:
-    """A pid that is guaranteed not to be running: a child we already reaped."""
+    """Return a pid that is guaranteed not to be running: a child we already reaped."""
     process = subprocess.Popen([sys.executable, "-c", ""])
     process.wait()
     return process.pid
@@ -1105,7 +1148,12 @@ class Task3RunnerLifecycleTest(unittest.TestCase):
         return rows[0]
 
     def _clone_source_run(self, new_run_id: str) -> None:
-        """A second complete Task 2 run a resume could bind to instead."""
+        """Add a second complete Task 2 run a resume could bind to instead.
+
+        Args:
+            new_run_id: Run ID of the copy; the source run's Task 2 raw records
+                are appended again under it.
+        """
         raw_path = self.root / "data/processed/model_outputs_raw.jsonl"
         clones = [
             dict(record, run_id=new_run_id)

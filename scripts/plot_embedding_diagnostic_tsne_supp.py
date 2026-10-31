@@ -2,7 +2,7 @@
 
 Two 2-D t-SNE maps of the requirement-only MLX embeddings, colored by source
 modality (a) and by wording-check result (b). The AUROC figure is
-``plot_embedding_diagnostic_figure_v2.py``.
+`plot_embedding_diagnostic_figure_v2.py`.
 
 Reuses the projection helpers of the three-panel script, so both use the same
 subsample and projection.
@@ -41,6 +41,11 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 def main() -> None:
+    """Draw the two projection maps and save them as PDF and PNG.
+
+    The PDF is written to `--output` without a creation date, so a rerun on
+    the same inputs leaves it byte-identical.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--manifest",

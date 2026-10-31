@@ -10,8 +10,8 @@ reconstructs the exchange. The full response body is discarded entirely once
 `eval_utils.extract_response_fields` has taken the provenance off it.
 
 This module writes that exchange to a sidecar beside the run log,
-``data/processed/logs/<run_id>.transcript.jsonl``, in the same family as
-``<run_id>.resolved.yaml`` and ``<run_id>.resume.json``.
+`data/processed/logs/<run_id>.transcript.jsonl`, in the same family as
+`<run_id>.resolved.yaml` and `<run_id>.resume.json`.
 
 One row per provider CALL and per attempt, not per item: a 16-item request
 stores its prompt once instead of sixteen times, and the transport attempts
@@ -20,7 +20,7 @@ their own. API keys never appear: the key lives on the client, not in the
 payload that is hashed and recorded here.
 
 Writing is opt-out through the run logging config key
-``write_request_transcripts`` (see `eval_utils.DEFAULT_RUN_LOGGING`).
+`write_request_transcripts` (see `eval_utils.DEFAULT_RUN_LOGGING`).
 """
 
 from __future__ import annotations
@@ -83,7 +83,15 @@ ATTEMPT_FINAL = "final"
 
 
 def transcript_path(root: str | Path, run_id: str) -> Path:
-    """Sibling of `eval_utils.run_log_path` holding this run's transcript."""
+    """Return the sibling of `eval_utils.run_log_path` holding this run's transcript.
+
+    Args:
+        root: Project root that contains `data/processed/logs`.
+        run_id: Run the transcript belongs to; made filesystem-safe for the name.
+
+    Returns:
+        The path `data/processed/logs/<run_id>.transcript.jsonl` under `root`.
+    """
     return (
         Path(root)
         / "data/processed/logs"
@@ -96,6 +104,9 @@ class TranscriptWriter:
 
     Threads share one writer: `eval_utils.append_jsonl` appends under an
     advisory file lock, so concurrent batches cannot interleave inside a line.
+
+    Args:
+        path: Transcript JSONL file the rows are appended to.
     """
 
     __slots__ = ("path",)
@@ -107,7 +118,17 @@ class TranscriptWriter:
     def for_run(
         cls, root: str | Path, run_id: str, *, enabled: bool = True
     ) -> TranscriptWriter | None:
-        """Writer for `run_id`, or None when transcripts are turned off."""
+        """Create the writer for `run_id`, or None when transcripts are turned off.
+
+        Args:
+            root: Project root that contains `data/processed/logs`.
+            run_id: Run whose transcript sidecar the writer appends to.
+            enabled: Whether transcripts are written for this run.
+
+        Returns:
+            A writer for `transcript_path(root, run_id)`, or None when
+            `enabled` is false.
+        """
         if not enabled:
             return None
         return cls(transcript_path(root, run_id))
@@ -123,10 +144,18 @@ class TranscriptWriter:
     ) -> None:
         """Write the attempts behind one provider call.
 
-        `job` is any planned completion job of the call (the first one, for a
-        batch) and supplies the run identity; `completion` is the dict the
-        completion function returned, carrying `request_payload`, the response
-        body, and the errors of any attempts that were retried.
+        Each retried attempt in `attempt_errors` gets its own row before the
+        row for the final attempt.
+
+        Args:
+            job: Any planned completion job of the call (the first one, for a
+                batch); supplies the run identity.
+            completion: The dict the completion function returned, carrying
+                `request_payload`, the response body, and the errors of any
+                attempts that were retried.
+            batch_id: Batch wrapper identifier; empty for a single-item call.
+            batch_size: Number of items the call carried.
+            request_indices: Item indices the call covered, stored as ints.
         """
         started_at = str(completion.get("started_at_utc") or eu.utc_now_iso())
         base = {

@@ -50,6 +50,16 @@ DRIFT_COLORS = {
 
 
 def drift_status(row: dict[str, str]) -> str:
+    """Classify an item's deterministic output by text-level strengthening.
+
+    Args:
+        row: Item or score row with `strict_text_overcommit` and
+            `text_overcommit`.
+
+    Returns:
+        `strict_text_oc` for strict strengthening, `broad_text_oc` for broad
+        strengthening only, and `clean` otherwise.
+    """
     if eu.is_truthy_strict(row.get("strict_text_overcommit", "")):
         return "strict_text_oc"
     if eu.is_truthy_strict(row.get("text_overcommit", "")):
@@ -58,14 +68,48 @@ def drift_status(row: dict[str, str]) -> str:
 
 
 def read_csv_by_key(path: Path, key: str) -> dict[str, dict[str, str]]:
+    """Read a CSV file into rows keyed by one column.
+
+    Args:
+        path: CSV file with a header row.
+        key: Column whose value keys each row; a later duplicate overwrites an
+            earlier row.
+
+    Returns:
+        The rows keyed by their `key` value.
+    """
     return {row[key]: row for row in eu.read_csv_rows(path)}
 
 
 def is_tfidf_backend(backend_label: str) -> bool:
+    """Check whether a cache's backend label names the TF-IDF proxy.
+
+    Args:
+        backend_label: Embedding backend label from a cache manifest.
+
+    Returns:
+        True for `tfidf` and `eu.ACSE_PROXY_EMBEDDING_BACKEND`.
+    """
     return backend_label in {"tfidf", eu.ACSE_PROXY_EMBEDDING_BACKEND}
 
 
 def manifest_rows(path: Path, backend_prefix: str) -> list[dict[str, str]]:
+    """Read the cache inventory rows of one embedding backend.
+
+    Checkout-relative `analysis_dir` and `artifact_dir` entries are made
+    absolute under the project root.
+
+    Args:
+        path: Cache inventory CSV, such as the selected-run manifest.
+        backend_prefix: Prefix the `embedding_backend` must start with, such as
+            `mlx:`.
+
+    Returns:
+        The matching rows with absolute directories.
+
+    Raises:
+        ValueError: If no row matches the prefix.
+    """
     rows = [
         row
         for row in eu.read_csv_rows(path)
@@ -89,6 +133,27 @@ def manifest_rows(path: Path, backend_prefix: str) -> list[dict[str, str]]:
 def load_embeddings_and_rows(
     rows: list[dict[str, str]],
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """Stack the cached sample embeddings of several runs, one row per sample.
+
+    Each sample row is joined to its item's source modality, drift status,
+    deterministic strengthening flags and score. Per-run TF-IDF caches do not
+    share one feature space, so when they are selected all sample texts are
+    embedded again with one shared TF-IDF fit.
+
+    Args:
+        rows: Cache inventory rows from `manifest_rows`.
+
+    Returns:
+        The embedding matrix and the sample rows, aligned by
+        `global_embedding_index`; an empty `(0, 1)` matrix when no rows are
+        given.
+
+    Raises:
+        FileNotFoundError: If a cache file is missing.
+        ValueError: If a cache holds another number of embeddings than sample
+            rows, TF-IDF caches are mixed with other backends, or the cached
+            embedding widths differ.
+    """
     matrices: list[np.ndarray] = []
     sample_rows: list[dict[str, Any]] = []
     offset = 0
@@ -199,6 +264,18 @@ def plot_grouped_3d(
     point_size: float,
     axis_prefix: str,
 ) -> None:
+    """Plot projected samples in 3D, coloured by one field.
+
+    Args:
+        rows: Sample rows with `pc1`, `pc2` and `pc3`.
+        output_path: PNG path; parent directories are created.
+        title: Figure title.
+        color_field: Row field whose values form the colour groups.
+        color_map: Colour per group value; other values are drawn slate grey.
+        alpha: Point opacity.
+        point_size: Point size.
+        axis_prefix: Axis label prefix, such as `PC` or `t-SNE`.
+    """
     fig = plt.figure(figsize=(10.8, 8.2), constrained_layout=True)
     ax = fig.add_subplot(111, projection="3d")
     for label in sorted({str(row[color_field]) for row in rows}):
@@ -228,6 +305,12 @@ def plot_grouped_3d(
 
 
 def main() -> None:
+    """Project the selected runs' cached sample embeddings into one 3D space.
+
+    Uses PCA or, with `--method tsne`, t-SNE after a PCA reduction, and writes
+    the projected sample CSV, three figures coloured by dataset and variant,
+    source modality and text drift, and a manifest.
+    """
     parser = argparse.ArgumentParser(
         description="Create a global 3D projection over cached ACSE sample embeddings."
     )

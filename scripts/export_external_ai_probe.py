@@ -26,6 +26,14 @@ EXCLUDED_DUPLICATE_WEAK_TEMPLATE = "useful_if"
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
+    """Write rows to a UTF-8 CSV file with a header, creating parent directories.
+
+    Args:
+        path: Destination file; an existing file is overwritten.
+        rows: Records to write, one per line.
+        fieldnames: Header columns in output order; every key of every row must
+            be among them.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -34,6 +42,13 @@ def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> 
 
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Write rows as UTF-8 JSON Lines, creating parent directories.
+
+    Args:
+        path: Destination file; an existing file is overwritten.
+        rows: Records to write, one JSON object per line with non-ASCII
+            characters kept as they are.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
@@ -43,7 +58,22 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 def build_external_probe_rows(
     root: Path,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Return blinded external-probe inputs plus the local gold key."""
+    """Return blinded external-probe inputs plus the local gold key.
+
+    The items are the main-benchmark and weak-modality probe items of the first
+    `pilot_seed_count` seeds (by seed id, from `config.example.json`), without
+    the duplicate `useful_if` weak template. They are shuffled with
+    `RANDOM_SEED` and numbered `EXT0001`, `EXT0002`, ... in that order.
+
+    Args:
+        root: Project root holding `config.example.json` and the processed
+            benchmark and weak-modality probe tables.
+
+    Returns:
+        The blind inputs, which carry only `external_item_id` and
+        `source_statement`, and the gold key, which maps each external id to its
+        source item, condition, gold modality and texts.
+    """
     config = eu.load_config(root / "config.example.json")
     pilot_seed_count = int(config["project"]["pilot_seed_count"])
 
@@ -110,6 +140,16 @@ def build_external_probe_rows(
 
 
 def prompt_markdown(input_filename: str) -> str:
+    """Render the external-service prompt for modality-preserving extraction.
+
+    Args:
+        input_filename: Name of the uploaded inputs file that the prompt asks
+            the service to process.
+
+    Returns:
+        The prompt as Markdown, including the allowed modality labels and the
+        JSONL output contract with confidence from 0.0 to 1.0.
+    """
     return textwrap.dedent(
         f"""\
         # External High-Capacity Model Probe: Modality-Preserving Extraction
@@ -178,6 +218,12 @@ def prompt_markdown(input_filename: str) -> str:
 
 
 def readme_markdown() -> str:
+    """Render the README that explains the external probe bundle.
+
+    Returns:
+        The README as Markdown: purpose, files, design, comparison questions and
+        the confidence contract for curated reports.
+    """
     return textwrap.dedent(
         """\
         # External AI Service Probe
@@ -227,7 +273,18 @@ def readme_markdown() -> str:
 def export_external_probe_bundle(
     root: Path, output_dir: Path, *, dry_run: bool = False
 ) -> list[Path]:
-    """Export the blind input bundle, or report target paths without writing."""
+    """Export the blind input bundle, or report target paths without writing.
+
+    Args:
+        root: Project root the probe items are read from.
+        output_dir: Directory that receives the bundle.
+        dry_run: When True, print the row count and target paths instead of
+            writing anything.
+
+    Returns:
+        The paths of the inputs CSV, inputs JSONL, gold key, prompt and README,
+        in that order, whether or not they were written.
+    """
     inputs, key = build_external_probe_rows(root)
 
     input_csv = output_dir / "external_task2_inputs.csv"
@@ -274,7 +331,11 @@ def export_external_probe_bundle(
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """CLI entry point for exporting or dry-running the external probe bundle."""
+    """Run the CLI entry point for exporting or dry-running the external probe bundle.
+
+    Args:
+        argv: Command-line arguments; None reads them from `sys.argv`.
+    """
     parser = argparse.ArgumentParser(
         description="Export the blind Task 2 input bundle for external AI-service probes."
     )

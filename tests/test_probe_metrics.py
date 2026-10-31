@@ -33,10 +33,19 @@ from scripts import (
 def _grouped_binary_fixture(
     n_groups: int = 12, per_group: int = 6, n_features: int = 8
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """A grouped, class-balanced probe fixture with a unique marker per row.
+    """Build a grouped, class-balanced probe fixture with a unique marker per row.
 
     Column 0 is a unique row id, so a recorded PCA fit matrix can be traced back to
     the exact rows it saw; the remaining columns carry noise.
+
+    Args:
+        n_groups: Number of groups.
+        per_group: Rows per group.
+        n_features: Columns of the feature matrix, the row ID included.
+
+    Returns:
+        The feature matrix, the alternating binary labels, and the group label
+        of each row.
     """
     rng = np.random.default_rng(20260904)
     n_rows = n_groups * per_group

@@ -1,11 +1,11 @@
 """Which Task 2 run each Task 3 audit should read.
 
 A Task 3 run audits one model's own Task 2 answers, so it needs a
-``--source-run-id``. Picking it by hand does not scale past a cell or two, and
+`--source-run-id`. Picking it by hand does not scale past a cell or two, and
 picking it wrongly is invisible afterwards: the audit runs happily against a
 superseded generation and its verdicts then join to nothing.
 
-The resolver lived only inside a heredoc in ``scripts/enqueue_task3_runs.sh``.
+The resolver lived only inside a heredoc in `scripts/enqueue_task3_runs.sh`.
 It is a module now so the shell queue and any driver resolve sources the same
 way -- newest **compatible complete** Task 2 run per (dataset, variant, profile,
 model), where compatible means `eval_utils.registry_row_compatibility_issues`
@@ -16,11 +16,11 @@ CLI:
 
     .venv/bin/python scripts/task3_sources.py --config run_configs/current_run.json
 
-prints one ``dataset<TAB>variant<TAB>profile<TAB>model<TAB>source_run_id`` line
-per resolvable cell and a ``skip:`` note per cell that has none.
+prints one `dataset<TAB>variant<TAB>profile<TAB>model<TAB>source_run_id` line
+per resolvable cell and a `skip:` note per cell that has none.
 
 Note that the archived 2026-05 runs are *not* resolvable: their registry rows
-predate the ``batch_order`` column and this check does not waive it (the shell
+predate the `batch_order` column and this check does not waive it (the shell
 script did not either). Every run written since does carry it, so this only
 ever affects re-queueing the archive, which is not a thing the reruns do.
 """
@@ -39,7 +39,15 @@ except ModuleNotFoundError:  # pragma: no cover - invocation-path fallback
 
 
 class Task3Source(NamedTuple):
-    """One resolvable audit: the cell, the auditor, and what it reads."""
+    """One resolvable audit: the cell, the auditor, and what it reads.
+
+    Attributes:
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        profile_id: Run-config profile of the auditing model.
+        model: Model that audits its own Task 2 answers.
+        source_run_id: Task 2 run the audit reads, passed as `--source-run-id`.
+    """
 
     dataset_id: str
     variant: str
@@ -48,11 +56,25 @@ class Task3Source(NamedTuple):
     source_run_id: str
 
     def as_line(self) -> str:
+        """Return the source as one tab-separated line for the shell queue.
+
+        Returns:
+            The fields joined by tabs, in declaration order.
+        """
         return "\t".join(self)
 
 
 class Task3SourceGap(NamedTuple):
-    """A cell with no compatible Task 2 run, and why it was looked for."""
+    """A cell with no compatible Task 2 run, and why it was looked for.
+
+    Attributes:
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        profile_id: Run-config profile of the would-be auditor.
+        model: Model whose own Task 2 run is missing.
+        reason: Why no source was found, naming the expected run-id prefix and
+            the registry that was searched.
+    """
 
     dataset_id: str
     variant: str
@@ -61,6 +83,11 @@ class Task3SourceGap(NamedTuple):
     reason: str
 
     def as_line(self) -> str:
+        """Return the gap as a `skip:` note line.
+
+        Returns:
+            `skip: dataset/variant profile/model: reason`.
+        """
         return (
             f"skip: {self.dataset_id}/{self.variant} "
             f"{self.profile_id}/{self.model}: {self.reason}"
@@ -68,11 +95,20 @@ class Task3SourceGap(NamedTuple):
 
 
 def source_run_prefix(variant: str, mode: str = "full") -> str:
-    """Run-id prefix of the Task 2 runs an audit of this mode may read.
+    """Return the run-id prefix of the Task 2 runs an audit of this mode may read.
 
     Mirrors `run_task3_verification_from_config.source_run_prefixes`: a
     paper-facing audit reads only `full-*` runs, and a smoke audit reads the
     smoke runs of the same variant.
+
+    Args:
+        variant: Benchmark variant; `must` maps to `full` and every other
+            variant to `full-shall`.
+        mode: `full` for a paper-facing audit; `smoke` swaps the leading `full`
+            for `smoke`.
+
+    Returns:
+        `full`, `full-shall`, `smoke` or `smoke-shall`.
     """
     base = "full" if eu.normalize_benchmark_variant(variant) == "must" else "full-shall"
     return base.replace("full", "smoke", 1) if mode == "smoke" else base
@@ -90,7 +126,26 @@ def compatible_source_rows(
     default_batch_order: str = eu.DEFAULT_BATCH_ORDER,
     mode: str = "full",
 ) -> list[dict[str, Any]]:
-    """Registry rows this audit could read, oldest first."""
+    """Return the registry rows this audit could read, in registry order.
+
+    Args:
+        registry_rows: Run-registry rows of one dataset and variant.
+        profile: Run-config profile of the auditor; a source must match its
+            `profile_id` and `batch_size`, and its `batch_order` when set.
+        model: Model whose own Task 2 runs are wanted.
+        variant: Benchmark variant, which fixes the run-id prefix.
+        run_group_id: Run group the source must belong to.
+        benchmark_item_count: Number of benchmark items a full source must
+            cover.
+        expected_stochastic_samples: Stochastic samples per item the source must
+            have planned.
+        default_batch_order: Batch order expected when the profile sets none.
+        mode: `full` requires a complete `full-*` run; `smoke` reads smoke runs
+            and accepts a truncated benchmark.
+
+    Returns:
+        The rows that pass every check, in the order the registry lists them.
+    """
     prefix = source_run_prefix(variant, mode)
     return [
         row
@@ -120,7 +175,22 @@ def resolve_task3_sources(
     skip_profiles: set[str] | None = None,
     mode: str = "full",
 ) -> tuple[list[Task3Source], list[Task3SourceGap]]:
-    """Newest compatible Task 2 run per cell, plus the cells that have none."""
+    """Return the newest compatible Task 2 run per cell, plus the cells that have none.
+
+    Args:
+        run_config: Run config naming the `datasets`, `benchmark_variants`,
+            `profiles` (each with `profile_id`, `models` and batching),
+            `run_group_id`, `stochastic.samples` and optionally `batch_order`.
+        root: Project root; None uses this checkout.
+        skip_profiles: Profile ids to leave out entirely.
+        mode: `full` or `smoke`, as for `compatible_source_rows`; `smoke` also
+            reads the smoke run registry.
+
+    Returns:
+        One `Task3Source` per (dataset, variant, profile, model) with a
+        compatible run, choosing the latest `started_at_utc`, and one
+        `Task3SourceGap` per combination without one.
+    """
     root = Path(root or eu.project_root())
     skip = skip_profiles or set()
     sources: list[Task3Source] = []
@@ -186,6 +256,12 @@ def resolve_task3_sources(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser.
+
+    Returns:
+        A parser with the required `--config` run config and the repeatable
+        `--skip-profile`.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument(
@@ -198,6 +274,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Print the resolved sources to stdout and the unresolvable cells to stderr.
+
+    Args:
+        argv: Command-line arguments; None reads them from `sys.argv`.
+
+    Returns:
+        Exit status 0; unresolvable cells do not fail the run.
+    """
     args = build_parser().parse_args(argv)
     run_config = eu.load_run_config(args.config)
     sources, gaps = resolve_task3_sources(

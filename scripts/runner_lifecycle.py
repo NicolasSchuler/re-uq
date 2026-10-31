@@ -55,13 +55,17 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 def common_runner_parser() -> argparse.ArgumentParser:
-    """Parent parser holding every option both runner CLIs accept.
+    """Build the parent parser holding every option both runner CLIs accept.
 
     Declared once so the two front doors cannot drift in type, default, or
     spelling. Task-specific options (`--task`, `--all-models`,
     `--source-run-id`, `--audit-mode`, `--allow-partial-source`,
     `--allow-source-profile-mismatch`) and `--dry-run` (whose help text differs
     between the runners) stay with their runner.
+
+    Returns:
+        An `add_help=False` parser meant for the `parents=` list of a runner's
+        own parser.
     """
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--config", required=True, type=Path)
@@ -111,6 +115,12 @@ class ResumeState:
     Carried onto the planned cell so the registry row keeps the first run's
     `started_at_utc` and provenance `notes` (including any
     `resolved_config_sha`) instead of being stamped with the resume's own.
+
+    Attributes:
+        run_id: Run being continued.
+        started_at_utc: Start time the first attempt recorded in the registry.
+        notes: Registry `notes` of the first attempt, carried forward verbatim.
+        resumed_at: Every resume timestamp recorded for the run, oldest first.
     """
 
     run_id: str
@@ -146,6 +156,26 @@ def find_resume_row(
     Read-only: this runs before the runner opens a run log, writes a resolved
     config, or touches the registry, so a mistyped `--run-id` fails instead of
     silently creating a second run that merely looks resumed.
+
+    Args:
+        registry_path: Run registry CSV of the cell's dataset and variant.
+        run_id: Run id given to `--mode resume`.
+        provider_id: Provider the resumed cell is planned for.
+        profile_id: Provider profile the resumed cell is planned for.
+        model: Model the resumed cell is planned for.
+        dataset_id: Dataset of the cell; normalized before comparison.
+        variant: Benchmark variant of the cell; normalized before comparison.
+        tasks: Task filter of the resume; normalized and comma-joined before
+            comparison with the row's `tasks`.
+
+    Returns:
+        A copy of the first registry row with this run id whose provider,
+        profile, model, dataset, variant and tasks all match.
+
+    Raises:
+        ResumeError: If the registry does not exist, holds no row with this run
+            id, or holds only rows with this run id whose identity differs; the
+            message lists every mismatching field of every candidate row.
     """
     registry_path = Path(registry_path)
     if not registry_path.exists():
@@ -195,7 +225,7 @@ def find_resume_row(
 
 
 def resumed_notes(original: str, extra: str) -> str:
-    """The first attempt's notes, checked against this attempt's provenance.
+    """Return the first attempt's notes, checked against this attempt's provenance.
 
     A resume carries the original notes forward so the registry keeps the first
     run's provenance, which is only correct while that provenance still holds.
@@ -204,6 +234,17 @@ def resumed_notes(original: str, extra: str) -> str:
     describing a source run that was never read. Every `key=value` fragment this
     attempt derived therefore has to be present in the notes being carried
     forward.
+
+    Args:
+        original: Registry `notes` of the first attempt.
+        extra: `;`-separated `key=value` fragments this attempt derived (for
+            Task 3, its audit mode, source run and any foreign source profile).
+
+    Returns:
+        `original`, unchanged.
+
+    Raises:
+        ResumeError: If any fragment of `extra` does not occur in `original`.
     """
     missing = [
         part
@@ -238,6 +279,23 @@ def resolve_resume(
     Validation happens first and raises `ResumeError` without writing anything;
     only a resume that is going to run appends to the log (`record=False` for a
     dry run).
+
+    Args:
+        root: Project root that contains `data/processed/logs`.
+        registry_path: Run registry CSV of the cell's dataset and variant.
+        run_id: Run id given to `--mode resume`.
+        provider_id: Provider the resumed cell is planned for.
+        profile_id: Provider profile the resumed cell is planned for.
+        model: Model the resumed cell is planned for.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        tasks: Task filter of the resume.
+        record: Whether to append this attempt to the run's `resumed_at` log.
+
+    Returns:
+        The original start time and notes of the matched registry row, with
+        the resume timestamps recorded so far. A row without `started_at_utc`
+        gets the current time.
     """
     row = find_resume_row(
         registry_path,
@@ -277,6 +335,13 @@ def prepare_run_directory(
     Configured before planning so planning-time warnings land in this run's log
     file. A resumed run keeps the resolved composition (and therefore the
     `resolved_config_sha` in its registry notes) that its first attempt wrote.
+
+    Args:
+        root: Project root that contains `data/processed/logs`.
+        run_id: Run whose log file and resolved config are set up.
+        args: Runner options; `log_level` and, for Hydra runs,
+            `resolved_config_yaml` are read from it.
+        resume: State of the run being resumed, or None for a new run.
     """
     eu.configure_run_logging(args.log_level, log_path=eu.run_log_path(root, run_id))
     if resume is not None and rp.resolved_config_path(root, run_id).exists():
@@ -302,12 +367,32 @@ class CellLeaseError(RuntimeError):
 def cell_lease_key(
     *, profile_id: str, model: str, dataset_id: str, variant: str
 ) -> str:
-    """Identify the (profile, model, dataset, variant) cell inside one run."""
+    """Identify the (profile, model, dataset, variant) cell inside one run.
+
+    Args:
+        profile_id: Provider profile of the cell.
+        model: Model of the cell.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+
+    Returns:
+        The four parts joined with `-`.
+    """
     return f"{profile_id}-{model}-{dataset_id}-{variant}"
 
 
 def cell_lease_path(root: str | Path, run_id: str, cell_key: str) -> Path:
-    """Sibling of the run log holding the lease for one cell of `run_id`."""
+    """Return the sibling of the run log holding the lease for one cell of `run_id`.
+
+    Args:
+        root: Project root that contains `data/processed/logs`.
+        run_id: Run the cell belongs to.
+        cell_key: Cell identifier from `cell_lease_key`.
+
+    Returns:
+        The path `data/processed/logs/<run_id>.<cell_key>.lease.json` under
+        `root`, with both parts made filesystem-safe.
+    """
     return (
         Path(root)
         / "data/processed/logs"
@@ -323,7 +408,14 @@ def _iso_to_epoch(value: Any) -> float | None:
 
 
 def _record_pid(record: Mapping[str, Any]) -> int:
-    """The owning pid of a lease record, or 0 when it is missing or corrupt."""
+    """Return the owning pid of a lease record.
+
+    Args:
+        record: Lease record as read from the lease file.
+
+    Returns:
+        The record's `pid`, or 0 when it is missing or corrupt.
+    """
     try:
         return int(record.get("pid", 0) or 0)
     except (TypeError, ValueError):
@@ -356,6 +448,15 @@ class CellLease:
     It stays advisory on purpose. A lease whose owning process is gone, or whose
     heartbeat has aged past `stale_after_s`, is taken over with a warning rather
     than blocking recovery after a crash.
+
+    Attributes:
+        path: Lease file beside the run log.
+        run_id: Run the cell belongs to.
+        cell_key: Cell identifier from `cell_lease_key`.
+        stale_after_s: Heartbeat age in seconds after which another runner's
+            lease counts as abandoned.
+        held: Whether this object currently holds the lease; set by `claim`
+            and cleared by `release`.
     """
 
     path: Path
@@ -376,6 +477,21 @@ class CellLease:
         variant: str,
         stale_after_s: float = LEASE_STALE_AFTER_S,
     ) -> CellLease:
+        """Create the (not yet claimed) lease for one cell of `run_id`.
+
+        Args:
+            root: Project root that contains `data/processed/logs`.
+            run_id: Run the cell belongs to.
+            profile_id: Provider profile of the cell.
+            model: Model of the cell.
+            dataset_id: Dataset of the cell.
+            variant: Benchmark variant of the cell.
+            stale_after_s: Heartbeat age in seconds after which another
+                runner's lease counts as abandoned.
+
+        Returns:
+            A lease at `cell_lease_path` for the cell's key.
+        """
         cell_key = cell_lease_key(
             profile_id=profile_id, model=model, dataset_id=dataset_id, variant=variant
         )
@@ -404,7 +520,19 @@ class CellLease:
         }
 
     def _is_live(self, record: Mapping[str, Any]) -> bool:
-        """True when another runner still owns this lease."""
+        """Return whether another runner still owns this lease.
+
+        A lease on another host counts as live while its heartbeat is fresh,
+        because its pid cannot be probed from here.
+
+        Args:
+            record: Lease record as read from the lease file.
+
+        Returns:
+            True if the heartbeat (or, without one, the claim time) is younger
+            than `stale_after_s` and the owner is on another host or its pid is
+            still running.
+        """
         heartbeat = _iso_to_epoch(
             record.get("heartbeat_utc") or record.get("claimed_at_utc")
         )
@@ -417,7 +545,13 @@ class CellLease:
         return _pid_is_running(_record_pid(record))
 
     def claim(self) -> None:
-        """Take the lease, or raise `CellLeaseError` if a live runner holds it."""
+        """Take the lease, or raise `CellLeaseError` if a live runner holds it.
+
+        A stale lease is overwritten with a warning.
+
+        Raises:
+            CellLeaseError: If the lease file names a runner that is still live.
+        """
         claimed_at = eu.utc_now_iso()
         with eu.file_lock(self.path):
             existing = self._read()
@@ -455,7 +589,10 @@ class CellLease:
             eu.write_json(self.path, record)
 
     def release(self) -> None:
-        """Drop the lease. Only ever removes a lease this process still owns."""
+        """Drop the lease.
+
+        Only ever removes a lease this process still owns.
+        """
         if not self.held:
             return
         self.held = False
@@ -494,7 +631,9 @@ class LifecycleCell(Protocol):
     events_path: Path
 
     @property
-    def batch_size(self) -> int: ...
+    def batch_size(self) -> int:
+        """Return how many planned jobs the cell sends per provider request."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -503,6 +642,35 @@ class CellExecution:
 
     Everything here is resolved by the runner before execution starts, so the
     lifecycle itself makes no Task 1/2 versus Task 3 decisions.
+
+    Attributes:
+        cell: The planned cell: its jobs, existing rows and artifact paths.
+        tasks: Task filter for row selection, the registry row, and the
+            `tasks` event field: `["task1", "task2"]` for the experiment
+            runner, `["task3"]` for the verification runner.
+        progress_items: The item population progress is measured against:
+            benchmark items for Task 1/2, built audit items for Task 3.
+        expected_stochastic_samples: Stochastic samples planned per item,
+            used for the live progress coverage.
+        logging_config: Resolved run logging settings: progress cadence,
+            warning thresholds and which artifacts to write.
+        completion_fn: Function that performs one provider call (or the
+            offline fake under `--fake-completion`).
+        context: Identity block stamped onto every run event and warning event.
+        mode: Run mode (`smoke`, `full` or `resume`), stamped onto run events.
+        registry_row: Builds the registry row from the current raw rows, as
+            `(raw_rows, *, status=None, finished_at_utc="") -> registry row`.
+        start_log: The dict logged once, before the first provider call.
+        event_fields: Event fields only one runner has (Task 3's source run
+            and audit mode).
+        stamp_record: Applied to every raw record before it is appended
+            (Task 1/2 stamps the resolved embedding backend, which the analysis
+            process cannot inherit); None for no stamping.
+        registry_label: Label of the final registry status log line.
+        lease: Per-cell lease claimed for the duration of the run, or None to
+            run without one.
+        transcript: Receives one row per provider call (payload sent, body
+            returned); None when the run turned transcripts off.
     """
 
     cell: LifecycleCell
@@ -540,6 +708,10 @@ def execute_cell(execution: CellExecution) -> None:
     Claims the cell's lease, streams the pending jobs through the provider, and
     always leaves the registry in a terminal state: `complete` / `partial` on a
     normal return, `interrupted` on Ctrl-C, `failed` on any other exception.
+
+    Args:
+        execution: The planned cell and the runner-specific hooks the
+            lifecycle calls.
     """
     cell = execution.cell
     logging_config = execution.logging_config
@@ -625,7 +797,12 @@ def execute_cell(execution: CellExecution) -> None:
         return counters
 
     def reconcile_terminal(status: str) -> None:
-        """Replace the `running` row with a terminal one after an abort."""
+        """Replace the `running` row with a terminal one after an abort.
+
+        Args:
+            status: Terminal registry status to write, `interrupted` or
+                `failed`.
+        """
         try:
             eu.upsert_run_registry_row(
                 cell.registry_path,

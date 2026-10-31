@@ -1,7 +1,7 @@
-"""Tests for scripts/export_paper_numbers.py.
+"""Tests for `scripts/export_paper_numbers.py`.
 
-The exporter turns the untracked ``outputs/paper_*.csv`` artifacts into the
-manuscript's ``numbers.tex`` macro file, so the real inputs are not available to
+The exporter turns the untracked `outputs/paper_*.csv` artifacts into the
+manuscript's `numbers.tex` macro file, so the real inputs are not available to
 CI. These tests therefore build a miniature artifact set -- two models, two
 cells, four source conditions -- whose every aggregate is hand-computable, and
 assert the exact macro strings the exporter must emit.
@@ -261,7 +261,15 @@ def _per_model_headline_rows(models: list[str]) -> list[dict[str, object]]:
 
 
 def _cell_counts(model, cell):
-    """(strict, broad, readable, weak strict, weak readable) for one model-cell."""
+    """Return the strengthening and readability counts of one model-cell.
+
+    Args:
+        model: Fixture model name.
+        cell: `(dataset, variant)` pair.
+
+    Returns:
+        (strict, broad, readable, weak strict, weak readable) for one model-cell.
+    """
     coverage = _coverage(model, cell)
     counts = _strengthening(model, cell)
     strict = sum(strict_n for strict_n, _ in counts.values())
@@ -276,17 +284,37 @@ def _cell_counts(model, cell):
 
 
 def _weighted(pairs):
-    """Item-weighted mean of (value, weight) pairs, 0.0 when nothing weighs."""
+    """Return the item-weighted mean of (value, weight) pairs, 0.0 when nothing weighs.
+
+    Args:
+        pairs: `(value, weight)` pairs; the weights are item counts.
+
+    Returns:
+        The weighted mean, or 0.0 when the weights sum to zero.
+    """
     total = sum(weight for _, weight in pairs)
     return sum(value * weight for value, weight in pairs) / total if total else 0.0
 
 
 def _rq_row(model, dataset, variant, models, cells):
-    """One row of the per-model RQ table, derived from the modality fixture.
+    """Build one row of the per-model RQ table, derived from the modality fixture.
 
     Counts come from `STRENGTHENING`/`COVERAGE`, so the pooled row agrees with
     `paper_headline_bootstrap_ci.csv` and the exporter's cross-check stays
     silent; the cell-varying shares come from `CELL_SHARES`.
+
+    Args:
+        model: Value of the row's `model` column; `all` for pooled rows.
+        dataset: Value of the row's `dataset` column; `all` when pooled over
+            cells.
+        variant: Value of the row's `variant` column; `all` when pooled over
+            cells.
+        models: Models whose fixture counts are summed into the row.
+        cells: `(dataset, variant)` cells whose fixture counts are summed into
+            the row.
+
+    Returns:
+        The row as a dict of RQ-table columns.
     """
     counts = [(m, cell, _cell_counts(m, cell)) for m in models for cell in cells]
     strict = sum(cell_counts[0] for _, _, cell_counts in counts)
@@ -402,7 +430,15 @@ def _rq_row(model, dataset, variant, models, cells):
 
 
 def _rq_rows(models):
-    """Per-model rows, per-cell rows, and the pooled row."""
+    """Return per-model rows, per-cell rows, and the pooled row.
+
+    Args:
+        models: Fixture model names.
+
+    Returns:
+        One row per model over all cells, one row per cell over all models,
+        and the row pooled over both, in that order.
+    """
     rows = [_rq_row(model, "all", "all", [model], CELLS) for model in models]
     rows += [
         _rq_row("all", dataset, variant, models, [(dataset, variant)])
@@ -413,7 +449,13 @@ def _rq_rows(models):
 
 
 def write_fixture(outputs_dir: Path, models: list[str] | None = None) -> None:
-    """Write a complete miniature artifact set under ``outputs_dir``."""
+    """Write a complete miniature artifact set under `outputs_dir`.
+
+    Args:
+        outputs_dir: Directory the artifacts are written to; created if
+            missing.
+        models: Fixture model names; `None` uses the two default models.
+    """
     models = models or ["glm-5.1", "kit.gemma4-31b-it"]
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1152,7 +1194,10 @@ class StrictModeTest(ExporterFixtureTest):
 
 
 class BenchmarkDesignCrossCheckTest(ExporterFixtureTest):
-    """Seed and item counts come from observed rows; the design says what was planned."""
+    """Seed and item counts come from observed rows.
+
+    The design says what was planned.
+    """
 
     def _set_seed_count(self, dataset: str, seed_count: int) -> None:
         suffix = "" if dataset == "nice" else f"_{dataset}"
@@ -1207,7 +1252,7 @@ if __name__ == "__main__":
 
 
 class RqTableMacroTest(ExporterFixtureTest):
-    """`\\numTableRqOneRows` / `\\numTableRqTwoThreeRows`: the two table bodies."""
+    r"""`\numTableRqOneRows` / `\numTableRqTwoThreeRows`: the two table bodies."""
 
     def _rows(self, body: str) -> list[str]:
         return [

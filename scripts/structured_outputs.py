@@ -1,9 +1,15 @@
 """Pydantic response models for strict provider structured-output paths.
 
 The models below are the single definition of every task response contract.
-:func:`provider_json_schema` derives the strict provider JSON Schema from them,
+`provider_json_schema` derives the strict provider JSON Schema from them,
 so the schema a request carries and the schema Instructor validates against
 cannot drift apart.
+
+The response models themselves deliberately carry no class docstring. Pydantic
+copies a class docstring into the model's JSON Schema as `description`, and
+Instructor sends that schema (or the docstring itself, in tools mode) to the
+provider, so documenting a model there would change the requests of the
+Instructor structured-output path.
 """
 
 from __future__ import annotations
@@ -29,11 +35,28 @@ Confidence01 = Annotated[float, Field(ge=0.0, le=1.0)]
 
 
 class StrictResponseModel(BaseModel):
+    """Base of the single-item response models: no extra keys, numeric confidence.
+
+    Never sent as a response model itself, and subclasses do not inherit a
+    class docstring, so this one does not reach a provider schema.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     @field_validator("confidence", check_fields=False, mode="before")
     @classmethod
     def reject_non_numeric_confidence(cls, value: Any) -> Any:
+        """Reject a boolean or string `confidence` before Pydantic coerces it.
+
+        Args:
+            value: Raw `confidence` value from the response.
+
+        Returns:
+            `value` unchanged, for the `Confidence01` range check.
+
+        Raises:
+            ValueError: If `value` is a bool or a string.
+        """
         if isinstance(value, (bool, str)):
             raise ValueError("confidence must be a numeric decimal from 0.0 to 1.0")
         return value
@@ -62,12 +85,22 @@ class Task2Response(StrictResponseModel):
     @field_validator("requirement")
     @classmethod
     def reject_blank_requirement(cls, value: str) -> str:
-        """A blank extraction is a failed extraction, not an empty one.
+        """Reject a blank requirement.
 
-        ``Field(min_length=1)`` would say the same thing declaratively, but it
-        would also add ``"minLength"`` to the derived provider schema and
+        A blank extraction is a failed extraction, not an empty one.
+        `Field(min_length=1)` would say the same thing declaratively, but it
+        would also add `"minLength"` to the derived provider schema and
         change bytes that every cached request fingerprint depends on. Enforce
         it after validation instead, and keep the schema as it has always been.
+
+        Args:
+            value: Extracted requirement text.
+
+        Returns:
+            `value` unchanged.
+
+        Raises:
+            ValueError: If `value` is empty or whitespace only.
         """
         if not value.strip():
             raise ValueError("requirement must not be blank or whitespace only")
@@ -121,6 +154,19 @@ TASK_BATCH_RESPONSE_MODELS: dict[str, type[BaseModel]] = {
 
 
 def response_model_for_task(task: str, *, batched: bool = False) -> type[BaseModel]:
+    """Return the response model of a task's single or batched contract.
+
+    Args:
+        task: Task name, `task1`, `task2` or `task3`.
+        batched: Whether to return the batched wrapper (`{"results": [...]}`)
+            instead of the single-item model.
+
+    Returns:
+        The Pydantic model class for the contract.
+
+    Raises:
+        ValueError: If `task` has no structured-output contract.
+    """
     models = TASK_BATCH_RESPONSE_MODELS if batched else TASK_RESPONSE_MODELS
     try:
         return models[task]
@@ -131,6 +177,18 @@ def response_model_for_task(task: str, *, batched: bool = False) -> type[BaseMod
 def validated_payload_for_task(
     task: str, payload: Any, *, batched: bool = False
 ) -> dict[str, Any]:
+    """Validate a decoded response payload against a task's contract.
+
+    Validation errors from Pydantic propagate to the caller.
+
+    Args:
+        task: Task name, `task1`, `task2` or `task3`.
+        payload: Decoded JSON response.
+        batched: Whether `payload` is a batched `{"results": [...]}` response.
+
+    Returns:
+        The validated payload dumped back to JSON-compatible values.
+    """
     model = response_model_for_task(task, batched=batched)
     return model.model_validate(payload).model_dump(mode="json")
 
@@ -138,6 +196,18 @@ def validated_payload_for_task(
 def validated_json_for_task(
     task: str, text: str, *, batched: bool = False
 ) -> dict[str, Any]:
+    """Parse and validate raw JSON response text against a task's contract.
+
+    Parse and validation errors from Pydantic propagate to the caller.
+
+    Args:
+        task: Task name, `task1`, `task2` or `task3`.
+        text: Raw JSON response text.
+        batched: Whether `text` holds a batched `{"results": [...]}` response.
+
+    Returns:
+        The validated payload dumped back to JSON-compatible values.
+    """
     model = response_model_for_task(task, batched=batched)
     return model.model_validate_json(text).model_dump(mode="json")
 
@@ -176,7 +246,16 @@ PROVIDER_SCHEMA_LEADING_PROPERTIES = ("request_index",)
 
 
 def _provider_schema_bound(value: Any) -> Any:
-    """`ge=0.0` renders as `0.0`; the sent contract has always carried `0`."""
+    """Render an integral float bound as an int.
+
+    `ge=0.0` renders as `0.0`; the sent contract has always carried `0`.
+
+    Args:
+        value: A `minimum` or `maximum` value from the Pydantic schema.
+
+    Returns:
+        `int(value)` for an integral float, otherwise `value` unchanged.
+    """
     if isinstance(value, float) and value.is_integer():
         return int(value)
     return value
@@ -228,11 +307,28 @@ def _provider_subschema(
 
 
 def provider_json_schema(model: type[BaseModel]) -> dict[str, Any]:
-    """Strict provider JSON Schema for `model`, with `$defs`/`$ref` inlined."""
+    """Derive the strict provider JSON Schema for `model`, with `$defs`/`$ref` inlined.
+
+    Args:
+        model: Response model to derive the schema from.
+
+    Returns:
+        The schema with Pydantic bookkeeping dropped and keys in the order of
+        the handwritten provider contracts, so it serializes to the pinned
+        bytes.
+    """
     schema = model.model_json_schema()
     return _provider_subschema(schema, schema.get("$defs", {}))
 
 
 def provider_schema_for_task(task: str, *, batched: bool = False) -> dict[str, Any]:
-    """Strict provider JSON Schema for a task's single or batched contract."""
+    """Return the strict provider JSON Schema for a task's single or batched contract.
+
+    Args:
+        task: Task name, `task1`, `task2` or `task3`.
+        batched: Whether to derive the schema of the batched wrapper.
+
+    Returns:
+        The schema `provider_json_schema` derives from the task's model.
+    """
     return provider_json_schema(response_model_for_task(task, batched=batched))

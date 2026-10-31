@@ -1,19 +1,20 @@
-"""Compose the paper figure for the embedding modal-force-drift diagnostic.
+"""Compose the figure for the embedding modal-force-drift diagnostic.
 
-Four panels:
+Three panels:
   (a) 2D projection of requirement-only MLX embeddings, colored by *source
       modality* -- the structure the geometry does carry (input commitment level).
   (b) same coordinates, colored by *text drift* (strengthened vs clean) -- the
       target, which is sprinkled within every region rather than separated.
-  (c) held-out probe AUROC (item-grouped, requirement-only MLX): the confounds
-      (source modality, dataset) are recoverable; drift detection collapses to
-      chance once the input commitment level is held fixed.
-  (d) drift-detection AUPRC as lift over the prevalence baseline, within input
-      level, MLX vs TF-IDF -- the char n-gram keyword detector keeps some signal
-      that the neural meaning embedding washes out.
+  (c) held-out probe AUROC on requirement-only text (item-grouped by default):
+      source modality and dataset from the MLX embeddings, then strict
+      strengthening, averaged over the recommended, optional and nice-to-have
+      input levels, from the MLX embeddings and from char n-gram TF-IDF
+      features (the "keyword search" bar).
 
 Reads the requirement-only embedding cache and probe grid written by
-``diagnose_embedding_separability.py``.
+`diagnose_embedding_separability.py`. The paper figure is now drawn by
+`plot_embedding_diagnostic_figure_v2.py`. This script stays because
+`plot_embedding_diagnostic_tsne_supp.py` reuses its projection helpers.
 """
 
 from __future__ import annotations
@@ -66,6 +67,7 @@ SOURCE_LABEL = {
 
 
 def set_style() -> None:
+    """Set the serif manuscript style for fonts, spines and resolution."""
     plt.rcParams.update(
         {
             "font.family": "serif",
@@ -86,11 +88,28 @@ def set_style() -> None:
 
 
 def read_summary(path: Path) -> list[dict[str, str]]:
+    """Read the probe grid summary CSV.
+
+    Args:
+        path: `probe_grid_summary.csv` written by
+            `diagnose_embedding_separability.py`.
+
+    Returns:
+        One dict of strings per row.
+    """
     with path.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
 
 
 def as_float(value: Any) -> float:
+    """Parse a value as a float, NaN when it does not parse.
+
+    Args:
+        value: Value of a CSV cell.
+
+    Returns:
+        The float or NaN.
+    """
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -102,8 +121,21 @@ def balanced_subsample(
     per_modality: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    """Equal points per source modality, sampled uniformly so drift appears at its
-    true within-level prevalence (preserved stays the visible majority)."""
+    """Sample an equal number of points per source modality.
+
+    Points are sampled uniformly so drift appears at its true within-level
+    prevalence (preserved stays the visible majority).
+
+    Args:
+        rows: Candidate rows with `source_modality`.
+        per_modality: Most points per source modality; smaller levels are kept
+            whole.
+        rng: Random generator, advanced by the draws.
+
+    Returns:
+        The sorted indices of the chosen rows. Rows of other modalities than
+        the four in `SOURCE_ORDER` are never chosen.
+    """
     chosen: list[int] = []
     for modality in SOURCE_ORDER:
         idx = np.asarray(
@@ -124,9 +156,17 @@ def balanced_subsample(
 class ProjectionInputs(NamedTuple):
     """Everything both embedding-diagnostic figures need to draw a projection.
 
-    ``rng`` is handed back mid-stream on purpose: ``balanced_subsample`` has
-    already drawn from it, and the panel (a) jitter continues from there. Two
-    figures sharing this helper therefore also share one RNG consumption order.
+    `rng` is handed back mid-stream on purpose: `balanced_subsample` has
+    already drawn from it, and the draw-order shuffles of the projection panels
+    continue from there. Two figures sharing this helper therefore also share
+    one RNG consumption order.
+
+    Attributes:
+        coords: 2D projection of each subsampled point.
+        rows: Sample rows of the subsampled points, aligned with `coords`.
+        indices: Positions of the subsampled points in the full sample rows
+            and in the embedding cache.
+        rng: The random generator after the subsampling draws.
     """
 
     coords: np.ndarray
@@ -147,6 +187,21 @@ def prepare_projection_inputs(
     Each unique generated requirement appears ~17x across seeds, so one point
     per distinct string is plotted; stacking identical points would otherwise
     make the maps unreadable.
+
+    Args:
+        diagnostic_dir: Directory with `task2_reqonly_mlx_embeddings.npz`.
+        manifest_path: Cache inventory whose `mlx:` rows give the sample rows
+            aligned with the cache.
+        method: Projection method, `pca` or `tsne` (see `compute_projection`).
+        per_modality: Most distinct requirements per source modality.
+        random_state: Seed of the subsample and the projection.
+
+    Returns:
+        The projection, its rows and indices, and the advanced generator.
+
+    Raises:
+        ValueError: If the cache's row count or requirements digest does not
+            match the sample rows.
     """
     cache_path = diagnostic_dir / "task2_reqonly_mlx_embeddings.npz"
     cache = np.load(cache_path, allow_pickle=False)
@@ -200,6 +255,17 @@ def prepare_projection_inputs(
 def compute_projection(
     embeddings: np.ndarray, method: str, random_state: int
 ) -> np.ndarray:
+    """Project embeddings to two dimensions with PCA or t-SNE.
+
+    Args:
+        embeddings: Matrix with one embedding per row.
+        method: `pca` for a direct projection; any other value runs t-SNE
+            (perplexity 40) on a PCA reduction to at most 50 components.
+        random_state: Seed of PCA and t-SNE.
+
+    Returns:
+        The 2D coordinates, one row per embedding.
+    """
     if method == "pca":
         pca = PCA(n_components=2, svd_solver="randomized", random_state=random_state)
         return np.asarray(pca.fit_transform(embeddings), dtype=float)
@@ -249,6 +315,21 @@ def panel_projection(
     title: str,
     rng: np.random.Generator | None = None,
 ) -> None:
+    """Draw one projection panel, coloured by source modality or by drift.
+
+    Points are drawn in one shuffled scatter so that no group systematically
+    hides another.
+
+    Args:
+        ax: Axes to draw into.
+        coords: 2D coordinates of the points.
+        rows: Sample rows aligned with `coords`.
+        color_field: `source_modality` colours by input level; any other value
+            colours by drift status.
+        title: Panel title.
+        rng: Generator for the shuffle. `None` leaves the source panel
+            unshuffled and shuffles the drift panel with a fixed seed of 0.
+    """
     if color_field == "source_modality":
         keys = np.asarray(
             [str(row.get("source_modality", "")) for row in rows], dtype=object
@@ -352,6 +433,20 @@ def auroc_cell(
     target: str,
     model: str = "hgb",
 ) -> float:
+    """Look up the mean held-out AUROC of one probe grid cell.
+
+    Args:
+        summary: Rows of `probe_grid_summary.csv`.
+        backend: Feature backend, `mlx` or `tfidf`.
+        text: Text variant, `reqonly` or `prefixed`.
+        group: Grouping mode, `seed` or `item`.
+        scope: Probe scope, such as `global` or `source_modality=optional`.
+        target: Probe target.
+        model: Classifier.
+
+    Returns:
+        The cell's `auroc_mean`, NaN when the cell is missing or empty.
+    """
     for row in summary:
         if (
             row["feature_backend"] == backend
@@ -366,7 +461,11 @@ def auroc_cell(
 
 
 def style_detection_axis(ax: Axes) -> None:
-    """Shared 'detection score' x-axis: 0.5 = coin flip, 1.0 = perfect."""
+    """Style the shared 'detection score' x-axis: 0.5 = coin flip, 1.0 = perfect.
+
+    Args:
+        ax: Axes of a detection bar chart.
+    """
     ax.set_xlim(0.5, 1.02)
     ax.axvline(0.5, ls="--", lw=0.9, color="#0f172a", zorder=0)
     ax.set_xticks([0.5, 0.75, 1.0])
@@ -378,6 +477,17 @@ def style_detection_axis(ax: Axes) -> None:
 def hbar_detection(
     ax: Axes, labels: list[str], values: list[float], colors: list[str]
 ) -> np.ndarray:
+    """Draw horizontal detection bars that start at the 0.5 chance line.
+
+    Args:
+        ax: Axes to draw into.
+        labels: Bar labels, drawn top to bottom.
+        values: AUROC per bar; NaN bars are skipped.
+        colors: Colour per bar.
+
+    Returns:
+        The y position of each bar, in label order.
+    """
     y = np.arange(len(labels))[::-1]
     for yi, val, color in zip(y, values, colors, strict=True):
         if np.isnan(val):
@@ -401,7 +511,18 @@ def hbar_detection(
 def panel_readout(
     ax: Axes, summary: list[dict[str, Any]], group_mode: str, model: str
 ) -> None:
-    """(c) What can be read off the generated text, by gradient-boosted trees."""
+    """Draw panel (c): what gradient-boosted trees can read off the generated text.
+
+    The bars show the held-out AUROC for source modality and dataset, and the
+    mean within-level AUROC for strict strengthening with the neural embedding
+    and with TF-IDF features, all on requirement-only text.
+
+    Args:
+        ax: Axes to draw into.
+        summary: Rows of `probe_grid_summary.csv`.
+        group_mode: Grouping mode of the cells read, `seed` or `item`.
+        model: Classifier of the cells read.
+    """
 
     def within_mean(backend: str) -> float:
         return float(
@@ -481,6 +602,12 @@ def panel_readout(
 
 
 def main() -> None:
+    """Compose the embedding diagnostic figure and save it as PDF and PNG.
+
+    Reads `probe_grid_summary.csv` and the requirement-only embedding cache
+    from `--diagnostic-dir` and draws the two projection panels and the
+    read-out panel.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--manifest",

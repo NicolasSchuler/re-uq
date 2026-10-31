@@ -56,6 +56,50 @@ Avoid:
 - undocumented prompt or model changes;
 - mixing temporary diagnostics into stable analysis code.
 
+## Docstring Convention
+
+Docstrings follow the Google style, enforced by ruff (`D` rules with
+`convention = "google"` in `pyproject.toml`). Run
+`.venv/bin/ruff check scripts tests manuscript` before committing.
+
+Shape:
+
+- One summary line in the imperative mood ("Return ...", "Build ..."), ending
+  with a period, on the same line as the opening quotes. A docstring that is
+  only a summary keeps its closing quotes on that line; otherwise the closing
+  quotes stand on their own line.
+- A blank line, then free prose that explains intent, rationale and caveats.
+  This prose is the valuable part: keep it, do not replace it with a restated
+  signature.
+- Then the sections, in this order and only when they apply: `Args:`,
+  `Returns:` or `Yields:`, `Raises:`. Section bodies are indented four spaces,
+  entries are `name: description.` with continuation lines indented a further
+  four spaces.
+- `Args:` lists every parameter except `self` and `cls` whenever the function
+  has any, including keyword-only parameters and `*args` / `**kwargs`. Say what
+  the parameter means and which values matter, not its type: the annotations
+  carry the types.
+- `Returns:` describes the value whenever the function returns something other
+  than `None`. `Raises:` lists only exceptions the function raises itself.
+- Classes document their purpose in prose and list fields of dataclasses,
+  `NamedTuple`s and `TypedDict`s under `Attributes:`. Constructor parameters
+  of ordinary classes go under `Args:` in the class docstring; `__init__` has
+  no docstring.
+- Public modules, classes, functions and methods need a docstring. Private
+  helpers (leading underscore), magic methods and test cases do not, but any
+  docstring they have follows the same shape.
+- Wrap docstring lines at 88 columns, matching the formatter's line length.
+
+Markup:
+
+- Code, identifiers, literals, CLI flags, file names and column names are set
+  in single backticks (`eval_utils.read_jsonl`, `--dry-run`, `batch_size = 1`).
+  No double backticks and no Sphinx roles such as `:func:`.
+- Follow the naming rules above inside docstrings as well: plain-language
+  descriptions, no version labels or opaque abbreviations.
+- The first line of a module docstring doubles as the CLI description for
+  scripts that pass `__doc__` to `argparse`, so keep it self-contained.
+
 ## Environment
 
 This repository uses a `uv`-managed virtual environment at `.venv/`.

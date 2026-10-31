@@ -1,9 +1,12 @@
 """Visualize ACSE semantic embeddings for repeated Task 2 samples.
 
-The ACSE metric stores cluster diagnostics, not raw vectors. This script
-recomputes the same embeddings from cached stochastic raw outputs, projects
-them into a shared low-dimensional space, and writes static figures plus CSVs
-for inspecting generated-text drift cases.
+The ACSE metric stores cluster diagnostics, not raw vectors. This script reads
+the vectors from the semantic embedding cache written by
+`compute_acse_semantic_artifacts.py` when that cache exists, and recomputes the
+same embeddings from cached stochastic raw outputs when it does not or when
+`--recompute-embeddings` is set. It projects them into a shared low-dimensional
+space and writes static figures plus CSVs for inspecting generated-text drift
+cases.
 """
 
 from __future__ import annotations
@@ -56,6 +59,16 @@ CLUSTER_COLORS = [
 
 
 def finite_float(value: Any, default: float = math.nan) -> float:
+    """Parse a value as a float, falling back to a default.
+
+    Args:
+        value: Value from a CSV row or manifest; `""` and `None` count as
+            missing.
+        default: Value returned for missing or unparseable input.
+
+    Returns:
+        The float, or `default`.
+    """
     try:
         if value in {"", None}:
             return default
@@ -67,6 +80,17 @@ def finite_float(value: Any, default: float = math.nan) -> float:
 def default_analysis_dir(
     root: Path, dataset_id: str, variant: str, run_id: str
 ) -> Path:
+    """Return the default analysis directory of a run.
+
+    Args:
+        root: Checkout root.
+        dataset_id: Normalized dataset id.
+        variant: Normalized benchmark variant.
+        run_id: Run id, made file-name-safe in the directory name.
+
+    Returns:
+        `outputs/evaluation_<dataset>_<variant>_<run>` under `root`.
+    """
     return (
         root
         / "outputs"
@@ -75,6 +99,16 @@ def default_analysis_dir(
 
 
 def projection_model(embeddings: np.ndarray, components: int) -> tuple[np.ndarray, PCA]:
+    """Project embeddings onto their leading principal components.
+
+    Args:
+        embeddings: Matrix with one embedding per row.
+        components: Number of output columns. When the data support fewer
+            components, the missing columns are zero.
+
+    Returns:
+        The projected rows and the fitted PCA.
+    """
     max_components = max(
         1, min(int(components), embeddings.shape[0], embeddings.shape[1])
     )
@@ -96,6 +130,20 @@ def load_task2_rows(
     model: str,
     profile: str | None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+    """Load a run's parsed stochastic Task 2 samples and its benchmark items.
+
+    Args:
+        root: Checkout root locating the raw outputs and benchmark items.
+        dataset_id: Normalized dataset id.
+        variant: Normalized benchmark variant.
+        run_id: Run to load.
+        model: Model to load.
+        profile: Keep only rows of this profile or without one; `None` keeps
+            all rows.
+
+    Returns:
+        The parsed stochastic raw rows and the benchmark rows keyed by item id.
+    """
     raw_rows = [
         row
         for row in eu.read_jsonl(eu.model_outputs_raw_path(root, dataset_id, variant))
@@ -132,6 +180,31 @@ def load_cached_projection_inputs(
     distance_threshold: float,
     components: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], np.ndarray, str]:
+    """Load a run's cached semantic embeddings and project them for plotting.
+
+    Sample rows get their projected `x`, `y` and `z`. Item rows get the mean of
+    their samples' projections, their drift status and their score as
+    `acse_score`.
+
+    Args:
+        cache_dir: Cache directory written by
+            `compute_acse_semantic_artifacts.py`.
+        run_id: Run the cache must belong to.
+        model: Model the cache must belong to.
+        distance_threshold: Clustering threshold the cache must have used, when
+            it records one.
+        components: Projection dimensions, 2 or 3; `z` is 0 for 2.
+
+    Returns:
+        The sample rows, the item rows, the embedding matrix and the backend
+        label.
+
+    Raises:
+        FileNotFoundError: If a cache file is missing.
+        ValueError: If the cache belongs to another run or model, used another
+            distance threshold, or holds another number of embeddings than
+            sample rows.
+    """
     manifest_path = cache_dir / "manifest.json"
     embeddings_path = cache_dir / "task2_acse_sample_embeddings.npz"
     samples_path = cache_dir / "task2_acse_samples.csv"
@@ -210,6 +283,19 @@ def load_cached_projection_inputs(
 
 
 def selected_items(item_rows: list[dict[str, Any]], limit: int) -> list[str]:
+    """Pick contrasting items for the per-item sample plot.
+
+    Takes the strict-strengthening (`strict_text_oc`) and `clean` items with
+    the highest and the lowest score first, then fills up with the remaining
+    items in descending score order.
+
+    Args:
+        item_rows: Item rows with `status` and `acse_score`.
+        limit: Number of items to pick.
+
+    Returns:
+        Up to `limit` item ids.
+    """
     buckets = [
         ("strict_oc_high_acse", lambda row: row["status"] == "strict_text_oc", True),
         ("strict_oc_low_acse", lambda row: row["status"] == "strict_text_oc", False),
@@ -248,6 +334,17 @@ def plot_item_centroids(
     title: str,
     components: int,
 ) -> None:
+    """Plot item centroids coloured by drift status and marked by source modality.
+
+    Marker size grows with the item's score.
+
+    Args:
+        item_rows: Item rows with projected coordinates, `status`,
+            `source_modality` and `acse_score`.
+        output_path: PNG path; parent directories are created.
+        title: Figure title.
+        components: 2 for flat panels, 3 for 3D panels.
+    """
     if components == 3:
         fig = plt.figure(figsize=(13, 5.8), constrained_layout=True)
         axes = [
@@ -340,6 +437,17 @@ def plot_selected_samples(
     title: str,
     components: int,
 ) -> None:
+    """Plot the samples of selected items, one panel per item, coloured by cluster.
+
+    Args:
+        sample_rows: Sample rows with projected coordinates, `cluster_label`,
+            `sample_index` and `pred_modality`.
+        item_rows_by_id: Item rows keyed by item id, for the panel titles.
+        selected_ids: Items to plot; nothing is written when empty.
+        output_path: PNG path; parent directories are created.
+        title: Figure title.
+        components: 2 for flat panels, 3 for 3D panels.
+    """
     if not selected_ids:
         return
     cols = 2
@@ -407,6 +515,18 @@ def plot_selected_samples(
 
 
 def main() -> None:
+    """Project one run's Task 2 sample embeddings and write figures and CSVs.
+
+    Reads the semantic embedding cache when it exists, unless
+    `--recompute-embeddings` is set; otherwise embeds the parsed stochastic
+    samples again and reclusters each item. Writes the projected item, sample
+    and selected-item CSVs, two figures and a manifest to the output directory.
+
+    Raises:
+        FileNotFoundError: If the analysis has no `uq_scores.csv`.
+        ValueError: If, when embedding again, there are no parsed stochastic
+            samples or none of a scored item.
+    """
     parser = argparse.ArgumentParser(
         description="Project and visualize ACSE Task 2 stochastic embeddings."
     )

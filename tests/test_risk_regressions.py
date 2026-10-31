@@ -301,7 +301,10 @@ class ExpectedStochasticSampleContractTest(unittest.TestCase):
             eu.append_jsonl(self.root / "data/processed/model_outputs_raw.jsonl", raw)
 
     def test_analysis_cli_counts_a_never_written_sample_as_incomplete(self) -> None:
-        """A sample the run never wrote is 4/5, not 4/4: the plan sets the denominator."""
+        """A sample the run never wrote is 4/5, not 4/4.
+
+        The plan sets the denominator.
+        """
         output_dir = self.root / "outputs/analysis"
         argv = [
             "generate_evaluation_analysis.py",
@@ -433,7 +436,10 @@ class ExpectedStochasticSampleContractTest(unittest.TestCase):
         self.assertEqual(consistency["agreement_n_incomplete_excluded"], "1")
 
     def test_run_matrix_counts_a_never_written_sample_as_incomplete(self) -> None:
-        """The recorded plan and the comparison config agree, so 4 of 5 is incomplete."""
+        """4 of 5 is incomplete.
+
+        The recorded plan and the comparison config agree on five samples.
+        """
         self._write_registry(5)
         self._write_config()
         self._run_matrix()
@@ -494,7 +500,16 @@ class ReproductionWrapperContractTest(unittest.TestCase):
             self.assertEqual(captured[variant_index + 1], "shall")
 
     def _fresh_clone_tree(self, root: Path) -> dict[str, str]:
-        """A tree with only the tracked example config and a capturing python."""
+        """Build a tree with only the tracked example config and a capturing python.
+
+        Args:
+            root: Empty directory that becomes the fresh clone.
+
+        Returns:
+            The environment to run `scripts/reproduce.sh` with: the current one
+            without `RE_UQ_*` variables, plus `CAPTURE_PATH` for the captured
+            arguments.
+        """
         (root / "scripts").mkdir()
         (root / "run_configs").mkdir()
         (root / ".venv/bin").mkdir(parents=True)

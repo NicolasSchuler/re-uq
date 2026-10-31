@@ -1,31 +1,31 @@
 """Regenerate the paper-facing per-cell snapshots and per-model disaggregations.
 
-The per-cell snapshot CSVs that ``scripts/aggregate_paper_headline_metrics.py``
-reads (``paper_task2_text_drift_metrics.csv`` and
-``paper_text_drift_confidence_and_stability.csv``) were shipped as static files
+The per-cell snapshot CSVs that `scripts/aggregate_paper_headline_metrics.py`
+reads (`paper_task2_text_drift_metrics.csv` and
+`paper_text_drift_confidence_and_stability.csv`) were shipped as static files
 whose generating code was never committed. This module regenerates them from the
 local raw model outputs plus the benchmark CSVs, and additionally exports two
 disaggregated tables that the pooled headline hides:
 
-* ``paper_per_model_modality_table.csv`` -- model x dataset x variant x source
+* `paper_per_model_modality_table.csv` -- model x dataset x variant x source
   modality, with strict/broad strengthening counts, rates, seed-clustered
   bootstrap CIs, the p>=0.90 high-confidence share, the agreement denominator,
   and mean generated-requirement length.
-* ``paper_per_model_headline.csv`` -- the same columns per model, pooled over
+* `paper_per_model_headline.csv` -- the same columns per model, pooled over
   the requested cells.
 
-Scoring unit and aggregation rules are documented in ``docs/aggregation.md``.
+Scoring unit and aggregation rules are documented in `docs/aggregation.md`.
 
 Run selection: for each (dataset, variant) cell the run registry CSV is read and
 only runs compatible with the pinned paper group, task set, coverage, sampling,
 and batching plan are kept, dropping smoke runs by default and models matching
-``--exclude-model-prefix`` (``azure.`` by default). When a model has several
-compatible runs in a cell the most recent one (by ``started_at_utc``, then
-``run_id``) wins. A chosen run that contributed no raw rows is an error
-(``--allow-missing-raw`` downgrades it to a warning and drops the model), so a
+`--exclude-model-prefix` (`azure.` by default). When a model has several
+compatible runs in a cell the most recent one (by `started_at_utc`, then
+`run_id`) wins. A chosen run that contributed no raw rows is an error
+(`--allow-missing-raw` downgrades it to a warning and drops the model), so a
 stale registry row can never pass an empty cell off as a measured one. The
 chosen run ids are recorded in
-``outputs/paper_snapshot_provenance.json``.
+`outputs/paper_snapshot_provenance.json`.
 """
 
 from __future__ import annotations
@@ -93,12 +93,20 @@ PROVENANCE_NAME = "paper_snapshot_provenance.json"
 
 
 def repo_relative(path: Path | str, root: Path) -> str:
-    """A path as recorded in the provenance JSON: relative to ``root`` when inside.
+    """Return a path as recorded in the provenance JSON: relative to `root` when inside.
 
     The provenance file is tracked with the paper tables, so it must not carry
-    one checkout's absolute paths. Its readers (``_path`` in
-    ``export_commitment_transitions`` and ``meaning_variation_sensitivity``)
+    one checkout's absolute paths. Its readers (`_path` in
+    `export_commitment_transitions` and `meaning_variation_sensitivity`)
     re-root relative entries under the checkout they run from.
+
+    Args:
+        path: Path to record.
+        root: Checkout root the path is made relative to.
+
+    Returns:
+        The POSIX path relative to `root`, or the path as given when it lies
+        outside `root`.
     """
     candidate = Path(path)
     try:
@@ -258,7 +266,15 @@ def _bound_columns(name: str) -> list[str]:
 
 
 def _rate_columns(name: str) -> list[str]:
-    """The seven columns one clustered rate contributes, in reading order."""
+    """Return the seven columns one clustered rate contributes, in reading order.
+
+    Args:
+        name: Metric prefix, e.g. `task2_strict_strengthening`.
+
+    Returns:
+        The count, denominator, rate, primary interval bounds and seed-clustered
+        interval bounds columns.
+    """
     return [
         f"{name}_n",
         f"{name}_denominator",
@@ -338,10 +354,38 @@ def select_cell_runs(
     """Pick the latest compatible registry run for each cohort model.
 
     The task and coverage defaults describe a Task 1 + Task 2 paper run.
-    :func:`select_task3_cell_runs` overrides them for the audit registry, whose
-    rows carry ``tasks=task3`` and one item per parsed Task 2 answer rather
-    than the whole benchmark. ``accept_row`` is a final per-row predicate, used
-    there to pin an audit to the Task 2 run it actually audited.
+    `select_task3_cell_runs` overrides them for the audit registry, whose
+    rows carry `tasks=task3` and one item per parsed Task 2 answer rather
+    than the whole benchmark. Only rows with status `complete` are considered.
+
+    Args:
+        registry_rows: Run-registry rows of one (dataset, variant) cell.
+        models: Cohort to keep; empty keeps every model.
+        exclude_model_prefixes: Models whose id starts with any of these are
+            dropped.
+        include_smoke: Keep `smoke-` runs too, which may then cover only part of
+            the benchmark.
+        run_group_id: Run group a run must belong to; None skips the whole
+            compatibility check, including every parameter below except
+            `run_prefixes` and `accept_row`.
+        benchmark_item_count: Benchmark size a run must have planned.
+        expected_stochastic_samples: Stochastic samples per item a run must
+            have planned.
+        expected_batch_order: Batch order a run must have used; None skips it,
+            and rows that predate the `batch_order` column pass.
+        expected_batch_size: Batch size a run must have used; None skips it.
+        run_prefixes: Run-id prefixes a run must match; None accepts any.
+        required_tasks: Tasks a run must include.
+        exact_tasks: Exact task set a run must have; None allows extra tasks.
+        allow_partial_benchmark: Accept runs that planned fewer items than the
+            benchmark.
+        accept_row: A final per-row predicate, used by
+            `select_task3_cell_runs` to pin an audit to the Task 2 run it
+            actually audited.
+
+    Returns:
+        A copy of the chosen registry row per model; the latest by
+        `started_at_utc`, then `run_id`, wins.
     """
     cohort = list(models)
     excluded = list(exclude_model_prefixes)
@@ -410,10 +454,32 @@ def select_task3_cell_runs(
 
     Two differences from the Task 1/2 selection. The audit registry plans one
     item per *parsed* Task 2 answer, so its planned size is at most the
-    benchmark and ``allow_partial_benchmark`` is the right gate. And an audit
+    benchmark and `allow_partial_benchmark` is the right gate. And an audit
     only describes the run it read: a Task 3 row naming a different
-    ``source_run_id`` measures another Task 2 generation and must not be pooled
+    `source_run_id` measures another Task 2 generation and must not be pooled
     with this one, so `source_run_ids` pins it per model.
+
+    Args:
+        registry_rows: Audit-registry rows of one (dataset, variant) cell.
+        models: Cohort to keep; empty keeps every model.
+        exclude_model_prefixes: Models whose id starts with any of these are
+            dropped.
+        include_smoke: Keep `smoke-` audits too.
+        source_run_ids: Task 2 run chosen for each model; a model without one
+            gets no audit.
+        run_group_id: Run group an audit must belong to; None skips the
+            compatibility check.
+        benchmark_item_count: Benchmark size, the upper bound of an audit's
+            planned items.
+        expected_stochastic_samples: Stochastic samples per item an audit must
+            have planned.
+        expected_batch_order: Batch order an audit must have used.
+        expected_batch_size: Batch size an audit must have used.
+        run_prefixes: Run-id prefixes an audit must match; None accepts any.
+
+    Returns:
+        A copy of the chosen audit-registry row per model, as from
+        `select_cell_runs`.
     """
 
     def audits_the_chosen_run(row: Mapping[str, Any]) -> bool:
@@ -439,10 +505,19 @@ def select_task3_cell_runs(
 
 
 def stream_raw_rows(path: Path, run_ids: set[str]) -> Iterator[dict[str, Any]]:
-    """Yield raw records whose ``run_id`` is in ``run_ids``.
+    """Yield raw records whose `run_id` is in `run_ids`.
 
     The raw files hold 60-70k records each, so the filter is applied while
     streaming instead of materializing the whole file.
+
+    Args:
+        path: Raw store, a JSONL file with an optional compacted Parquet
+            sibling; a missing store yields nothing.
+        run_ids: Run ids to keep.
+
+    Yields:
+        Each matching raw record, the compacted records first and then those
+        still in the JSONL file, read under a shared file lock.
     """
     if not eu.raw_store_exists(path):
         return
@@ -485,6 +560,15 @@ def _numeric(value: Any) -> float | None:
 
 
 def task2_deterministic_rows(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the deterministic Task 2 score rows.
+
+    Args:
+        scores: Score rows from `eval_utils.build_uq_scores`.
+
+    Returns:
+        The Task 2 rows of the `verbalized_confidence` method, one per parsed
+        deterministic answer.
+    """
     return [
         row
         for row in scores
@@ -496,7 +580,15 @@ def task2_deterministic_rows(scores: list[dict[str, Any]]) -> list[dict[str, Any
 def task2_deterministic_raw_rows(
     raw_rows: Iterable[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """The raw records the deterministic Task 2 score rows are built from."""
+    """Return the raw records the deterministic Task 2 score rows are built from.
+
+    Args:
+        raw_rows: Raw records of any task and sample kind.
+
+    Returns:
+        The Task 2 records whose `sample_kind` is `deterministic`, parsed or
+        not.
+    """
     return [
         row
         for row in raw_rows
@@ -506,11 +598,18 @@ def task2_deterministic_raw_rows(
 
 
 def task2_parse_failure_rate(raw_rows: Iterable[dict[str, Any]]) -> float:
-    """Share of deterministic Task 2 responses that did not parse.
+    """Return the share of deterministic Task 2 responses that did not parse.
 
     A response that fails to parse never produces a score row, so this rate is
     only visible in the raw records; deriving it from the score rows would
     divide failures by the successes that survived them.
+
+    Args:
+        raw_rows: Raw records; only the deterministic Task 2 ones count.
+
+    Returns:
+        The share whose `parse_status` is not `ok`, or 0.0 when there are no
+        deterministic Task 2 records.
     """
     rows = task2_deterministic_raw_rows(raw_rows)
     if not rows:
@@ -530,11 +629,20 @@ def stamp_cell_identity(
 ) -> list[dict[str, Any]]:
     """Record which cell a score row came from, in place.
 
-    ``build_uq_scores`` scores one (dataset, variant) cell at a time and its
+    `build_uq_scores` scores one (dataset, variant) cell at a time and its
     rows carry no cell identity, because the cell is implied by the raw file
     they were read from. The exporter pools four cells, so it stamps the
     identity here (using the same spelling as the run registry) before anything
-    is pooled or joined; see :func:`paper_join_key`.
+    is pooled or joined; see `paper_join_key`.
+
+    Args:
+        scores: Score rows or raw records of one cell; each gains
+            `dataset_id` and `benchmark_variant`.
+        dataset: Dataset id of the cell, normalized before stamping.
+        variant: Benchmark variant of the cell, normalized before stamping.
+
+    Returns:
+        The same `scores` list.
     """
     dataset_id = eu.normalize_dataset_id(dataset)
     benchmark_variant = eu.normalize_benchmark_variant(variant)
@@ -545,15 +653,22 @@ def stamp_cell_identity(
 
 
 def paper_join_key(row: Mapping[str, Any]) -> PaperJoinKey:
-    """``(model, dataset, variant, item)`` -- the identity a paper join needs.
+    """Return `(model, dataset, variant, item)` -- the identity a paper join needs.
 
-    Benchmark item ids are reused between the ``must`` and ``shall`` variants of
-    a family (all 720 ids overlap), so a ``(model, item)`` key silently collapses
+    Benchmark item ids are reused between the `must` and `shall` variants of
+    a family (all 720 ids overlap), so a `(model, item)` key silently collapses
     the four-cell matrix onto one cell: a pooled agreement number kept one row
     where four were measured, and a deterministic row could be joined to another
     cell's repeated samples. Provider and profile are deliberately NOT part of
     this key -- one paper cell selects exactly one run per model, and pooling
     across providers is what the per-model tables are for.
+
+    Args:
+        row: Score row or raw record with its cell identity stamped, as by
+            `stamp_cell_identity`.
+
+    Returns:
+        The model, dataset id, benchmark variant and item id of the row.
     """
     identity = eu.ObservationIdentity.from_raw_row(row)
     return (identity.model, identity.dataset_id, identity.variant, identity.item_id)
@@ -562,6 +677,16 @@ def paper_join_key(row: Mapping[str, Any]) -> PaperJoinKey:
 def stochastic_rows_by_method(
     scores: list[dict[str, Any]], uq_method: str
 ) -> dict[PaperJoinKey, dict[str, Any]]:
+    """Index the Task 2 score rows of one repeated-sample method by join key.
+
+    Args:
+        scores: Score rows with their cell identity stamped.
+        uq_method: Repeated-sample method to keep, e.g. `modality_consistency`.
+
+    Returns:
+        The method's Task 2 rows keyed by `paper_join_key`; a later row with the
+        same key replaces an earlier one.
+    """
     return {
         paper_join_key(row): row
         for row in scores
@@ -574,11 +699,21 @@ def agreement_for_strict_rows(
     strict_rows: Iterable[dict[str, Any]],
     consistency: dict[PaperJoinKey, dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Agreement metrics over every strict deterministic item.
+    """Compute agreement metrics over every strict deterministic item.
 
-    ``build_uq_scores`` cannot emit a distribution for a group with zero valid
+    `build_uq_scores` cannot emit a distribution for a group with zero valid
     stochastic samples. Such an absent row is still an incomplete measurement
     and must be counted in the excluded population.
+
+    Args:
+        strict_rows: Deterministic Task 2 rows with strict strengthening.
+        consistency: `modality_consistency` rows keyed by `paper_join_key`.
+
+    Returns:
+        The metrics of `eval_utils.repeated_sample_agreement_metrics`, with
+        strict items that have no consistency row added to
+        `agreement_n_incomplete_excluded`, and the consistency rows whose
+        stochastic samples are complete.
     """
     strict_keys = {paper_join_key(row) for row in strict_rows}
     present = [consistency[key] for key in strict_keys if key in consistency]
@@ -591,13 +726,21 @@ def agreement_for_strict_rows(
 
 
 def weak_intent_snapshot_fields(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Weak stakeholder-intent strengthening at confidence >= 0.90 (gated headline).
+    """Compute weak stakeholder-intent strengthening at confidence >= 0.90.
 
-    Weak rows are the deterministic Task 2 rows whose *source* modality is
-    ``nice_to_have``. The published rate divides the strict, p>=0.90
-    strengthening count by the weak rows whose generated text yielded a
-    modality at all (``weak_n_readable``); ``_all_weak`` charges the unreadable
-    rows to the denominator instead, bounding the rate from below.
+    This is the gated headline. Weak rows are the deterministic Task 2 rows
+    whose *source* modality is `nice_to_have`. The published rate divides the
+    strict, p>=0.90 strengthening count by the weak rows whose generated text
+    yielded a modality at all (`weak_n_readable`); `_all_weak` charges the
+    unreadable rows to the denominator instead, bounding the rate from below.
+
+    Args:
+        rows: Deterministic Task 2 score rows of one cell.
+
+    Returns:
+        `weak_n`, `weak_n_readable`, `weak_strict_text_strengthening_90` and
+        `weak_strict_text_strengthening_90_all_weak`; a rate is blank when its
+        denominator is zero.
     """
     weak_rows = [
         row for row in rows if str(row.get("gold_modality", "")) == "nice_to_have"
@@ -633,7 +776,20 @@ def task2_snapshot_row(
     rows: list[dict[str, Any]],
     raw_rows: Iterable[dict[str, Any]] = (),
 ) -> dict[str, Any]:
-    """Rebuild one row of ``paper_task2_text_drift_metrics.csv``."""
+    """Rebuild one row of `paper_task2_text_drift_metrics.csv`.
+
+    Args:
+        dataset: Dataset label written into the row.
+        variant: Variant label written into the row.
+        models: Number of models pooled in the cell.
+        rows: Deterministic Task 2 score rows of the cell.
+        raw_rows: Raw records of the cell, used only for the parse-failure
+            rate; empty gives a rate of 0.0.
+
+    Returns:
+        The row restricted to `TASK2_SNAPSHOT_FIELDS`, blank where a metric is
+        not computed.
+    """
     y_true = [int(row["y_true"]) for row in rows]
     calibration = eu.calibration_probabilities(rows, "task2")
     gold = [str(row["gold_modality"]) for row in rows]
@@ -686,11 +842,23 @@ def confidence_snapshot_row(
     det_rows: list[dict[str, Any]],
     scores: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Rebuild one row of ``paper_text_drift_confidence_and_stability.csv``.
+    """Rebuild one row of `paper_text_drift_confidence_and_stability.csv`.
 
-    ``n`` is the coverage-adjusted denominator: deterministic Task 2 rows whose
+    `n` is the coverage-adjusted denominator: deterministic Task 2 rows whose
     generated text yielded a modality. Stability columns join the deterministic
     row to the repeated-sample score rows for the same (model, item).
+
+    Args:
+        dataset: Dataset label written into the row.
+        variant: Variant label written into the row.
+        det_rows: Deterministic Task 2 score rows of the cell.
+        scores: All score rows of the cell, the source of the repeated-sample
+            rows.
+
+    Returns:
+        The snapshot row: `n`, broad and strict strengthening counts with their
+        high-confidence shares and mean confidence, and the repeated-sample
+        stability measures over complete groups.
     """
     text_rows = [
         row
@@ -776,11 +944,30 @@ def per_model_row(
     n_items: int,
     bootstrap_samples: int,
 ) -> dict[str, Any]:
-    """One disaggregated row: counts, rates, both cluster CIs, and length.
+    """Build one disaggregated row: counts, rates, both cluster CIs, and length.
 
-    ``*_ci_low`` / ``*_ci_high`` are request-clustered (the reported interval);
-    ``*_seed_ci_low`` / ``*_seed_ci_high`` are the seed-clustered pair and
-    ``strengthening_ci_cluster_field`` names the unit actually used.
+    `*_ci_low` / `*_ci_high` are request-clustered, with
+    `strengthening_ci_cluster_field` naming the unit actually used;
+    `*_seed_ci_low` / `*_seed_ci_high` are the seed-clustered pair (the reported
+    interval).
+
+    Args:
+        model: Model label of the row, or `all` when pooled over models.
+        dataset: Dataset label, or `all` when pooled over cells.
+        variant: Variant label, or `all` when pooled over cells.
+        source_modality: Source-modality label, or `all` for every modality.
+        det_rows: Deterministic Task 2 score rows of the slice; their number is
+            the valid count.
+        consistency: `modality_consistency` rows keyed by `paper_join_key`, for
+            the agreement denominators.
+        n_items: Planned answers of the slice; the shortfall of `det_rows` is
+            counted as parse failures.
+        bootstrap_samples: Bootstrap resamples per interval.
+
+    Returns:
+        The row with item, valid, parse-failure and unclassified counts, strict
+        and broad strengthening counts, rates and intervals, the high-confidence
+        share, the agreement denominators and the mean requirement length.
     """
     text_rows = [
         row
@@ -866,6 +1053,14 @@ RQ_AGREEMENT_FIELD = "rq_agreement_unanimous"
 
 
 def task1_deterministic_rows(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the deterministic Task 1 score rows.
+
+    Args:
+        scores: Score rows from `eval_utils.build_uq_scores`.
+
+    Returns:
+        The Task 1 rows of the `verbalized_confidence` method.
+    """
     return [
         row
         for row in scores
@@ -875,6 +1070,14 @@ def task1_deterministic_rows(scores: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 def task3_deterministic_rows(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the deterministic Task 3 score rows.
+
+    Args:
+        scores: Score rows of the blind audit runs.
+
+    Returns:
+        The Task 3 rows of the `verbalized_confidence` method.
+    """
     return [
         row
         for row in scores
@@ -890,14 +1093,32 @@ def rq_metric_slices(
     meaning_variation: dict[PaperJoinKey, dict[str, Any]],
     task3_rows: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Row slices the RQ metrics are computed and bootstrapped over.
+    """Build the row slices the RQ metrics are computed and bootstrapped over.
 
     Every returned row is a copy of a *deterministic* score row, so it already
-    carries the ``batch_id`` of the request that decided it and the ``seed_id``
-    of its capability; the repeated-sample and Task 3 quantities are joined
-    onto it rather than clustered on their own requests. That keeps one
-    resampling unit per slice and matches how the archived runs behave: a
-    request decides its whole answer set at once (``docs/aggregation.md`` §6).
+    carries the `batch_id` of the request that decided it and the `seed_id`
+    of its capability; the repeated-sample quantities are joined onto it rather
+    than clustered on their own requests. That keeps one resampling unit per
+    slice and matches how the archived runs behave: a request decides its whole
+    answer set at once (`docs/aggregation.md` §6). The Task 3 slice is the
+    exception: an audit outcome shares the dependence of its own audit request,
+    so those rows take the Task 3 `batch_id` and keep the Task 2 request as
+    `source_batch_id`.
+
+    Args:
+        task1_rows: Deterministic Task 1 score rows.
+        task2_det_rows: Deterministic Task 2 score rows.
+        consistency: `modality_consistency` rows keyed by `paper_join_key`.
+        meaning_variation: Meaning-variation rows keyed by `paper_join_key`.
+        task3_rows: Deterministic Task 3 score rows, joined to the strict Task 2
+            rows through their `source_item_id`.
+
+    Returns:
+        The slices keyed by `RQ_SLICE_NAMES`: Task 1, all Task 2, readable,
+        weak-intent and strict Task 2 rows, strict rows with complete repeated
+        samples and their agreement outcome, readable rows with a
+        meaning-variation score and the strict label, and audited strict rows
+        with the audit verdict.
     """
     readable = [
         row
@@ -1006,7 +1227,15 @@ RQ_SLICE_NAMES = (
 def slices_for_model(
     slices: Mapping[str, list[dict[str, Any]]], model: str
 ) -> dict[str, list[dict[str, Any]]]:
-    """The one model's rows of every slice (each row carries its `model`)."""
+    """Return the one model's rows of every slice (each row carries its `model`).
+
+    Args:
+        slices: Slices keyed by `RQ_SLICE_NAMES`.
+        model: Model whose rows are kept.
+
+    Returns:
+        The same slice names, holding only that model's rows.
+    """
     return {
         name: [row for row in slices[name] if str(row.get("model", "")) == model]
         for name in RQ_SLICE_NAMES
@@ -1016,7 +1245,14 @@ def slices_for_model(
 def merge_slices(
     parts: Iterable[Mapping[str, list[dict[str, Any]]]],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Pool slices over cells (or models); rows keep their own cell identity."""
+    """Pool slices over cells (or models); rows keep their own cell identity.
+
+    Args:
+        parts: Slice mappings to pool, each keyed by `RQ_SLICE_NAMES`.
+
+    Returns:
+        The concatenated rows per slice name.
+    """
     merged: dict[str, list[dict[str, Any]]] = {name: [] for name in RQ_SLICE_NAMES}
     for part in parts:
         for name in RQ_SLICE_NAMES:
@@ -1037,7 +1273,19 @@ def _count_kind(rows: Iterable[Mapping[str, Any]], kind: str) -> int:
 def _bound_fields(
     name: str, numerator: int, readable: int, unreadable: int
 ) -> dict[str, Any]:
-    """Coverage bounds of a rate over ``readable + unreadable`` answers."""
+    """Return coverage bounds of a rate over `readable + unreadable` answers.
+
+    Args:
+        name: Metric prefix of the columns.
+        numerator: Events among the readable answers.
+        readable: Answers whose text modality was read.
+        unreadable: Answers whose text modality could not be read; the lower
+            bound counts them as non-events, the upper bound as events.
+
+    Returns:
+        `<name>_n_unreadable`, `<name>_lower_bound` and `<name>_upper_bound`;
+        the bounds are blank without any answers.
+    """
     full = readable + unreadable
     return {
         f"{name}_n_unreadable": unreadable,
@@ -1049,7 +1297,19 @@ def _bound_fields(
 def _rate_fields(
     name: str, numerator: int, denominator: int, ci: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Counts, point estimate, and both cluster intervals for one rate."""
+    """Return counts, point estimate, and both cluster intervals for one rate.
+
+    Args:
+        name: Metric prefix of the columns.
+        numerator: Event count.
+        denominator: Eligible answers.
+        ci: Bootstrap fields named `<name>_ci_low`, `<name>_seed_ci_low` and so
+            on; missing ones are left blank.
+
+    Returns:
+        The seven `_rate_columns` fields; the rate is blank for a zero
+        denominator.
+    """
     return {
         f"{name}_n": numerator,
         f"{name}_denominator": denominator,
@@ -1080,11 +1340,19 @@ def _auroc_fields(
 
 
 def _rq_auroc(rows: list[dict[str, Any]], score_field: str) -> float:
-    """AUROC of a detector score against the strict-strengthening label.
+    """Return the AUROC of a detector score against the strict-strengthening label.
 
     Higher uncertainty must mean more strengthening, so the score is the row's
     *uncertainty* (meaning variation, or 1 - verbalized confidence). Degenerate
     label sets return NaN, which the bootstrap drops and the writer blanks.
+
+    Args:
+        rows: Slice rows carrying `RQ_LABEL_FIELD`.
+        score_field: Column holding the detector's uncertainty score; rows with
+            a blank score are left out.
+
+    Returns:
+        The AUROC, or NaN without usable rows of both classes.
     """
     labels = [int(row[RQ_LABEL_FIELD]) for row in rows]
     scores = [row.get(score_field) for row in rows]
@@ -1110,13 +1378,28 @@ def per_model_rq_row(
     n_cells_pooled: int,
     bootstrap_samples: int,
 ) -> dict[str, Any]:
-    """One row of the per-model RQ table: every RQ1/RQ2/RQ3 quantity at once.
+    """Build one row of the per-model RQ table: every RQ1/RQ2/RQ3 quantity at once.
 
     Rates are computed on the same row slices that are resampled, so a printed
     rate and its interval can never come from different denominators. Each task
     family records the cluster its interval actually used
-    (``task*_ci_cluster_field``): ``batch_id`` for batched runs, ``item_id``
-    for single-item requests, ``seed_id`` for legacy rows without either.
+    (`task*_ci_cluster_field`): `batch_id` for batched runs, `item_id`
+    for single-item requests, `seed_id` for legacy rows without either.
+
+    Args:
+        model: Model label of the row, or `all` when pooled over models.
+        dataset: Dataset label, or `all` when pooled over cells.
+        variant: Variant label, or `all` when pooled over cells.
+        slices: Row slices from `rq_metric_slices`, pooled with `merge_slices`
+            when the row spans several cells or models.
+        n_models_pooled: Number of models the row pools, recorded in the row.
+        n_cells_pooled: Number of cells the row pools, recorded in the row.
+        bootstrap_samples: Bootstrap resamples per interval; 0 leaves every
+            interval blank.
+
+    Returns:
+        The row over `PER_MODEL_RQ_FIELDS`: denominators, every RQ rate with its
+        counts and both intervals, the coverage bounds and the detector AUROCs.
     """
     task1_rows = slices["task1"]
     task2_rows = slices["task2"]
@@ -1346,7 +1629,14 @@ def per_model_rq_row(
 
 
 def _no_cue_rate(rows: list[dict[str, Any]]) -> float:
-    """Share of Task 2 answers whose text carried no readable modal cue."""
+    """Return the share of Task 2 answers whose text carried no readable modal cue.
+
+    Args:
+        rows: Deterministic Task 2 score rows.
+
+    Returns:
+        The share, or NaN without rows.
+    """
     if not rows:
         return math.nan
     readable = sum(
@@ -1379,7 +1669,15 @@ def _task1_accuracy(rows: list[dict[str, Any]]) -> float | str:
 
 
 def _unsupported_acceptance_counts(rows: list[dict[str, Any]]) -> tuple[int, int]:
-    """Use the same decision-based count as the bootstrap metric."""
+    """Use the same decision-based count as the bootstrap metric.
+
+    Args:
+        rows: Deterministic Task 1 score rows.
+
+    Returns:
+        The high-confidence (>= 0.90) acceptances of unsupported mandatory
+        claims and the number of unsupported claims they are counted over.
+    """
     return eu.unsupported_mandatory_acceptance_counts(rows, HIGH_CONFIDENCE_THRESHOLD)
 
 
@@ -1397,9 +1695,25 @@ def drop_runs_without_raw_rows(
 ) -> dict[str, dict[str, Any]]:
     """Refuse to score a registry run that contributed no raw rows.
 
-    A stale ``status == complete`` registry row whose raw records were pruned,
+    A stale `status == complete` registry row whose raw records were pruned,
     renamed, or never written would otherwise silently produce an empty cell
     that still looks like a full model x cell measurement.
+
+    Args:
+        chosen: Chosen registry row per model.
+        raw_rows: Raw records read for the chosen runs.
+        registry_path: Registry location, named in the message.
+        raw_path: Raw-store location, named in the message.
+        allow_missing_raw: Drop the affected models with a warning instead of
+            failing.
+
+    Returns:
+        `chosen` itself when every run has raw rows, otherwise a copy without
+        the affected models.
+
+    Raises:
+        ValueError: If a chosen run has no raw rows and `allow_missing_raw` is
+            False.
     """
     observed = {str(row.get("run_id", "")) for row in raw_rows}
     missing = {
@@ -1436,7 +1750,39 @@ def score_cell(
     expected_batch_size: int | None = DEFAULT_PAPER_BATCH_SIZE,
     selected_run_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Load one (dataset, variant) cell and return its scores plus provenance."""
+    """Load one (dataset, variant) cell and return its scores plus provenance.
+
+    Args:
+        root: Project root holding the benchmark, run registries and raw stores.
+        dataset: Dataset id of the cell.
+        variant: Benchmark variant of the cell; `must` selects `full-*` runs and
+            any other variant `full-<variant>-*` runs.
+        models: Cohort; empty selects every compatible model.
+        exclude_model_prefixes: Models whose id starts with any of these are
+            dropped and not reported as missing.
+        include_smoke: Also read the smoke registry and raw store and accept
+            smoke runs.
+        expected_stochastic_samples: Stochastic samples per item a run must have
+            planned, also used as the scoring plan; None counts as 0.
+        allow_missing_raw: Drop, with a warning, models without a compatible run
+            or without raw rows instead of failing.
+        run_group_id: Run group a run must belong to; None skips the
+            compatibility check.
+        expected_batch_order: Batch order a run must have used.
+        expected_batch_size: Batch size a run must have used.
+        selected_run_ids: Only registry rows with these run ids are considered;
+            None considers all.
+
+    Returns:
+        The cell record: labels, repo-relative registry, benchmark and raw
+        paths, the chosen run id per model, benchmark and raw-row counts, the
+        sampling plan, the score rows with their cell identity stamped, and the
+        raw rows.
+
+    Raises:
+        ValueError: If a cohort model has no compatible complete run and
+            `allow_missing_raw` is False.
+    """
     benchmark_path = eu.artifact_path(
         root / "data/processed/benchmark_items.csv", dataset, variant
     )
@@ -1560,13 +1906,49 @@ def score_task3_cell(
     """Score the blind audits of the Task 2 runs `score_cell` already chose.
 
     The audit items are **recomputed** from the Task 2 raw rows with
-    :func:`eval_utils.build_task3_verification_items` rather than read from a
+    `eval_utils.build_task3_verification_items` rather than read from a
     file: the archived Task 3 raw rows do not carry the item fields, and the
     items CSVs of the paper runs are not in the repository. The generated
-    ``item_id`` is deterministic (source item, model, audit mode), so a
+    `item_id` is deterministic (source item, model, audit mode), so a
     recomputed item set either matches the audit rows exactly or the audit read
     a different Task 2 generation -- which is what the coverage guard below
     turns into an error instead of a silently short denominator.
+
+    Args:
+        root: Project root holding the benchmark, audit registries and raw
+            stores.
+        dataset: Dataset id of the cell.
+        variant: Benchmark variant of the cell.
+        models: Cohort; empty selects every compatible model.
+        exclude_model_prefixes: Models whose id starts with any of these are
+            dropped.
+        source_run_ids: Task 2 run `score_cell` chose per model; each audit must
+            name it as its source.
+        task2_raw_rows: Raw records of those Task 2 runs, from which the audit
+            items are recomputed.
+        include_smoke: Also read the smoke audit registry and raw store.
+        expected_stochastic_samples: Stochastic samples per audit item.
+        run_group_id: Run group an audit must belong to; None skips the
+            compatibility check.
+        expected_batch_order: Batch order an audit must have used.
+        expected_batch_size: Batch size an audit must have used.
+        audit_mode: Task 3 audit mode; a non-official mode adds `-<mode>` to
+            the `task3` run-id prefix.
+        allow_missing_task3: Drop, with a warning, models without a compatible
+            audit instead of failing.
+        selected_run_ids: Only audit-registry rows with these run ids are
+            considered; None considers all.
+
+    Returns:
+        The cell record: labels, audit mode, repo-relative Task 3 registry and
+        raw paths, the chosen audit run per model, item and raw-row counts, and
+        the audit review, audit coverage and Task 3 score rows, each stamped
+        with the cell identity.
+
+    Raises:
+        ValueError: If a model has no compatible audit and `allow_missing_task3`
+            is False, an audit row names an item the selected Task 2 runs do not
+            produce, or a model audited another model's answers.
     """
     benchmark_path = eu.artifact_path(
         root / "data/processed/benchmark_items.csv", dataset, variant
@@ -1704,6 +2086,16 @@ def score_task3_cell(
 
 
 def markdown_for_rows(title: str, rows: list[dict[str, Any]], fields: list[str]) -> str:
+    """Render rows as a Markdown document under a title heading.
+
+    Args:
+        title: Text of the level-one heading.
+        rows: Rows to tabulate.
+        fields: Table columns in order.
+
+    Returns:
+        The heading and the Markdown table, ending in a newline.
+    """
     return "\n".join([f"# {title}", "", eu.markdown_table(rows, fields), ""])
 
 
@@ -1728,7 +2120,50 @@ def export_tables(
     selected_run_ids: set[str] | None = None,
     selected_task3_run_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Regenerate every paper-facing table for ``cells`` and write them out."""
+    """Regenerate every paper-facing table for `cells` and write them out.
+
+    Writes the two per-cell snapshots, the per-model modality table (per cell
+    and pooled), the per-model headline, the per-model RQ table, the headline
+    bootstrap intervals, the Task 3 audit review and coverage tables, Markdown
+    copies of the per-model tables, and the snapshot provenance JSON.
+
+    Args:
+        root: Project root holding the benchmark, run registries and raw stores.
+        cells: (dataset, variant) cells to score and pool.
+        models: Cohort, recorded as `models_cohort`; empty selects every
+            compatible model.
+        exclude_model_prefixes: Models whose id starts with any of these are
+            dropped.
+        output_dir: Directory that receives every table; created if needed.
+        bootstrap_samples: Bootstrap resamples per interval.
+        overwrite_snapshots: Write the two per-cell snapshots under their tracked
+            names; otherwise they get the `_regenerated` suffix.
+        include_smoke: Also select smoke runs.
+        expected_stochastic_samples: Stochastic samples per item every run must
+            have planned.
+        allow_missing_raw: Drop models without a compatible run or without raw
+            rows instead of failing.
+        run_group_id: Run group every run must belong to; None skips the
+            compatibility check.
+        expected_batch_order: Batch order every run must have used.
+        expected_batch_size: Batch size every run must have used.
+        local_models: Models recorded as the local group in the provenance;
+            every other model that ran is recorded as hosted.
+        include_task3: Score the blind Task 3 audits; when False the Task 3
+            columns stay blank.
+        allow_missing_task3: Leave a model's Task 3 columns blank when it has no
+            compatible audit instead of failing.
+        task3_audit_mode: Audit mode of the Task 3 runs to select.
+        selected_run_ids: Only Task 1/2 registry rows with these run ids are
+            considered; None considers all.
+        selected_task3_run_ids: Only audit-registry rows with these run ids are
+            considered; None considers all.
+
+    Returns:
+        The written rows under `task2_rows`, `confidence_rows`,
+        `per_model_rows`, `pooled_modality_rows`, `headline_rows`, `rq_rows`
+        and `headline_ci_rows`, and the output files under `paths`.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     local_cohort = set(local_models or [])
     task2_rows: list[dict[str, Any]] = []
@@ -1935,8 +2370,9 @@ def export_tables(
         iterations=bootstrap_samples,
         seed=BOOTSTRAP_SEED,
     )
-    # `ci_low` / `ci_high` are request-clustered (the reported interval);
-    # `seed_ci_low` / `seed_ci_high` are the seed-clustered pair.
+    # `ci_low` / `ci_high` are request-clustered (`ci_cluster_field` names the
+    # unit actually used); `seed_ci_low` / `seed_ci_high` are the seed-clustered
+    # pair (the reported interval).
     headline_ci_rows = [
         {
             "headline_key": headline_key,
@@ -2062,10 +2498,20 @@ def _cohort_order(
     local_cohort: set[str],
     local: bool,
 ) -> list[str]:
-    """Models that ran, in the order the caller asked for them.
+    """Return the models that ran, in the order the caller asked for them.
 
     The requested cohort is the paper's row order; anything that ran but was
     not named (a `--models`-less run) follows, sorted.
+
+    Args:
+        present: Models that produced RQ rows.
+        requested: Requested cohort, the paper's row order.
+        local_cohort: Models of the local group.
+        local: True to return the local group, False for the hosted group.
+
+    Returns:
+        The group's named models in requested order, then its other models
+        sorted.
     """
     scored = [model for model in present if (model in local_cohort) is local]
     named = [model for model in requested if model in scored]
@@ -2073,11 +2519,30 @@ def _cohort_order(
 
 
 def _items_for_modality(items_per_model: int) -> int:
-    """Benchmark items per model for one source modality in a cell."""
+    """Return benchmark items per model for one source modality in a cell.
+
+    Args:
+        items_per_model: Benchmark items per model over all source modalities.
+
+    Returns:
+        The items of one modality, or 0 when there are none.
+    """
     return items_per_model // len(eu.MODALITIES) if items_per_model else 0
 
 
 def parse_cells(values: list[str] | None) -> list[tuple[str, str]]:
+    """Parse `--cell` values into normalized (dataset, variant) cells.
+
+    Args:
+        values: Cells written as `dataset/variant`; None or empty selects
+            `DEFAULT_CELLS`.
+
+    Returns:
+        The cells with normalized dataset ids and variants, in the given order.
+
+    Raises:
+        ValueError: If a value lacks its dataset or its variant.
+    """
     if not values:
         return list(DEFAULT_CELLS)
     cells = []
@@ -2092,6 +2557,12 @@ def parse_cells(values: list[str] | None) -> list[tuple[str, str]]:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser.
+
+    Returns:
+        A parser for the cell, cohort, run-selection, bootstrap and Task 3
+        options of `export_tables`.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--cell",
@@ -2184,6 +2655,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Export every paper-facing table and print where each file went.
+
+    Args:
+        argv: Command-line arguments; None reads them from `sys.argv`.
+    """
     args = build_parser().parse_args(argv)
     root = eu.project_root()
     output_dir = args.output_dir or (root / "outputs")

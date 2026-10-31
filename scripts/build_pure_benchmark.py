@@ -1,15 +1,21 @@
-"""Build the `pure` document-context ablation dataset (docs/context_ablation.md).
+"""Build the `pure` document-context ablation dataset (`docs/context_ablation.md`).
 
-Two stages, mirroring what notebooks 00 and 01 do for the paper datasets but
-without touching them:
+Four stages, chosen with `--stage`, mirroring what notebooks 00 and 01 do for
+the paper datasets but without touching them:
 
-    candidates  PURE XML -> data/processed/seeds_review_pure.csv
-                (all eligible optional-marked requirements plus a deterministic
-                sample of mandatory-marked ones; the reviewer edits `include`
-                and `capability_text_final` in place)
-    benchmark   reviewed seeds -> data/processed/benchmark_items_pure.csv,
-                outputs/benchmark_statements_review_pure.{csv,md} and
-                outputs/benchmark_manifest_pure.json
+    candidates       PURE XML -> data/processed/seeds_review_pure.csv
+                     (all eligible optional-marked requirements plus a
+                     deterministic sample of mandatory-marked ones; the reviewer
+                     edits `include` and `capability_text_final` in place)
+    review           docs/pure_capability_revisions.csv ->
+                     outputs/pure_capability_revision_review.csv (proposed
+                     capability revisions with a `pending` author decision)
+    apply-revisions  accepted revisions -> seeds_review_pure.csv, with the
+                     previous inputs kept under
+                     outputs/pure_before_capability_review
+    benchmark        reviewed seeds -> data/processed/benchmark_items_pure.csv,
+                     outputs/benchmark_statements_review_pure.{csv,md} and
+                     outputs/benchmark_manifest_pure.json
 
 Only the MUST cell is built; the ablation never uses the SHALL variant.
 """
@@ -36,22 +42,66 @@ MANIFEST_PROMPTS = [
 
 
 def seeds_review_path(root: Path) -> Path:
+    """Return the path of the reviewable PURE seed table.
+
+    Args:
+        root: Project root the path is resolved against.
+
+    Returns:
+        `data/processed/seeds_review_pure.csv` under `root`.
+    """
     return eu.artifact_path(root / "data/processed/seeds_review.csv", DATASET_ID)
 
 
 def seeds_selected_path(root: Path) -> Path:
+    """Return the path of the PURE seeds selected for the benchmark.
+
+    Args:
+        root: Project root the path is resolved against.
+
+    Returns:
+        `data/processed/seeds_selected_pure.csv` under `root`.
+    """
     return eu.artifact_path(root / "data/processed/seeds_selected.csv", DATASET_ID)
 
 
 def benchmark_path(root: Path) -> Path:
+    """Return the path of the PURE benchmark items.
+
+    Args:
+        root: Project root the path is resolved against.
+
+    Returns:
+        `data/processed/benchmark_items_pure.csv` under `root`.
+    """
     return eu.artifact_path(root / "data/processed/benchmark_items.csv", DATASET_ID)
 
 
 def manifest_path(root: Path) -> Path:
+    """Return the path of the PURE benchmark manifest.
+
+    Args:
+        root: Project root the path is resolved against.
+
+    Returns:
+        `outputs/benchmark_manifest_pure.json` under `root`.
+    """
     return eu.artifact_path(root / "outputs/benchmark_manifest.json", DATASET_ID)
 
 
 def build_candidates(root: Path, *, overwrite: bool = False) -> dict[str, object]:
+    """Write the reviewable PURE seed candidates and report the selection.
+
+    Args:
+        root: Project root the seed review table is written under.
+        overwrite: Replace an existing review table even when it differs; by
+            default a differing table is kept and the new candidates go to a
+            `*_candidate` file next to it.
+
+    Returns:
+        The result of `eu.write_csv_rows_if_changed`, with `status`, `path` and
+        `candidate_path`.
+    """
     config = eu.load_config()
     rows = eu.load_pure_requirement_rows(config)
     target_count = eu.dataset_target_seed_count(config, DATASET_ID)
@@ -78,7 +128,18 @@ def build_candidates(root: Path, *, overwrite: bool = False) -> dict[str, object
 
 
 def capability_review_issues(seeds: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Mechanical red flags, not a substitute for source-based semantic review."""
+    """Return mechanical red flags, not a substitute for source-based semantic review.
+
+    Args:
+        seeds: Seed rows with `seed_id`, `capability_text_final` and
+            `original_requirement`.
+
+    Returns:
+        One row with `seed_id` and `issues` per flagged seed. The flags are a
+        missing capability, a residual modal verb, a capability shared with
+        another seed, and an automatic extraction that dropped the subject or a
+        leading condition; several flags are joined by `; `.
+    """
     counts = Counter(
         eu.strip_final_punctuation(s["capability_text_final"]).lower() for s in seeds
     )
@@ -112,6 +173,19 @@ def capability_review_issues(seeds: list[dict[str, str]]) -> list[dict[str, str]
 def require_reviewed_capabilities(
     root: Path, target_count: int
 ) -> list[dict[str, str]]:
+    """Load the included PURE seeds, requiring explicitly reviewed capabilities.
+
+    Args:
+        root: Project root the seed review table is read from.
+        target_count: Number of included seeds the table must contain.
+
+    Returns:
+        The included seeds, as loaded by `eu.load_reviewed_seeds`.
+
+    Raises:
+        ValueError: If any included seed has a capability review issue, such as
+            a missing reviewed capability or a residual modal verb.
+    """
     # Do not accept load_reviewed_seeds' generic fallback to auto suggestions.
     selected = [
         row
@@ -130,7 +204,24 @@ def require_reviewed_capabilities(
 
 
 def write_capability_review(root: Path) -> dict[str, Path]:
-    """Join proposed revisions to intact source records; never approve them."""
+    """Join proposed revisions to intact source records; never approve them.
+
+    The proposals in `docs/pure_capability_revisions.csv` are exported with
+    their source context, the review issues before and after the change, and a
+    `pending` author decision to `outputs/pure_capability_revision_review.csv`.
+
+    Args:
+        root: Project root the inputs are read from and the review written
+            under.
+
+    Returns:
+        A dict whose `review` entry is the path actually written: the review
+        file, or its candidate sibling when an earlier export differs.
+
+    Raises:
+        ValueError: If the proposals do not list every selected seed ID exactly
+            once.
+    """
     seeds = [
         r
         for r in eu.read_csv_rows(seeds_review_path(root))
@@ -178,6 +269,22 @@ def write_capability_review(root: Path) -> dict[str, Path]:
 
 
 def validate_seed_items(seeds: list[dict], target_count: int) -> list[dict]:
+    """Build the PURE benchmark items from reviewed seeds and check them.
+
+    Args:
+        seeds: Included seed rows with reviewed capabilities.
+        target_count: Expected number of seeds; the build must yield one item
+            per seed and modality.
+
+    Returns:
+        The benchmark items, with the PURE context fields passed through.
+
+    Raises:
+        ValueError: If a seed has a capability review issue, the items or their
+            IDs are not one per seed and modality, an item lacks an `M`/`O`
+            marker, or a source statement's text modality differs from its
+            source modality.
+    """
     issues = capability_review_issues(seeds)
     if issues:
         raise ValueError(f"PURE capability review issues: {issues}")
@@ -206,6 +313,14 @@ def validate_seed_items(seeds: list[dict], target_count: int) -> list[dict]:
 
 
 def validated_inputs(root: Path) -> tuple[list[dict], list[dict]]:
+    """Load the reviewed PURE seeds and the benchmark items they produce.
+
+    Args:
+        root: Project root the seed review table is read from.
+
+    Returns:
+        The included seeds and their validated benchmark items.
+    """
     config = eu.load_config()
     target_count = eu.dataset_target_seed_count(config, DATASET_ID)
     seeds = require_reviewed_capabilities(root, target_count)
@@ -215,8 +330,22 @@ def validated_inputs(root: Path) -> tuple[list[dict], list[dict]]:
 def apply_capability_revisions(root: Path) -> dict[str, object]:
     """Apply the reviewed capability clauses, preserving old benchmark inputs.
 
-    Every proposal needs an explicit ``accepted`` review decision. Original
+    Every proposal needs an explicit `accepted` review decision. Original
     source/context fields and every raw response remain unchanged.
+
+    Args:
+        root: Project root the seed review table and proposals are read from.
+
+    Returns:
+        A dict with `status` (`unchanged` or `applied`) and the `path` of the
+        seed review table; when applied, `backup` names the
+        `outputs/pure_before_capability_review` directory that keeps the
+        previous inputs.
+
+    Raises:
+        ValueError: If the proposals do not list every selected seed ID exactly
+            once, any proposal lacks an `accepted` decision, or an existing
+            backup differs from the file it would preserve.
     """
     path = seeds_review_path(root)
     rows = eu.read_csv_rows(path)
@@ -274,7 +403,15 @@ def apply_capability_revisions(root: Path) -> dict[str, object]:
 
 
 def validate_existing_benchmark(root: Path) -> None:
-    """Reject invalid or stale PURE inputs before any model request."""
+    """Reject invalid or stale PURE inputs before any model request.
+
+    Args:
+        root: Project root the reviewed seeds and benchmark are read from.
+
+    Raises:
+        ValueError: If the benchmark on disk differs from the items built from
+            the reviewed seeds in item count, item IDs or any field value.
+    """
     _, expected = validated_inputs(root)
     actual = eu.read_csv_rows(benchmark_path(root))
     by_id = {row["item_id"]: row for row in actual}
@@ -295,6 +432,17 @@ def validate_existing_benchmark(root: Path) -> None:
 
 
 def build_benchmark(root: Path, *, overwrite: bool = False) -> dict[str, object]:
+    """Write the PURE seed selection, benchmark, statement review and manifest.
+
+    Args:
+        root: Project root the inputs are read from and outputs written under.
+        overwrite: Replace existing seed selection and benchmark files even
+            when they differ; by default differing content goes to
+            `*_candidate` files.
+
+    Returns:
+        A dict with the `benchmark` write result and the written `manifest`.
+    """
     seeds, items = validated_inputs(root)
     target_count = len(seeds)
     selected_result = eu.write_csv_rows_if_changed(
@@ -341,6 +489,16 @@ def build_benchmark(root: Path, *, overwrite: bool = False) -> dict[str, object]
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Run one stage of the PURE dataset build from the command line.
+
+    `candidates` writes the seed review table, `review` exports the proposed
+    capability revisions for author review, `apply-revisions` applies the
+    accepted ones, and `benchmark` builds the benchmark from the reviewed
+    seeds.
+
+    Args:
+        argv: Command-line arguments; `None` reads `sys.argv`.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--stage",

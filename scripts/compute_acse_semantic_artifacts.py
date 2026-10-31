@@ -1,6 +1,6 @@
 """Compute and cache ACSE semantic-UQ artifacts for completed Task 1/2 runs.
 
-The normal evaluation export stores ACSE scalar diagnostics in ``uq_scores.csv``.
+The normal evaluation export stores ACSE scalar diagnostics in `uq_scores.csv`.
 This script adds a backend-specific cache with sample embeddings, item-level
 ACSE rows, and enough metadata to make 2D/3D projection plots later without
 calling the embedding backend again.
@@ -131,6 +131,20 @@ SAMPLE_FIELDS = [
 
 @dataclass(frozen=True)
 class CompletedRun:
+    """One completed analysis run and model whose semantic cache can be built.
+
+    Attributes:
+        analysis_dir: Evaluation output directory with the run's
+            `provenance_manifest.json` and `uq_scores.csv`.
+        dataset_id: Normalized dataset id from the provenance manifest.
+        variant: Normalized benchmark variant from the provenance manifest.
+        run_id: Run id from the provenance manifest.
+        model: One model the analysis scored.
+        profile: Profile filter of the analysis, empty when none was set.
+        semantic_embedding_backend: Embedding backend label the analysis
+            recorded, empty for runs without embedding provenance.
+    """
+
     analysis_dir: Path
     dataset_id: str
     variant: str
@@ -141,7 +155,16 @@ class CompletedRun:
 
 
 def scored_models(analysis_dir: Path, run_id: str) -> list[str]:
-    """Models this analysis dir actually scored deterministic Task 2 items for."""
+    """List the models this analysis dir actually scored deterministic Task 2 items for.
+
+    Args:
+        analysis_dir: Evaluation output directory with `uq_scores.csv`.
+        run_id: Run whose score rows are read.
+
+    Returns:
+        The sorted, non-empty model names with a `verbalized_confidence` Task 2
+        row for the run.
+    """
     return sorted(
         {
             str(row.get("model", "")).strip()
@@ -159,11 +182,20 @@ def completed_runs_from_analysis_dirs(
 ) -> list[CompletedRun]:
     """Discover cacheable runs from provenance manifests, not directory names.
 
-    An analysis produced without ``--model`` records an empty ``model_filter``
+    An analysis produced without `--model` records an empty `model_filter`
     and covers every model in its scores; those runs used to be skipped
-    entirely. The models are read back from ``uq_scores.csv`` so that a
+    entirely. The models are read back from `uq_scores.csv` so that a
     multi-model analysis dir caches exactly like the single-model dirs, and any
     directory carrying a provenance manifest is considered, whatever it is named.
+
+    Args:
+        root: Unused; discovery reads only the analysis dirs themselves.
+        output_root: Directory whose immediate subdirectories are searched for
+            `provenance_manifest.json`.
+
+    Returns:
+        One run per scored model of every analysis dir that has
+        `uq_scores.csv` and a run id in its provenance.
     """
     del root  # discovery reads only the analysis dirs themselves
     runs: list[CompletedRun] = []
@@ -199,6 +231,17 @@ def completed_runs_from_analysis_dirs(
 
 
 def registry_confirms_complete(root: Path, run: CompletedRun) -> bool:
+    """Check the run registry for a `complete` entry of the run and model.
+
+    Args:
+        root: Checkout root that locates the registry of the run's dataset and
+            variant.
+        run: The run; when it has a profile, the registry entry must match it.
+
+    Returns:
+        True when the registry has such an entry, False otherwise, including
+        when the registry file is missing.
+    """
     registry_path = eu.run_registry_path(root, run.dataset_id, run.variant)
     rows = eu.read_csv_rows(registry_path) if registry_path.exists() else []
     for row in rows:
@@ -214,6 +257,15 @@ def registry_confirms_complete(root: Path, run: CompletedRun) -> bool:
 
 
 def backend_values(raw_values: list[str] | None) -> list[str]:
+    """Expand and deduplicate the requested embedding backends.
+
+    Args:
+        raw_values: Values of `--backend`; `None` or empty means `tfidf`, and
+            `all` expands to `tfidf` and `mlx`.
+
+    Returns:
+        The backends in first-request order, without repeats.
+    """
     values = raw_values or ["tfidf"]
     expanded: list[str] = []
     for value in values:
@@ -234,7 +286,19 @@ def backend_specs_for_run(
     raw_values: list[str] | None,
     mlx_model_name: str | None,
 ) -> list[tuple[str, str | None]]:
-    """Resolve cache backends, defaulting to the analysis run's provenance."""
+    """Resolve cache backends, defaulting to the analysis run's provenance.
+
+    Args:
+        run: Run whose recorded backend and model are the defaults.
+        raw_values: Requested backends; `None` uses the run's recorded backend
+            and model, or the proxy backend when none was recorded.
+        mlx_model_name: MLX model for `mlx` backends, overriding the recorded
+            one.
+
+    Returns:
+        `(backend, model)` pairs; the model is `None` for requested non-MLX
+        backends.
+    """
     recorded_backend, recorded_model = eu.semantic_embedding_backend_args(
         run.semantic_embedding_backend
     )
@@ -257,11 +321,20 @@ def backend_specs_for_run(
 
 
 def existing_backend_manifests(output_root: Path) -> list[dict[str, Any]]:
-    """Every cache manifest under ``output_root``, one per model and backend.
+    """Return every cache manifest under `output_root`, one per model and backend.
 
-    The glob matches any analysis dir name, not just ``evaluation_*``, because
-    discovery reads ``provenance_manifest.json`` from any directory; a renamed
+    The glob matches any analysis dir name, not just `evaluation_*`, because
+    discovery reads `provenance_manifest.json` from any directory; a renamed
     analysis dir must stay visible here or its artifacts vanish downstream.
+
+    Args:
+        output_root: Directory whose analysis dirs hold
+            `acse_semantic_*/manifest.json` caches.
+
+    Returns:
+        The parsed manifests, the first per dataset, variant, run, model and
+        backend in path order, each with `artifact_dir` set to where it was
+        found.
     """
     manifests: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str, str]] = set()
@@ -286,12 +359,18 @@ def existing_backend_manifests(output_root: Path) -> list[dict[str, Any]]:
 
 
 def checkout_relative_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Manifest rows with ``analysis_dir``/``artifact_dir`` relative to the checkout.
+    """Return manifest rows with `analysis_dir`/`artifact_dir` relative to the checkout.
 
     The selected-run manifest is tracked with the paper artifacts, so it must
-    not carry one machine's absolute paths; ``manifest_rows`` in
-    ``plot_acse_global_embedding_projection`` re-roots relative entries. Paths
+    not carry one machine's absolute paths; `manifest_rows` in
+    `plot_acse_global_embedding_projection` re-roots relative entries. Paths
     outside the checkout (tests, scratch runs) stay absolute.
+
+    Args:
+        rows: Manifest summary rows; they are copied, not modified.
+
+    Returns:
+        The copied rows with both paths rewritten.
     """
     root = eu.project_root().resolve()
     relative: list[dict[str, Any]] = []
@@ -310,12 +389,23 @@ def checkout_relative_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def manifest_summary_rows(
     discovered: list[dict[str, Any]], computed: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Summary rows for the discovered caches, refusing a truncating rewrite.
+    """Build summary rows for the discovered caches, refusing a truncating rewrite.
 
-    ``computed`` is what this invocation just wrote. Discovery finding none of it
-    means the summary CSV would be replaced by a header-less empty file and the
-    fresh artifacts would be invisible downstream, so that is an error rather
-    than a silent truncation.
+    `computed` holds the manifests this invocation produced, whether it just
+    wrote them or reused an existing cache. Discovery finding none of them means
+    the summary CSV would be replaced by a header-less empty file and those
+    artifacts would be invisible downstream, so that is an error rather than a
+    silent truncation.
+
+    Args:
+        discovered: Cache manifests found on disk.
+        computed: Manifests returned by this invocation, computed or reused.
+
+    Returns:
+        One summary row per discovered manifest.
+
+    Raises:
+        ValueError: If `computed` is non-empty but nothing was discovered.
     """
     if computed and not discovered:
         raise ValueError(
@@ -347,6 +437,16 @@ def input_fingerprint(path: Path, manifest_dir: Path) -> dict[str, Any]:
 
     Manifest-relative paths keep the cache readable after the tree is moved or
     copied, which absolute paths would not survive.
+
+    Args:
+        path: Consumed input file; a `.jsonl` path also covers its compacted
+            Parquet sibling.
+        manifest_dir: Directory the recorded path is relative to.
+
+    Returns:
+        The `path`, `sha256` and `bytes` of the input. With several backing
+        files the hash is taken over their hashes and the sizes are summed;
+        with none, the hash is empty and the size 0.
     """
     entry: dict[str, Any] = {
         "path": str(path.resolve().relative_to(manifest_dir.resolve(), walk_up=True)),
@@ -374,12 +474,23 @@ def input_fingerprint(path: Path, manifest_dir: Path) -> dict[str, Any]:
 def cache_input_fingerprints(
     root: Path, run: CompletedRun, backend_label: str, manifest_dir: Path
 ) -> dict[str, Any]:
-    """Everything the cached artifacts were derived from, as a comparable dict.
+    """Return everything the cached artifacts were derived from, as a comparable dict.
 
     A cache is only reusable when the raw outputs, the analysis scores, the
     benchmark items, the embedding identity, and the scored model are all
-    unchanged. Comparing these beats trusting the ``status`` field, which only
+    unchanged. Comparing these beats trusting the `status` field, which only
     says that some earlier invocation finished.
+
+    Args:
+        root: Checkout root locating the raw outputs and benchmark items.
+        run: Run and model the cache is for.
+        backend_label: Embedding backend label; its model part is also
+            recorded on its own.
+        manifest_dir: Cache directory that recorded paths are relative to.
+
+    Returns:
+        The fingerprints of the raw rows, analysis scores and benchmark items,
+        and the embedding backend, embedding model and scored model.
     """
     _, model_name = eu.semantic_embedding_backend_args(backend_label)
     return {
@@ -406,7 +517,17 @@ def cache_input_fingerprints(
 def cached_manifest_is_current(
     manifest: dict[str, Any], expected: dict[str, Any], manifest_path: Path
 ) -> bool:
-    """True when the manifest's recorded inputs still match the files on disk."""
+    """Return True when the manifest's recorded inputs still match the files on disk.
+
+    Args:
+        manifest: The cached manifest.
+        expected: Fresh fingerprints from `cache_input_fingerprints`.
+        manifest_path: Location of the manifest, named in the log message.
+
+    Returns:
+        True when the recorded inputs equal `expected`. False, with an info log,
+        when the manifest records no inputs or they differ.
+    """
     recorded = manifest.get("inputs")
     if recorded is None:
         eu.logger.info(
@@ -424,6 +545,15 @@ def cached_manifest_is_current(
 
 
 def sample_sort_key(row: dict[str, Any]) -> tuple[int, str]:
+    """Return the key that orders an item's samples by sample index.
+
+    Args:
+        row: Raw sample row.
+
+    Returns:
+        `(sample_index, item_id)`, with index 0 when it does not parse as an
+        integer.
+    """
     try:
         return int(row.get("sample_index", 0)), str(row.get("item_id", ""))
     except (TypeError, ValueError):
@@ -433,6 +563,16 @@ def sample_sort_key(row: dict[str, Any]) -> tuple[int, str]:
 def load_run_rows(
     root: Path, run: CompletedRun
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+    """Load the run's Task 2 raw rows and its benchmark items.
+
+    Args:
+        root: Checkout root locating the raw outputs and benchmark items.
+        run: Run and model to load. With a profile, rows of other profiles are
+            dropped and rows without a profile kept.
+
+    Returns:
+        The raw rows and the benchmark rows keyed by item id.
+    """
     raw_rows = [
         row
         for row in eu.read_jsonl(
@@ -460,6 +600,15 @@ def load_run_rows(
 
 
 def load_deterministic_task2_scores(run: CompletedRun) -> dict[str, dict[str, str]]:
+    """Load the run's deterministic Task 2 score rows from its analysis dir.
+
+    Args:
+        run: Run and model whose `verbalized_confidence` Task 2 rows are read
+            from `uq_scores.csv`.
+
+    Returns:
+        The score rows keyed by item id.
+    """
     scores = eu.read_csv_rows(run.analysis_dir / "uq_scores.csv")
     return {
         row["item_id"]: row
@@ -477,6 +626,25 @@ def embedding_matrix_for_cache(
     mlx_model_name: str | None,
     batch_size: int,
 ) -> tuple[np.ndarray, str]:
+    """Embed the sample texts, in batches when the backend has a model.
+
+    A backend without a model, such as the TF-IDF proxy, embeds all texts in
+    one call.
+
+    Args:
+        texts: Sample texts in cache order.
+        embedding_backend: Backend name, such as `tfidf` or `mlx`.
+        mlx_model_name: MLX model, `None` for the default.
+        batch_size: Texts per embedding call for a model backend; values below
+            1 count as 1.
+
+    Returns:
+        The embedding matrix and the backend label. A model backend given no
+        texts returns an empty `(0, 1)` matrix.
+
+    Raises:
+        RuntimeError: If the backend label changes between batches.
+    """
     backend_label, model_name = eu.semantic_embedding_backend_label(
         embedding_backend, mlx_model_name
     )
@@ -509,6 +677,23 @@ def item_embeddings_for_scoring(
     global_embeddings: np.ndarray,
     indices: list[int],
 ) -> np.ndarray:
+    """Return the embeddings an item's score is computed from.
+
+    MLX vectors are sliced from the run-wide matrix; any other backend
+    re-embeds the item's own texts.
+
+    Args:
+        backend_label: Label returned by the run-wide embedding; an `mlx:`
+            prefix selects slicing.
+        embedding_backend: Backend name used to re-embed.
+        mlx_model_name: MLX model used to re-embed.
+        texts: The item's sample texts.
+        global_embeddings: Run-wide embedding matrix.
+        indices: Rows of the item's samples in `global_embeddings`.
+
+    Returns:
+        One embedding row per sample of the item.
+    """
     if backend_label.startswith(f"{eu.ACSE_MLX_EMBEDDING_BACKEND}:"):
         return global_embeddings[indices, :]
     item_embeddings, _ = eu.semantic_embedding_matrix(
@@ -520,6 +705,15 @@ def item_embeddings_for_scoring(
 
 
 def deterministic_requirement(raw_rows: list[dict[str, Any]]) -> dict[str, str]:
+    """Map each item to the requirement text of its parsed deterministic output.
+
+    Args:
+        raw_rows: Task 2 raw rows of one run and model.
+
+    Returns:
+        The `requirement` of each item's parsed deterministic row, keyed by
+        item id; a later row for the same item overwrites an earlier one.
+    """
     requirements: dict[str, str] = {}
     for row in raw_rows:
         parsed = row.get("parsed_json")
@@ -543,6 +737,30 @@ def compute_run_backend(
     embedding_batch_size: int,
     force: bool,
 ) -> dict[str, Any]:
+    """Compute, or reuse, one run's semantic cache for one embedding backend.
+
+    Embeds every parsed stochastic Task 2 sample of the items with a
+    deterministic score, clusters each item's samples once, and writes the
+    sample embeddings, the sample, item, score, normalized-score and
+    calibration tables, and a manifest with input fingerprints to the cache
+    directory. A cache whose recorded inputs still match is returned as is.
+
+    Args:
+        root: Checkout root locating the raw outputs and benchmark items.
+        run: Run and model to cache.
+        embedding_backend: Backend name, such as `tfidf` or `mlx`.
+        mlx_model_name: MLX model for the `mlx` backend.
+        distance_threshold: Cosine-distance threshold of the clustering.
+        embedding_batch_size: Texts per embedding call for a model backend.
+        force: Recompute even when the cached inputs are current.
+
+    Returns:
+        The cache manifest, with status `computed` or `reused`.
+
+    Raises:
+        ValueError: If the run has no Task 2 raw rows, no deterministic Task 2
+            scores, or no parsed stochastic samples.
+    """
     backend_label, _ = eu.semantic_embedding_backend_label(
         embedding_backend, mlx_model_name
     )
@@ -778,6 +996,16 @@ def compute_run_backend(
 
 
 def main() -> None:
+    """Compute the semantic caches of completed runs and write the cache inventory.
+
+    Writes the inventory CSV and `acse_semantic_artifact_manifest.json` under
+    `--output-root`, and with `--selected-manifest` an inventory of only this
+    invocation's caches with checkout-relative paths.
+
+    Raises:
+        ValueError: If no completed run is found, or the run registry does not
+            confirm a run as complete and `--allow-registry-mismatch` is unset.
+    """
     parser = argparse.ArgumentParser(
         description="Compute backend-specific ACSE semantic caches for completed runs."
     )

@@ -24,6 +24,16 @@ EXTERNAL_CONFIDENCE_SCALE = eu.CONFIDENCE_SCALE_0_1
 
 
 def validation_blockers(validation: dict[str, Any]) -> list[str]:
+    """List the reasons an external evaluation is not paper-ready.
+
+    Args:
+        validation: Validation summary from `evaluate_outputs`.
+
+    Returns:
+        Blocker names among `parse_errors`, `missing_ids`, `extra_ids`,
+        `invalid_labels`, `invalid_confidence` and `row_count_mismatch`, empty
+        when none applies.
+    """
     blockers: list[str] = []
     if validation.get("parse_errors"):
         blockers.append("parse_errors")
@@ -41,6 +51,15 @@ def validation_blockers(validation: dict[str, Any]) -> list[str]:
 
 
 def valid_probability_confidence(value: Any) -> bool:
+    """Check that a confidence value is a number on the 0-1 probability scale.
+
+    Args:
+        value: Confidence as parsed from the output JSON. Booleans and strings
+            are rejected even when they would convert to a number.
+
+    Returns:
+        True for a number between 0 and 1 inclusive.
+    """
     if isinstance(value, (bool, str)):
         return False
     try:
@@ -51,10 +70,28 @@ def valid_probability_confidence(value: Any) -> bool:
 
 
 def slugify(value: str) -> str:
+    """Turn a model name into the slug that prefixes its output files.
+
+    Args:
+        value: Model name from `--model-name`.
+
+    Returns:
+        The lower-case name with every run of other characters than letters
+        and digits replaced by `_`, or `external_model` when nothing is left.
+    """
     return eu.safe_identifier(value, fallback="external_model")
 
 
 def read_jsonl_records(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read a JSONL file, collecting unparseable lines instead of raising.
+
+    Args:
+        path: JSONL file of external model outputs; blank lines are skipped.
+
+    Returns:
+        The parsed records, and one error record per unparseable line with its
+        line number, the parser message and the line's first 160 characters.
+    """
     records: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
@@ -78,6 +115,26 @@ def read_jsonl_records(path: Path) -> tuple[list[dict[str, Any]], list[dict[str,
 def evaluate_outputs(
     output_path: Path, gold_key_path: Path
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Score external outputs against the blind gold key and validate the file.
+
+    Each gold item is joined to its output by `external_item_id`, and both its
+    label and its requirement text are scored for correctness and for over-
+    and under-commitment, with high-confidence variants at 0.80 and 0.90.
+
+    Args:
+        output_path: JSONL file of external outputs with `external_item_id`,
+            `requirement`, `modality` and `confidence`.
+        gold_key_path: CSV gold key with `external_item_id` and
+            `task2_gold_modality`.
+
+    Returns:
+        The scored items, one per gold row, and a validation summary with row
+        and error counts, file hashes and the paper-ready verdict.
+
+    Raises:
+        ValueError: If a required output field is missing or an item id is
+            scored more than once.
+    """
     records, parse_errors = read_jsonl_records(output_path)
     outputs = pd.DataFrame.from_records(records)
     gold = eu.read_csv_frame(gold_key_path)
@@ -160,6 +217,16 @@ def evaluate_outputs(
 
 
 def source_condition_summary(scored: pd.DataFrame) -> pd.DataFrame:
+    """Summarize scored items per source condition.
+
+    Args:
+        scored: Scored items from `evaluate_outputs`.
+
+    Returns:
+        One row per `source_condition` with the item count, label and
+        text-level accuracy, over- and under-commitment rates, high-confidence
+        over-commitment rates and mean confidence.
+    """
     return (
         scored.groupby("source_condition", dropna=False)
         .agg(
@@ -182,6 +249,16 @@ def source_condition_summary(scored: pd.DataFrame) -> pd.DataFrame:
 
 
 def overall_summary(scored: pd.DataFrame) -> dict[str, Any]:
+    """Summarize scored items overall and for the weak `nice_to_have` gold items.
+
+    Args:
+        scored: Scored items from `evaluate_outputs`.
+
+    Returns:
+        Label and text-level accuracy, over- and under-commitment rates,
+        high-confidence over-commitment rates and mean confidence, with the
+        `weak_*` entries restricted to `nice_to_have` gold items.
+    """
     weak = scored[scored["task2_gold_modality"].eq("nice_to_have")]
     return {
         "n": len(scored),
@@ -219,6 +296,22 @@ def markdown_report(
     confusion: pd.DataFrame,
     text_confusion: pd.DataFrame,
 ) -> str:
+    """Render the Markdown evaluation report of one external model.
+
+    A report that is not paper-ready opens with a notice listing its blockers.
+
+    Args:
+        model_name: Model name for the title.
+        validation: Validation summary, including the prompt version, prompt
+            hash and evaluation time that `main` adds.
+        overall: Overall summary from `overall_summary`.
+        by_condition: Per-condition summary from `source_condition_summary`.
+        confusion: Gold-by-predicted label confusion matrix.
+        text_confusion: Gold-by-text-modality confusion matrix.
+
+    Returns:
+        The report text.
+    """
     lines = [
         f"# External Probe Evaluation: {model_name}",
         "",
@@ -288,6 +381,19 @@ def markdown_report(
 
 
 def write_external_comparison_report(output_dir: Path) -> Path | None:
+    """Write a comparison table of every evaluated external model in a directory.
+
+    A model is included only when its evaluation report records a paper-ready
+    verdict, which becomes a column, and its scored items are not empty.
+
+    Args:
+        output_dir: Directory with `*_scored_items.csv` and `*_evaluation.md`
+            files.
+
+    Returns:
+        The path of `external_probe_comparison.md`, or `None` when no model
+        qualifies and nothing is written.
+    """
     rows: list[dict[str, Any]] = []
     for scored_path in sorted(output_dir.glob("*_scored_items.csv")):
         model_slug = scored_path.name.removesuffix("_scored_items.csv")
@@ -350,6 +456,15 @@ def write_external_comparison_report(output_dir: Path) -> Path | None:
 
 
 def evaluation_report_paper_ready(path: Path) -> bool | None:
+    """Read the paper-ready verdict from an evaluation report.
+
+    Args:
+        path: An `*_evaluation.md` report.
+
+    Returns:
+        The verdict of its "Paper-ready under current contract" line, or `None`
+        when the report or the line is missing.
+    """
     if not path.exists():
         return None
     text = path.read_text(encoding="utf-8")
@@ -362,6 +477,12 @@ def evaluation_report_paper_ready(path: Path) -> bool | None:
 
 
 def main() -> None:
+    """Evaluate one external model's outputs and refresh the comparison report.
+
+    Writes the scored items, the per-condition summary, the confusion matrix
+    and the Markdown report under `--output-dir`, named after the model slug.
+    A missing prompt file adds the `missing_prompt_hash` blocker.
+    """
     parser = argparse.ArgumentParser(
         description="Evaluate external web-model outputs for the Task 2 probe."
     )

@@ -39,6 +39,37 @@ def _path(root: Path, value: str) -> Path:
 
 
 def load_observations(root: Path, provenance_path: Path) -> list[dict]:
+    """Load and validate the frozen deterministic Task 2 outputs as observations.
+
+    Every cell of the snapshot is checked against its benchmark and run selection,
+    and every planned (model, item) pair must have exactly one deterministic raw
+    row. Each observation gets one of `OUTCOMES`: `strict_up` for strict
+    strengthening; `broad_only_up`, `equal` or `down` by the ordinal strength of
+    the text modality relative to the source; `unknown` or `negated` when the
+    text modality could not be read; and `invalid` when the raw output produced
+    no score row.
+
+    Args:
+        root: Project root; the benchmark and raw-store paths in the snapshot
+            resolve against it, and absolute checkout paths keep their suffix
+            from `data` on.
+        provenance_path: Frozen snapshot provenance JSON naming the model cohort
+            and, per cell, the run ids, benchmark and raw-store paths, benchmark
+            size and planned number of stochastic samples.
+
+    Returns:
+        One observation per planned deterministic output, with its run identity,
+        source and text modality, text-modality basis, strict-strengthening
+        verdict and kind, and outcome.
+
+    Raises:
+        ValueError: If the cohort is empty, repeats a model or contains `all`; a
+            cell is repeated, selects unexpected runs or has an unplanned
+            sampling plan; the benchmark size, item ids or gold modalities do not
+            match; a raw record belongs to an unexpected run, does not match its
+            benchmark item or repeats a paper key; planned deterministic rows are
+            missing; or the snapshot has no cells.
+    """
     snapshot = json.loads(provenance_path.read_text())
     models = snapshot["models_cohort"]
     if not models or len(set(models)) != len(models) or "all" in models:
@@ -187,6 +218,28 @@ def load_observations(root: Path, provenance_path: Path) -> list[dict]:
 
 
 def aggregate_observations(observations: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Count modality transitions and account for every planned output.
+
+    Observations are grouped per model and cell, per model over all cells, per
+    cell over all models, and over everything; pooled dimensions are labelled
+    `all`.
+
+    Args:
+        observations: Observations from `load_observations`.
+
+    Returns:
+        The transition matrix and the accounting. The matrix has one row per
+        group, source modality and text modality with the readable transition
+        count, the strict count split into frame-only and escalation, the
+        heuristic-basis count, the readable denominator of the source modality
+        and the strict percentage. The accounting has one row per group and
+        source modality with the planned, readable, per-outcome and
+        heuristic-basis counts.
+
+    Raises:
+        ValueError: If an observation has an unrecognized outcome, or a strict
+            count differs from its frame-only plus escalation counts.
+    """
     groups = defaultdict(list)
     for row in observations:
         model, dataset, variant = (
@@ -269,6 +322,21 @@ def aggregate_observations(observations: list[dict]) -> tuple[list[dict], list[d
 
 
 def reconcile(accounting: list[dict], pooled_path: Path) -> None:
+    """Check the per-model accounting against the published pooled modality table.
+
+    Only per-model rows pooled over all cells are compared: the item, valid,
+    parse-failure and unclassified counts and the strict and broad strengthening
+    numerators and denominators.
+
+    Args:
+        accounting: Accounting rows from `aggregate_observations`.
+        pooled_path: Published per-model modality table pooled over cells;
+            its `all` model rows are ignored.
+
+    Raises:
+        ValueError: If the two tables cover different (model, source modality)
+            pairs or any compared count differs.
+    """
     actual = {
         (row["model"], row["source_modality"]): row
         for row in accounting
@@ -301,6 +369,11 @@ def reconcile(accounting: list[dict], pooled_path: Path) -> None:
 
 
 def main() -> None:
+    """Export the transition counts, accounting and TikZ figure from the snapshot.
+
+    The accounting is reconciled with the published pooled modality table before
+    the CSV files and the figure are written.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--root", type=Path, default=Path(__file__).resolve().parents[1]

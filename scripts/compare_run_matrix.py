@@ -63,11 +63,23 @@ def annotate_text_drift_cis(
 ) -> list[dict[str, Any]]:
     """Attach text-strengthening counts and both cluster CIs to Task 2 rows.
 
-    The reported interval (``*_ci_low`` / ``*_ci_high``) is a request-clustered
-    bootstrap (``eu.text_over_commitment_ci_fields``); the seed-clustered pair
-    travels alongside as ``*_seed_ci_low`` / ``*_seed_ci_high`` and
-    ``bootstrap_ci_cluster_field`` names the unit actually used. The RNG seed is
-    fixed so the matrix table is reproducible run to run.
+    Both intervals travel in the row. `*_ci_low` / `*_ci_high` is the
+    request-clustered bootstrap (`eu.text_over_commitment_ci_fields`; on items
+    when rows record no request, and `bootstrap_ci_cluster_field` names the unit
+    actually used). `*_seed_ci_low` / `*_seed_ci_high` is the seed-clustered
+    pair, the one the manuscript reports. The RNG seed is fixed so the matrix
+    table is reproducible run to run.
+
+    Args:
+        summary_rows: Summary rows per model, task and UQ method; only Task 2
+            rows with matching score rows are updated, in place.
+        scores: Score rows the summary was computed from, grouped by model, task
+            and UQ method to match the summary rows.
+        bootstrap_samples: Bootstrap resamples per interval; zero or fewer
+            leaves the intervals blank.
+
+    Returns:
+        `summary_rows`, updated in place.
     """
     by_group: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for score in scores:
@@ -104,6 +116,18 @@ def completed_registry_rows(
     include_smoke: bool,
     exclude_model_prefixes: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """Return the completed registry rows of one run group.
+
+    Args:
+        registry_rows: Run-registry rows to filter.
+        run_group_id: Run group whose rows are kept.
+        include_smoke: Whether runs whose ID starts with `smoke-` are kept.
+        exclude_model_prefixes: Model-name prefixes whose runs are dropped;
+            `None` drops none.
+
+    Returns:
+        The rows of the run group with status `complete`, in input order.
+    """
     exclude_model_prefixes = exclude_model_prefixes or []
     rows = []
     for row in registry_rows:
@@ -128,9 +152,20 @@ def load_registry_and_raw_rows(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Read the full-run registry and raw outputs, plus the smoke tree on request.
 
-    Smoke and fake runs write into ``data/processed/smoke/`` so they can never
-    contaminate the paper-facing files, so ``--include-smoke`` has to read both
+    Smoke and fake runs write into `data/processed/smoke/` so they can never
+    contaminate the paper-facing files, so `--include-smoke` has to read both
     trees and concatenate them.
+
+    Args:
+        root: Project root the registry and raw-output paths are resolved
+            against.
+        dataset_id: Dataset of the cell to read.
+        variant: Benchmark variant of the cell to read.
+        include_smoke: Whether to read the smoke tree as well.
+
+    Returns:
+        The registry rows and the raw output rows, each with the full-run tree
+        first. Missing files contribute no rows.
     """
     registry_rows: list[dict[str, Any]] = []
     raw_rows: list[dict[str, Any]] = []
@@ -154,15 +189,29 @@ def resolve_row_sampling_plan(
     config_plan: eu.SamplingPlan,
     unrecorded: list[str],
 ) -> eu.SamplingPlan:
-    """The plan one completed run is scored against.
+    """Return the plan one completed run is scored against.
 
     A run records what it was executed with, and that is what its completeness
     must be judged against; scoring an archived three-sample run against a
     five-sample comparison config would move every one of its rows into
-    ``agreement_n_incomplete_excluded`` and report blank agreement for a run
+    `agreement_n_incomplete_excluded` and report blank agreement for a run
     that was in fact complete. A disagreement is therefore an error, not a
     silent reinterpretation. Rows written before the column existed record
     nothing, so they fall back to the comparison config and are named once.
+
+    Args:
+        registry_row: Registry row of the completed run; its recorded
+            `expected_stochastic_samples` is the plan it was executed with.
+        config_plan: Sampling plan declared by the comparison config.
+        unrecorded: Collector for run IDs; the run's ID is appended when its
+            row records no plan, so the caller can name such runs once.
+
+    Returns:
+        `config_plan`, once the run's recorded plan (if any) agrees with it.
+
+    Raises:
+        SamplingPlanMismatchError: If the run recorded a different number of
+            stochastic samples than `config_plan` declares.
     """
     recorded = eu.SamplingPlan.from_registry_row(registry_row)
     run_id = str(registry_row.get("run_id", ""))
@@ -183,6 +232,17 @@ def resolve_row_sampling_plan(
 def annotate_summary(
     row: dict[str, Any], registry_row: dict[str, Any]
 ) -> dict[str, Any]:
+    """Prefix a summary row with the identifiers of the run it came from.
+
+    Args:
+        row: Metric summary row of one model, task and UQ method.
+        registry_row: Registry row, or the ensemble stub, that supplies the run
+            group, run, provider, profile, dataset and benchmark variant.
+
+    Returns:
+        A new row with those six identifiers first, followed by the fields of
+        `row` (which win on a name clash).
+    """
     return {
         "run_group_id": registry_row.get("run_group_id", ""),
         "run_id": registry_row.get("run_id", ""),
@@ -197,6 +257,21 @@ def annotate_summary(
 def write_matrix_outputs(
     rows: list[dict[str, Any]], status_rows: list[dict[str, Any]], output_prefix: Path
 ) -> dict[str, Path]:
+    """Write the run matrix summary as CSV and Markdown, plus the registry status.
+
+    Args:
+        rows: Annotated summary rows; the CSV keeps every field and the Markdown
+            table shows the `SUMMARY_FIELDS` columns.
+        status_rows: Registry rows of the cell, written with the
+            `eu.RUN_REGISTRY_FIELDS` columns and summarized in the Markdown
+            report.
+        output_prefix: Path prefix; writes `<prefix>.csv`, `<prefix>.md` and
+            `<prefix>_registry_status.csv`.
+
+    Returns:
+        The written paths under the keys `csv`, `markdown` and
+        `registry_status`.
+    """
     csv_path = output_prefix.with_suffix(".csv")
     md_path = output_prefix.with_suffix(".md")
     status_path = output_prefix.with_name(f"{output_prefix.name}_registry_status.csv")
@@ -243,6 +318,15 @@ def write_matrix_outputs(
 
 
 def main() -> None:
+    """Summarize the completed runs of a run config group from the command line.
+
+    For every dataset and benchmark variant of the config (or the ones named on
+    the command line), each completed run is scored against its own sampling
+    plan, a run-group ensemble row is added when one can be built, and the
+    summary is written next to `outputs/run_matrix_summary.csv` with the cell's
+    suffix. Runs that record no sampling plan are named in one warning at the
+    end.
+    """
     parser = argparse.ArgumentParser(
         description="Compare completed provider/model runs in a run config group."
     )
@@ -260,7 +344,11 @@ def main() -> None:
         "--bootstrap-samples",
         type=int,
         default=DEFAULT_BOOTSTRAP_SAMPLES,
-        help="Seed-clustered bootstrap resamples for the text-drift CIs (0 disables).",
+        help=(
+            "Bootstrap resamples for each text-drift CI: the one clustered on "
+            "requests (on items when rows record none) and the seed-clustered "
+            "one alongside (0 disables)."
+        ),
     )
     args = parser.parse_args()
 

@@ -1,4 +1,4 @@
-"""Run the weak-phrasing probe: four weak templates over the benchmark seeds.
+r"""Run the weak-phrasing probe: four weak templates over the benchmark seeds.
 
 The benchmark renders weak stakeholder intent with one fixed template ("It
 would be useful if the system could ..."), so a strengthening rate measured on
@@ -10,12 +10,12 @@ The probe uses the shared cell lifecycle: the campaign run configuration,
 registry, resume protocol and request transcripts.
 
 The construct sanity check gates execution: every template must be marked
-``weaker_than_should=yes`` in ``outputs/weak_modality_template_sanity_check.csv``
+`weaker_than_should=yes` in `outputs/weak_modality_template_sanity_check.csv`
 before any request is sent, because a template that is not weaker than SHOULD
 does not measure weak intent at all.
 
-    .venv/bin/python scripts/run_weak_modality_probe.py \\
-        --config run_configs/current_run.json --profile zai --model glm-5.1 \\
+    .venv/bin/python scripts/run_weak_modality_probe.py \
+        --config run_configs/current_run.json --profile zai --model glm-5.1 \
         --dataset nice --mode full
 """
 
@@ -53,11 +53,33 @@ class ProbeSanityError(RuntimeError):
 
 
 def probe_run_prefix(mode: str, variant: str) -> str:
+    """Return the prefix a new probe run id gets.
+
+    Args:
+        mode: Run mode; `smoke` appends `-smoke`.
+        variant: Benchmark variant; any variant other than `must` is appended
+            as `-<variant>`.
+
+    Returns:
+        The run id prefix, for example `weak-modality-probe` or
+        `weak-modality-probe-smoke`.
+    """
     base = PROBE_RUN_PREFIX if variant == "must" else f"{PROBE_RUN_PREFIX}-{variant}"
     return f"{base}-smoke" if mode == "smoke" else base
 
 
 def probe_items_path(root: Path, dataset_id: str, variant: str, *, run_id: str) -> Path:
+    """Return the CSV the probe items of a cell are written to.
+
+    Args:
+        root: Project root the artifacts are resolved under.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        run_id: Run of the cell; a smoke run id routes into the smoke tree.
+
+    Returns:
+        The dataset- and variant-specific `weak_modality_probe_items.csv`.
+    """
     return eu.resolve_run_artifact_path(
         eu.artifact_path(
             root / "data/processed/weak_modality_probe_items.csv", dataset_id, variant
@@ -67,7 +89,16 @@ def probe_items_path(root: Path, dataset_id: str, variant: str, *, run_id: str) 
 
 
 def probe_summary_dir(root: Path, run_id: str) -> Path:
-    """Per-run summaries, keeping every model and separating smoke results."""
+    """Return the per-run summary directory, keeping every model and smoke apart.
+
+    Args:
+        root: Project root that contains `outputs/`.
+        run_id: Run whose summaries the directory holds; a smoke run id goes
+            under `outputs/smoke/`.
+
+    Returns:
+        The path `outputs[/smoke]/weak_modality_probe/<run_id>` under `root`.
+    """
     output_root = (
         root / "outputs" / "smoke" if eu.is_smoke_run_id(run_id) else root / "outputs"
     )
@@ -75,6 +106,18 @@ def probe_summary_dir(root: Path, run_id: str) -> Path:
 
 
 def probe_raw_path(root: Path, dataset_id: str, variant: str, *, run_id: str) -> Path:
+    """Return the raw JSONL file the probe records of a cell are appended to.
+
+    Args:
+        root: Project root the artifacts are resolved under.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        run_id: Run of the cell; a smoke run id routes into the smoke tree.
+
+    Returns:
+        The dataset- and variant-specific
+        `model_outputs_raw_weak_modality_probe.jsonl`.
+    """
     return eu.resolve_run_artifact_path(
         eu.artifact_path(
             root / "data/processed/model_outputs_raw_weak_modality_probe.jsonl",
@@ -86,6 +129,17 @@ def probe_raw_path(root: Path, dataset_id: str, variant: str, *, run_id: str) ->
 
 
 def probe_registry_path(root: Path, dataset_id: str, variant: str, *, run_id: str):
+    """Return the run registry CSV of the probe for a cell.
+
+    Args:
+        root: Project root the artifacts are resolved under.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        run_id: Run of the cell; a smoke run id routes into the smoke tree.
+
+    Returns:
+        The dataset- and variant-specific `run_registry_weak_modality_probe.csv`.
+    """
     return eu.resolve_run_artifact_path(
         eu.artifact_path(
             root / "data/processed/run_registry_weak_modality_probe.csv",
@@ -97,10 +151,25 @@ def probe_registry_path(root: Path, dataset_id: str, variant: str, *, run_id: st
 
 
 def pilot_seeds(root: Path, dataset_id: str, variant: str, count: int) -> list[dict]:
-    """The first `count` benchmark seeds, in benchmark order.
+    """Return the first `count` benchmark seeds, sorted by seed id as strings.
 
     Same selection the notebook made: the probe re-phrases capabilities the
-    benchmark already carries, so its items line up with the pilot cells.
+    benchmark already carries, so its items line up with the pilot cells. The
+    string order matches the benchmark file order for `nice` and `pure`, but
+    not for `mlm_tapt`, whose file lists its mixed-width ids (`S0110`,
+    `S38831`) in numeric order.
+
+    Args:
+        root: Project root that contains `data/processed`.
+        dataset_id: Dataset whose benchmark and selected seeds are read.
+        variant: Benchmark variant whose items name the seeds.
+        count: Number of seeds to keep; 0 or less keeps every benchmark seed.
+
+    Returns:
+        The selected seed rows from `seeds_selected.csv`.
+
+    Raises:
+        ValueError: If `seeds_selected.csv` lacks any of the wanted seeds.
     """
     benchmark = eu.read_csv_rows(
         eu.artifact_path(
@@ -128,7 +197,23 @@ def pilot_seeds(root: Path, dataset_id: str, variant: str, count: int) -> list[d
 
 
 def require_sanity_check(root: Path, dataset_id: str) -> dict[str, Any]:
-    """Refuse to send requests until every template is reviewed as weak."""
+    """Refuse to send requests until every template is reviewed as weak.
+
+    Creates the template review sheet under `outputs/` if it is missing (an
+    existing CSV keeps its reviewer answers), then reads the review status
+    back from it.
+
+    Args:
+        root: Project root that contains `outputs/`.
+        dataset_id: Dataset whose suffix the sanity-check files carry.
+
+    Returns:
+        The review status, whose `valid` entry is true.
+
+    Raises:
+        ProbeSanityError: If the CSV does not mark every template as weaker
+            than SHOULD.
+    """
     paths = eu.write_weak_modality_template_sanity_check(
         root / "outputs", suffix=eu.dataset_suffix(dataset_id)
     )
@@ -143,7 +228,34 @@ def require_sanity_check(root: Path, dataset_id: str) -> dict[str, Any]:
 
 @dataclass
 class ProbeCell:
-    """One planned probe cell; satisfies `runner_lifecycle.LifecycleCell`."""
+    """One planned probe cell; satisfies `runner_lifecycle.LifecycleCell`.
+
+    Attributes:
+        profile: Provider profile the cell runs under.
+        model: Model alias of the cell.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        run_id: Run id the cell's raw rows and registry row carry.
+        started_at: Start time for the registry row; a resumed cell keeps the
+            one its first attempt recorded.
+        batch_order: How jobs are grouped into batches, from the profile.
+        preflight: Server model probe result, `{"dry_run": True}` in a dry
+            run, or `{"fake_completion": True}` under `--fake-completion`.
+        items: Probe items, one per seed and weak template; only the first
+            `--smoke-items` in a smoke cell.
+        jobs: Every planned Task 2 completion job of the cell.
+        existing_rows: Raw rows already in the cell's probe output file.
+        pending_jobs: Planned jobs this run has no reusable raw row for yet.
+        planned_api_calls: Provider requests the full plan needs.
+        pending_api_calls: Provider requests the pending jobs still need.
+        output_path: Probe raw JSONL file the records are appended to.
+        registry_path: Probe run registry CSV of the dataset and variant.
+        progress_path: Probe live progress CSV of the dataset and variant.
+        events_path: Probe run events JSONL of the dataset and variant.
+        items_path: CSV holding the cell's probe items.
+        resume: Identity of the run being continued; set only under
+            `--mode resume`.
+    """
 
     profile: dict[str, Any]
     model: str
@@ -168,17 +280,25 @@ class ProbeCell:
 
     @property
     def profile_id(self) -> str:
+        """Return the id of the provider profile the cell runs under."""
         return str(self.profile["profile_id"])
 
     @property
     def provider_id(self) -> str:
+        """Return the id of the provider behind the cell's profile."""
         return str(self.profile["provider_id"])
 
     @property
     def batch_size(self) -> int:
+        """Return how many planned jobs the profile sends per provider request."""
         return int(self.profile["batch_size"])
 
     def identity(self) -> dict[str, Any]:
+        """Return the fields that identify this cell in logs and run events.
+
+        Returns:
+            The run id, dataset, benchmark variant, provider, profile and model.
+        """
         return {
             "run_id": self.run_id,
             "dataset_id": self.dataset_id,
@@ -202,7 +322,33 @@ def plan_cell(
     preflight: dict[str, Any],
     resume: rl.ResumeState | None,
 ) -> ProbeCell:
-    """Build the probe items and the requests that answer them."""
+    """Build the probe items and the requests that answer them.
+
+    A smoke cell (smoke mode or a smoke run id) uses the pilot seeds and keeps
+    only the first `--smoke-items` items; a full cell uses every benchmark
+    seed. Outside a dry run the items are written to the cell's items CSV.
+
+    Args:
+        root: Project root the artifacts are resolved under.
+        run_config: Normalized run config supplying the prompt version, run
+            group and sampling settings.
+        profile: Provider profile the cell runs under.
+        model: Model alias of the cell.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        args: Runner options; `mode`, `smoke_items` and `dry_run` are read.
+        run_id: Run id the cell's records carry.
+        preflight: Server model probe result recorded with the jobs.
+        resume: Identity of the run being continued, or None for a new run.
+
+    Returns:
+        The fully planned cell, with pending jobs and API-call counts computed
+        against the probe rows already on disk.
+
+    Raises:
+        ValueError: If `--mode smoke` is combined with a run id that is not a
+            smoke run id.
+    """
     # `--mode smoke` must never grow into the full paid probe because someone
     # named its run id by hand, and a resumed smoke run (a smoke-shaped id)
     # must keep its truncated scope: either signal makes the cell a smoke cell.
@@ -305,6 +451,22 @@ def registry_row(
     status: str | None = None,
     finished_at_utc: str = "",
 ) -> dict[str, Any]:
+    """Summarize `raw_rows` as this cell's probe registry row.
+
+    Args:
+        run_config: Normalized run config supplying the run group and the
+            planned stochastic samples.
+        cell: Planned cell the row describes.
+        args: Runner options the provenance notes are built from.
+        raw_rows: Raw rows of the cell's probe output file seen so far.
+        status: Registry status to write; None lets
+            `eval_utils.run_registry_summary` derive it from the rows.
+        finished_at_utc: Finish time, empty while the cell is still running.
+
+    Returns:
+        The registry row, with `probe=weak_modality` in its notes (or the
+        first attempt's notes for a resumed cell).
+    """
     profile = cell.profile
     return eu.run_registry_summary(
         cell.items,
@@ -338,7 +500,18 @@ def registry_row(
 
 
 def text_score_rows(items: list[dict], raw_rows: list[dict]) -> list[dict]:
-    """Read generated text independently of whether its declared label is correct."""
+    """Read generated text independently of whether its declared label is correct.
+
+    Args:
+        items: Probe items, keyed by `item_id` for the gold modality, seed and
+            template.
+        raw_rows: Raw probe rows; rows that did not parse, or whose item is
+            unknown, are skipped.
+
+    Returns:
+        One row per readable raw row: the raw row plus the text-modality fields
+        of its generated requirement, its seed, source modality and template.
+    """
     by_id = {row["item_id"]: row for row in items}
     scores = []
     for raw in raw_rows:
@@ -372,7 +545,23 @@ def write_summary(
     *,
     bootstrap_samples: int | None = None,
 ) -> dict[str, Path]:
-    """Label and text diagnostics, plus paired deterministic phrasing differences."""
+    """Write label and text diagnostics, plus paired deterministic phrasing differences.
+
+    Each weak template other than `useful_if` is compared with `useful_if` on
+    the deterministic samples of the same capabilities, for the strict and the
+    broad strengthening rate.
+
+    Args:
+        root: Project root that contains `outputs/`.
+        dataset_id: Dataset whose suffix the summary files carry.
+        cell: Executed cell whose raw rows are summarized.
+        bootstrap_samples: Bootstrap resamples for the intervals; None uses
+            `DEFAULT_BOOTSTRAP_SAMPLES`, and smoke runs always use 20.
+
+    Returns:
+        The written paths under `csv` and `markdown` (the per-template summary)
+        and `deltas` (the paired differences).
+    """
     rows = eu.read_jsonl(cell.output_path)
     rows = [row for row in rows if str(row.get("run_id", "")) == cell.run_id]
     summary = eu.weak_modality_probe_summary(cell.items, rows)
@@ -456,6 +645,12 @@ def write_summary(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI for the probe: the shared runner options plus its own.
+
+    Returns:
+        The argument parser, with `runner_lifecycle.common_runner_parser` as
+        its parent and the module summary as its description.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
         parents=[rl.common_runner_parser()],
@@ -477,7 +672,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_from_config(run_config: dict[str, Any], args: RunnerArgs) -> None:
-    """Run the probe for one profile/model/dataset/variant cell."""
+    """Run the probe for one profile/model/dataset/variant cell.
+
+    Only the first matching profile, dataset and variant are used, and the
+    model defaults to the profile's first. The template sanity check runs
+    before anything else; after execution the summaries are written.
+
+    Args:
+        run_config: Normalized run config of the campaign.
+        args: Runner options; the profile, model, dataset and variant options
+            pick the cell, and `mode`, `run_id`, `dry_run`, `fake_completion`
+            and `bootstrap_samples` control how it runs.
+    """
     root = eu.project_root()
     profiles = eu.filter_run_profiles(run_config, args.profile, args.model)
     profile = profiles[0]
@@ -602,6 +808,16 @@ def run_from_config(run_config: dict[str, Any], args: RunnerArgs) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse the command line, load the JSON run config, and run the probe.
+
+    The loaded config is recorded as the run's resolved configuration.
+
+    Args:
+        argv: Command-line arguments; None reads `sys.argv`.
+
+    Returns:
+        The process exit status, 0.
+    """
     args = build_parser().parse_args(argv)
     eu.configure_run_logging(args.log_level)
     config = eu.load_run_config(args.config)

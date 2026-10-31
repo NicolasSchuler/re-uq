@@ -3,7 +3,7 @@
 Covers the text-modality negation guard, the repeated-sample agreement
 coverage guard, the coverage-adjusted text over-commitment bounds, the
 answer-length/bloat metrics, the run-matrix CI annotation, and
-``scripts/export_paper_tables.py`` end to end on a synthetic two-model cell.
+`scripts/export_paper_tables.py` end to end on a synthetic two-model cell.
 """
 
 import io
@@ -85,10 +85,22 @@ def _task2_raw(
 
 
 def _task1_raw(item, *, model, run_id, decision="yes", confidence=0.95, batch_id=None):
-    """One Task 1 entailment answer for `item`.
+    """Build one Task 1 entailment answer for `item`.
 
     `decision="yes"` on a non-mandatory source is the unsupported acceptance
     the RQ1 table counts; `y_true` is derived from the item by the scorer.
+
+    Args:
+        item: Benchmark item being answered.
+        model: Model name written to the record.
+        run_id: Run ID written to the record.
+        decision: Entailment decision, `yes` or `no`.
+        confidence: Verbalized confidence of the answer.
+        batch_id: Request ID; `None` leaves it off, so scoring falls back to
+            seed clustering.
+
+    Returns:
+        The raw record.
     """
     record = {
         "run_id": run_id,
@@ -118,10 +130,22 @@ def _task1_raw(item, *, model, run_id, decision="yes", confidence=0.95, batch_id
 def _task3_raw(
     item, *, model, run_id, relation, audit_mode="blind", confidence=0.9, batch_id=None
 ):
-    """One blind-audit verdict on `model`'s own Task 2 answer for `item`.
+    """Build one blind-audit verdict on `model`'s own Task 2 answer for `item`.
 
     The `item_id` is the one `eval_utils.build_task3_verification_items`
     generates, so the exporter's recomputed items and these rows join.
+
+    Args:
+        item: Benchmark item whose Task 2 answer is audited.
+        model: Model that wrote and audits the answer.
+        run_id: Run ID of the audit.
+        relation: Audit verdict, such as `strengthens` or `preserves`.
+        audit_mode: Audit mode encoded in the item ID; `blind` by default.
+        confidence: Verbalized confidence of the verdict.
+        batch_id: Request ID; `None` leaves it off.
+
+    Returns:
+        The raw record.
     """
     record = {
         "run_id": run_id,
@@ -153,10 +177,20 @@ def _task3_raw(
 
 
 def _batched_task2_raw(benchmark, *, model, run_id, requirement, seeds_per_request=2):
-    """Task 2 raw rows batched the way the archived runs sent them.
+    """Build Task 2 raw rows batched the way the archived runs sent them.
 
     Consecutive whole seeds share one request, so a request contains all four
     source conditions of each of its seeds.
+
+    Args:
+        benchmark: Benchmark items to answer.
+        model: Model name written to each row.
+        run_id: Run ID written to each row and its request ID.
+        requirement: Requirement text every answer returns.
+        seeds_per_request: Consecutive whole seeds per request.
+
+    Returns:
+        One raw row per item, with its `batch_id`.
     """
     by_seed = {}
     for item in benchmark:
@@ -603,7 +637,21 @@ class ContextAblationTableTest(unittest.TestCase):
     def _raw_rows(
         self, benchmark, run_id, model, *, strengthen_weak, seeds_per_request=None
     ):
-        """One arm's raw rows, optionally batched `seeds_per_request` per request."""
+        """Build one arm's raw rows, optionally batched `seeds_per_request` per request.
+
+        Args:
+            benchmark: Benchmark items to answer.
+            run_id: Run ID of the arm.
+            model: Model name written to each row.
+            strengthen_weak: Whether weak-intent items get a strict `must`
+                answer; otherwise every answer copies the source statement with
+                `MAY` lowercased.
+            seeds_per_request: Consecutive seeds per request; `None` leaves
+                `batch_id` off.
+
+        Returns:
+            One Task 2 raw row per item.
+        """
         request_of = {
             seed_id: index // (seeds_per_request or 1)
             for index, seed_id in enumerate(sorted({r["seed_id"] for r in benchmark}))
@@ -1296,11 +1344,18 @@ class CellFixture:
     def _write_task3_cell(
         self, root: Path, dataset: str, variant: str, benchmark: list[dict]
     ) -> None:
-        """Blind audits of the Task 2 runs `_write_cell` selects.
+        """Write blind audits of the Task 2 runs `_write_cell` selects.
 
         m1 flags its own strengthening, m2 calls everything preserved; the
         registry `notes` name the audited Task 2 run, which is what
         `select_task3_cell_runs` pins on.
+
+        Args:
+            root: Project root of the fixture.
+            dataset: Dataset of the cell.
+            variant: Benchmark variant of the cell.
+            benchmark: Benchmark items of the cell; each gets one audit per
+                model.
         """
         prefix = "task3" if variant == "must" else f"task3-{variant}"
         audits = [
@@ -2462,7 +2517,22 @@ def _rq_score_row(
     confidence=0.95,
     parse_status="ok",
 ):
-    """A deterministic Task 2 score row, as `build_uq_scores` emits one."""
+    """Build a deterministic Task 2 score row, as `build_uq_scores` emits one.
+
+    Args:
+        item_id: Item ID of the row.
+        model: Model name of the row.
+        seed_id: Seed (capability) ID of the row.
+        batch_id: Request ID; `None` leaves it off.
+        source_modality: Source and gold modality of the item.
+        strict: Whether the answer is a strict (and broad) text strengthening.
+        confidence: Verbalized confidence; the uncertainty score is its
+            complement.
+        parse_status: Text-modality parse status of the row.
+
+    Returns:
+        The score row.
+    """
     row = {
         "model": model,
         "task": "task2",

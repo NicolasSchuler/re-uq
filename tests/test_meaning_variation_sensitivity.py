@@ -2,13 +2,13 @@
 
 Pinned here, all offline and synthetic:
 
-* the optional ``dispersion_weight`` of ``acse_semantic_cluster_analysis``
+* the optional `dispersion_weight` of `acse_semantic_cluster_analysis`
   defaults to the module constant, so the reported score is unchanged, and its
   endpoints isolate the entropy and dispersion components;
 * changing the threshold changes the clusters on a fixture built for it;
 * the frozen-cohort join keeps readable deterministic rows with a scored group
   only, and its accounting is explicit about what was dropped;
-* the paired cluster bootstrap draws exactly as ``eu.bootstrap_seed_metric``
+* the paired cluster bootstrap draws exactly as `eu.bootstrap_seed_metric`
   and evaluates every setting on the same draw;
 * cached embeddings are bound to the sample texts they were computed from.
 """

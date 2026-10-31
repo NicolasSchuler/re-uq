@@ -74,13 +74,27 @@ def build_feature_sets(
     cache_dir: Path,
     reuse_cache: bool,
 ) -> dict[str, dict[str, Any]]:
-    """The four substrates, unreduced and unvectorized.
+    """Return the four substrates, unreduced and unvectorized.
 
     Nothing is fitted here. Dimensionality reduction and the TF-IDF vocabulary
-    are pipeline steps that ``run_grid`` hands to ``fold_metrics``, so they are
+    are pipeline steps that `run_grid` hands to `fold_metrics`, so they are
     fitted on the training rows of each fold; fitting them once over all
     observations would let a held-out fold help choose the axes and the
     vocabulary it is later scored in.
+
+    Args:
+        sample_rows: Sample rows with `semantic_text` and `requirement`.
+        cached_mlx_prefixed: Cached MLX embeddings of the requirement with the
+            sampled declared label.
+        mlx_batch: Batch size for re-embedding the requirement-only text.
+        cache_dir: Directory of the requirement-only embedding cache.
+        reuse_cache: Whether that cache may be reused.
+
+    Returns:
+        Per feature key (`mlx::prefixed`, `mlx::reqonly`, `tfidf::prefixed`,
+        `tfidf::reqonly`), the matrix or texts under `X`, an unfitted
+        vectorizer for TF-IDF (`None` otherwise), the backend and the text
+        variant.
     """
     semantic_texts = [str(row.get("semantic_text", "")) for row in sample_rows]
     requirements = [str(row.get("requirement", "")) for row in sample_rows]
@@ -140,7 +154,30 @@ def run_grid(
     hgb_max_iter: int = 300,
     hgb_budgets: list[int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Score every feature set, with reduction and vectorization inside the fold."""
+    """Score every feature set, with reduction and vectorization inside the fold.
+
+    Each set is scored under seed and item grouping, globally and within each
+    weak source modality. Rows that are not finite in every dense feature set
+    are left out of all sets, so the sets share one cohort.
+
+    Args:
+        features: Feature sets from `build_feature_sets`.
+        sample_rows: Sample rows aligned with every feature set.
+        models: Classifiers, `hgb` and/or `logreg`.
+        n_splits: Folds per probe, passed to `fold_metrics`.
+        random_state: Base seed, passed to `fold_metrics`.
+        pca_components: Fold-local reducer components, passed to
+            `fold_metrics`.
+        prediction_rows: When given, receives every held-out prediction with
+            its feature metadata.
+        cell_callback: Called as `cell_callback(fold_rows, predictions)` after
+            each feature set, grouping, scope, target and classifier cell.
+        hgb_max_iter: Iteration budget of `hgb`, passed to `fold_metrics`.
+        hgb_budgets: Candidate `hgb` budgets, passed to `fold_metrics`.
+
+    Returns:
+        All fold rows with their feature, grouping and exclusion metadata.
+    """
     source_modalities = np.asarray(
         [str(row.get("source_modality", "")) for row in sample_rows], dtype=object
     )
@@ -240,6 +277,22 @@ def summarize_grid(
     iterations=1000,
     seed=20260527,
 ) -> list[dict[str, Any]]:
+    """Summarize fold rows per feature set, grouping, scope, target and classifier.
+
+    Args:
+        fold_rows: Fold rows from `run_grid`.
+        prediction_rows: Held-out predictions of the same cells. When given,
+            each summary row also carries the `prediction_summary` fold mean
+            and capability bootstrap, which replace the fold-row means of the
+            columns they share.
+        iterations: Bootstrap draws for `prediction_summary`.
+        seed: Bootstrap seed for `prediction_summary`.
+
+    Returns:
+        One row per cell with the fold means and the average-precision lift
+        over its baseline. For the strengthening targets the positive rate is
+        set to that baseline.
+    """
     by_cell: dict[tuple, list[dict[str, Any]]] = {}
     for row in fold_rows:
         key = (
@@ -313,6 +366,12 @@ def summarize_grid(
 
 
 def main() -> None:
+    """Run the probe grid on the cached sample embeddings and write its outputs.
+
+    Writes `probe_grid_predictions.jsonl` cell by cell, then
+    `probe_grid_folds.csv`, `probe_grid_summary.csv`, `probe_grid_summary.md`
+    and `manifest.json` to `--output-dir`.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--manifest",

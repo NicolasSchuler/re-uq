@@ -38,7 +38,15 @@ sha256_text = eu.sha256_text
 
 
 def resolved_config_path(root: str | Path, run_id: str) -> Path:
-    """Sibling of `eval_utils.run_log_path` holding the resolved composition."""
+    """Return the sibling of `eval_utils.run_log_path` holding the resolved composition.
+
+    Args:
+        root: Project root that contains `data/processed/logs`.
+        run_id: Run the composition belongs to; made filesystem-safe for the name.
+
+    Returns:
+        The path `data/processed/logs/<run_id>.resolved.yaml` under `root`.
+    """
     return (
         Path(root)
         / "data/processed/logs"
@@ -49,8 +57,15 @@ def resolved_config_path(root: str | Path, run_id: str) -> Path:
 def write_resolved_config(root: str | Path, run_id: str, yaml_text: str) -> str:
     """Persist the resolved config for `run_id` and return its SHA-256.
 
-    Returns "" (and writes nothing) when there is no resolved config, which is
-    the case for every run launched from the legacy JSON CLI.
+    Args:
+        root: Project root that contains `data/processed/logs`.
+        run_id: Run the composition belongs to; names the sidecar file.
+        yaml_text: Resolved Hydra composition as YAML, empty for JSON CLI runs.
+
+    Returns:
+        The SHA-256 hex digest of `yaml_text`, or "" (and nothing is written)
+        when there is no resolved config, which is the case for every run
+        launched from the legacy JSON CLI.
     """
     if not yaml_text:
         return ""
@@ -61,7 +76,15 @@ def write_resolved_config(root: str | Path, run_id: str, yaml_text: str) -> str:
 
 
 def resume_log_path(root: str | Path, run_id: str) -> Path:
-    """Sibling of `resolved_config_path` holding this run's `resumed_at` list."""
+    """Return the sibling of `resolved_config_path` holding the `resumed_at` list.
+
+    Args:
+        root: Project root that contains `data/processed/logs`.
+        run_id: Run the resume log belongs to; made filesystem-safe for the name.
+
+    Returns:
+        The path `data/processed/logs/<run_id>.resume.json` under `root`.
+    """
     return (
         Path(root)
         / "data/processed/logs"
@@ -70,7 +93,16 @@ def resume_log_path(root: str | Path, run_id: str) -> Path:
 
 
 def read_resume_log(root: str | Path, run_id: str) -> list[str]:
-    """Timestamps at which `run_id` was resumed, oldest first ([] if never)."""
+    """Return the timestamps at which `run_id` was resumed, oldest first.
+
+    Args:
+        root: Project root that contains `data/processed/logs`.
+        run_id: Run whose resume sidecar is read.
+
+    Returns:
+        The recorded resume timestamps, or [] if the run was never resumed or
+        the sidecar is missing or unreadable.
+    """
     path = resume_log_path(root, run_id)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -88,6 +120,17 @@ def record_resume(
 
     Serialized with the same advisory lock the storage helpers use, so two
     runners resuming the same run cannot lose an entry.
+
+    Args:
+        root: Project root that contains `data/processed/logs`.
+        run_id: Run being resumed.
+        timestamp: Time of this resume attempt, appended as given.
+        started_at_utc: Original start time of the run, rewritten into the
+            sidecar on every call.
+
+    Returns:
+        Every resume timestamp recorded for the run, oldest first, including
+        the one just appended.
     """
     path = resume_log_path(root, run_id)
     with eu.file_lock(path):
@@ -105,11 +148,20 @@ def record_resume(
 
 
 def registry_note_field(notes: Any, key: str) -> str:
-    """Read one ``key=value`` field back out of a registry ``notes`` string.
+    """Read one `key=value` field back out of a registry `notes` string.
 
-    The inverse of :func:`run_notes` and of the extras the runners pass it
-    (``audit_mode=...``, ``source_run_id=...``). Kept here so the parser cannot
-    drift from the writer above it. Returns "" when the field is absent.
+    The inverse of `run_notes` and of the extras the runners pass it
+    (`audit_mode=...`, `source_run_id=...`). Kept here so the parser cannot
+    drift from the writer above it.
+
+    Args:
+        notes: Registry `notes` value of `;`-separated `key=value` fields;
+            None or empty reads as no fields.
+        key: Field name to look up.
+
+    Returns:
+        The stripped value of the first field named `key`, or "" when the
+        field is absent.
     """
     for part in str(notes or "").split(";"):
         name, separator, value = part.partition("=")
@@ -119,17 +171,35 @@ def registry_note_field(notes: Any, key: str) -> str:
 
 
 def registry_source_run_id(row: Any) -> str:
-    """The Task 2 run a Task 3 registry row audited ("" when it says nothing)."""
+    """Return the Task 2 run a Task 3 registry row audited.
+
+    Args:
+        row: Registry row (anything with `get`, such as a dict or pandas row),
+            or the row's `notes` string itself.
+
+    Returns:
+        The `source_run_id` recorded in the row's notes, or "" when it says
+        nothing.
+    """
     return registry_note_field(
         row.get("notes", "") if hasattr(row, "get") else row, "source_run_id"
     )
 
 
 def run_notes(args: Any, extra: str = "") -> str:
-    """Registry `notes` value for a run launched with `args`.
+    """Build the registry `notes` value for a run launched with `args`.
 
     Identical to the historical `f"mode={...}"` strings unless the caller
     supplied a resolved Hydra config, in which case its digest is appended.
+
+    Args:
+        args: Runner options; `mode` and, when present, `resolved_config_sha`
+            are read from it.
+        extra: Additional `key=value` fields (for example `source_run_id=...`)
+            placed after the mode.
+
+    Returns:
+        The `; `-joined notes string.
     """
     parts = [f"mode={getattr(args, 'mode', '')}"]
     if extra:

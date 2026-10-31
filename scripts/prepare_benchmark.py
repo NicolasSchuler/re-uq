@@ -1,9 +1,9 @@
 """Prepare NICE or MLM-TAPT seed candidates and build reviewed modality benchmarks.
 
 The candidates stage preserves an existing manual review table. Inspect its
-``include`` and ``capability_text_final`` columns before running the build stage.
-Changed frozen benchmarks are written as candidates unless --overwrite is given.
-Use --root with an isolated checkout to verify regeneration without changing the
+`include` and `capability_text_final` columns before running the build stage.
+Changed frozen benchmarks are written as candidates unless `--overwrite` is given.
+Use `--root` with an isolated checkout to verify regeneration without changing the
 published inputs. This script never calls an LLM.
 """
 
@@ -31,7 +31,20 @@ MANIFEST_PROMPTS = (
 
 
 def prepare_candidates(root: Path, dataset_id: str, config: dict[str, Any]) -> Path:
-    """Write automatic suggestions separately when a review table already exists."""
+    """Write automatic suggestions separately when a review table already exists.
+
+    Args:
+        root: Root containing inputs and outputs; a missing NICE source file is
+            downloaded under it.
+        dataset_id: `nice` for the NICE corpus; any other value builds MLM TAPT
+            candidates.
+        config: Project config with the dataset sources, sampling seed and
+            target seed count.
+
+    Returns:
+        The path written: the seed review table, or the automatic-candidates
+        file next to it when a review table already exists.
+    """
     target_count = eu.dataset_target_seed_count(config, dataset_id)
     if dataset_id == "nice":
         source = root / config["datasets"]["nice_local_path"]
@@ -71,7 +84,18 @@ def prepare_candidates(root: Path, dataset_id: str, config: dict[str, Any]) -> P
 
 
 def validate_items(items: list[dict[str, Any]], target_count: int) -> None:
-    """Keep the original benchmark shape, unique-item and gold-label checks."""
+    """Keep the original benchmark shape, unique-item and gold-label checks.
+
+    Args:
+        items: Benchmark items of one keyword variant.
+        target_count: Number of reviewed seeds; there must be one unique item
+            per seed and modality.
+
+    Raises:
+        ValueError: If the item count or item IDs do not match, or a gold label
+            disagrees with the source modality (Task 1 is `yes` only for
+            mandatory items, Task 2 equals the source modality).
+    """
     expected = target_count * len(eu.MODALITIES)
     if len(items) != expected or len({r["item_id"] for r in items}) != expected:
         raise ValueError(f"Expected {expected} unique benchmark items.")
@@ -92,7 +116,27 @@ def build_benchmark(
     variant: str = "both",
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    """Build from reviewed seeds without accepting changed frozen inputs silently."""
+    """Build from reviewed seeds without accepting changed frozen inputs silently.
+
+    Args:
+        root: Root containing inputs and outputs.
+        dataset_id: Dataset whose reviewed seeds are built.
+        config: Project config; supplies the target seed count.
+        variant: Keyword variant to write: `must`, `shall` or `both`. An
+            unselected variant that already exists must still match the
+            reviewed seeds, because the shared manifest certifies it too.
+        overwrite: Accept changed frozen inputs; otherwise differing content is
+            written to candidate files and the build stops before the review
+            exports and manifest.
+
+    Returns:
+        The benchmark manifest that was written.
+
+    Raises:
+        ValueError: If an unselected existing variant differs from the reviewed
+            seeds, a prompt input is missing, or a frozen input changed and was
+            preserved because `overwrite` is false.
+    """
     target_count = eu.dataset_target_seed_count(config, dataset_id)
     review_path = eu.artifact_path(root / "data/processed/seeds_review.csv", dataset_id)
     seeds = eu.load_reviewed_seeds(review_path, target_count=target_count, strict=True)
@@ -186,6 +230,14 @@ def build_benchmark(
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Run the candidates or build stage from the command line.
+
+    Validation and missing-file errors from either stage are reported through
+    `argparse`, which exits with a usage error.
+
+    Args:
+        argv: Command-line arguments; `None` reads `sys.argv`.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--stage", choices=("candidates", "build"), required=True)
     parser.add_argument("--dataset", choices=("nice", "mlm_tapt"), required=True)

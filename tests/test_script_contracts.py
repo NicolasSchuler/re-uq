@@ -18,7 +18,15 @@ SCRIPT_PATHS = sorted(SCRIPTS_DIR.glob("*.py"))
 
 
 def _has_main_guard(path: Path) -> bool:
-    """True if the module ends in the `if __name__ == "__main__":` CLI guard."""
+    """Return whether a script has a CLI guard.
+
+    Args:
+        path: Script file to parse.
+
+    Returns:
+        True if any top-level `if` compares `__name__`, as the
+        `if __name__ == "__main__":` CLI guard does.
+    """
     for node in ast.parse(path.read_text(encoding="utf-8")).body:
         if not isinstance(node, ast.If):
             continue
@@ -33,7 +41,14 @@ def _has_main_guard(path: Path) -> bool:
 
 
 def _contains_json_dumps(node: ast.AST) -> bool:
-    """True if `node` contains a `json.dumps(...)` call anywhere below it."""
+    """Return whether an AST node calls `json.dumps`.
+
+    Args:
+        node: AST node to search.
+
+    Returns:
+        True if `node` contains a `json.dumps(...)` call anywhere below it.
+    """
     return any(
         isinstance(child, ast.Call)
         and isinstance(child.func, ast.Attribute)
@@ -66,10 +81,10 @@ class ScriptModuleContractTest(unittest.TestCase):
 
 
 class ManifestWriterContractTest(unittest.TestCase):
-    """Manifest JSON is serialized in exactly one place.
+    r"""Manifest JSON is serialized in exactly one place.
 
     Manifests participate in provenance hashing, so a second hand-rolled
-    `json.dumps(...) + "\\n"` writer is a place where the bytes can drift.
+    `json.dumps(...) + "\n"` writer is a place where the bytes can drift.
     `eval_utils.write_json` is the single writer.
     """
 

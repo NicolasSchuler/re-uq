@@ -30,7 +30,7 @@ from dataclasses import dataclass, field as dataclass_field
 from functools import cache
 from itertools import batched, pairwise
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, TextIO
 from xml.etree import ElementTree as ET
 
 if TYPE_CHECKING:
@@ -482,6 +482,16 @@ RUN_PROGRESS_FIELDS = [
 
 
 def project_root() -> Path:
+    """Return the repository root used to resolve relative paths.
+
+    The first directory from the current working directory upwards that holds
+    both `AGENTS.md` and `docs/evaluation.md` wins, so commands work from any
+    subdirectory. Otherwise the parent of this module's `scripts/` directory is
+    used.
+
+    Returns:
+        The resolved repository root.
+    """
     cwd = Path.cwd().resolve()
     for candidate in [cwd, *cwd.parents]:
         if (candidate / "AGENTS.md").exists() and (
@@ -497,6 +507,14 @@ def deep_update(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, An
     Both inputs are left untouched and no nested container is shared with
     either of them, so a caller that mutates the merged configuration cannot
     reach back into `DEFAULT_CONFIG` or into the next call's result.
+
+    Args:
+        base: Configuration to start from.
+        overrides: Values that win over `base`. Nested dictionaries are merged
+            key by key; any other value replaces the base value outright.
+
+    Returns:
+        A deep copy of `base` with `overrides` merged in.
     """
     result: dict[str, Any] = copy.deepcopy(dict(base))
     for key, value in overrides.items():
@@ -509,7 +527,15 @@ def deep_update(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, An
 
 
 def load_config(path: str | Path = "config.example.json") -> dict[str, Any]:
-    """Load a config file merged over `DEFAULT_CONFIG` (never aliasing it)."""
+    """Load a config file merged over `DEFAULT_CONFIG` (never aliasing it).
+
+    Args:
+        path: Config file; a relative path is resolved against `project_root`.
+            A missing file yields a copy of `DEFAULT_CONFIG`.
+
+    Returns:
+        The merged configuration dictionary.
+    """
     root = project_root()
     config_path = Path(path)
     if not config_path.is_absolute():
@@ -521,6 +547,19 @@ def load_config(path: str | Path = "config.example.json") -> dict[str, Any]:
 
 
 def positive_int(value: Any, name: str) -> int:
+    """Parse a setting that must be an integer of at least 1.
+
+    Args:
+        value: Raw config or command-line value; it is stripped as a string
+            before parsing, so `" 4 "` is accepted.
+        name: Setting name quoted in the error message.
+
+    Returns:
+        The parsed integer.
+
+    Raises:
+        ValueError: If the value is not an integer or is below 1.
+    """
     try:
         resolved = int(str(value).strip())
     except (TypeError, ValueError) as exc:
@@ -531,6 +570,19 @@ def positive_int(value: Any, name: str) -> int:
 
 
 def nonnegative_int(value: Any, name: str) -> int:
+    """Parse a setting that must be an integer of at least 0.
+
+    Args:
+        value: Raw config or command-line value; it is stripped as a string
+            before parsing.
+        name: Setting name quoted in the error message.
+
+    Returns:
+        The parsed integer.
+
+    Raises:
+        ValueError: If the value is not an integer or is negative.
+    """
     try:
         resolved = int(str(value).strip())
     except (TypeError, ValueError) as exc:
@@ -543,6 +595,19 @@ def nonnegative_int(value: Any, name: str) -> int:
 
 
 def nonnegative_float(value: Any, name: str) -> float:
+    """Parse a setting that must be a number of at least 0.
+
+    Args:
+        value: Raw config or command-line value; it is stripped as a string
+            before parsing.
+        name: Setting name quoted in the error message.
+
+    Returns:
+        The parsed number.
+
+    Raises:
+        ValueError: If the value is not a number or is negative.
+    """
     try:
         resolved = float(str(value).strip())
     except (TypeError, ValueError) as exc:
@@ -555,6 +620,19 @@ def nonnegative_float(value: Any, name: str) -> float:
 
 
 def bool_config(value: Any, name: str) -> bool:
+    """Parse a boolean setting from a bool or a yes/no style string.
+
+    Args:
+        value: A bool, or a string such as `"true"`, `"1"`, `"yes"`, `"on"`
+            (true) or `"false"`, `"0"`, `"no"`, `"off"` (false), case-insensitive.
+        name: Setting name quoted in the error message.
+
+    Returns:
+        The parsed boolean.
+
+    Raises:
+        ValueError: If the value is not one of the accepted spellings.
+    """
     if isinstance(value, bool):
         return value
     normalized = str(value).strip().lower()
@@ -597,11 +675,18 @@ def _normalized_key(key: Any) -> str:
 
 
 def is_credential_shaped_key(key: Any) -> bool:
-    """True for keys whose value may carry a credential.
+    """Return True for keys whose value may carry a credential.
 
     Keys ending in `_env` name an environment variable rather than holding its
     value, so they are provenance and never match here; their *values* are
     validated separately as environment-variable names.
+
+    Args:
+        key: Mapping key to classify; non-alphanumeric runs are folded to `_`
+            and the comparison is case-insensitive.
+
+    Returns:
+        True when the key matches a credential name or substring.
     """
     normalized = _normalized_key(key)
     if normalized.endswith("_env"):
@@ -626,6 +711,17 @@ def assert_no_credential_shaped_values(
     an `*_env` key holds something that is not an environment-variable name
     (the shape a pasted token has). The message names the offending path and
     never echoes the value, so it is safe in logs and tracebacks.
+
+    Args:
+        value: Structure to check; mappings, lists and tuples are walked
+            recursively.
+        where: Artifact or context name that prefixes the error message.
+        _path: Dotted path of `value` inside the top-level structure, built up
+            by the recursion; callers leave it empty.
+
+    Raises:
+        ValueError: If a credential-shaped key holds a non-blank value or an
+            `*_env` key holds something other than a variable name.
     """
     if isinstance(value, Mapping):
         for key, item in value.items():
@@ -660,6 +756,17 @@ def resolve_llm_concurrency(
     env: Mapping[str, str] | None = None,
     env_var: str = "LLM_CONCURRENCY",
 ) -> int:
+    """Return the number of concurrent provider requests to use.
+
+    Args:
+        config: Loaded configuration; `llm.concurrency` is used when the
+            environment does not override it, falling back to the default config.
+        env: Environment to read; defaults to `os.environ`.
+        env_var: Environment variable whose non-empty value overrides the config.
+
+    Returns:
+        The concurrency as a positive integer.
+    """
     env = os.environ if env is None else env
     env_value = str(env.get(env_var, "")).strip()
     if env_value:
@@ -675,6 +782,11 @@ def resolve_llm_concurrency(
 
 
 def ensure_project_dirs(root: Path | None = None) -> None:
+    """Create the standard data, output and prompt directories if they are missing.
+
+    Args:
+        root: Repository root; defaults to `project_root`.
+    """
     root = root or project_root()
     for rel in [
         "data/raw",
@@ -686,10 +798,26 @@ def ensure_project_dirs(root: Path | None = None) -> None:
 
 
 def read_csv_frame(path: str | Path) -> pd.DataFrame:
+    """Read a CSV file with every column as a string and empty cells kept as `""`.
+
+    Args:
+        path: CSV file to read.
+
+    Returns:
+        The file as a data frame of strings.
+    """
     return pd.read_csv(path, dtype=str, keep_default_na=False)
 
 
 def read_csv_rows(path: str | Path) -> list[dict[str, str]]:
+    """Read a CSV file as a list of string-valued row dictionaries.
+
+    Args:
+        path: CSV file to read; values are read as by `read_csv_frame`.
+
+    Returns:
+        One dictionary per row, keyed by column name.
+    """
     return read_csv_frame(path).to_dict(orient="records")
 
 
@@ -714,6 +842,14 @@ def write_csv_rows(
     rows: list[dict[str, Any]] | pd.DataFrame,
     fieldnames: list[str] | None = None,
 ) -> None:
+    """Write rows to a CSV file, creating parent directories as needed.
+
+    Args:
+        path: Destination file; overwritten if it exists.
+        rows: Row dictionaries or a data frame.
+        fieldnames: Column order to write; missing columns are filled with `""`
+            and extra columns are dropped. `None` keeps the rows' own columns.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     _csv_frame(rows, fieldnames=fieldnames).to_csv(path, index=False)
@@ -726,6 +862,25 @@ def write_csv_rows_if_changed(
     candidate_path: str | Path | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
+    """Write a CSV file without silently replacing different existing content.
+
+    A new file is written directly. When the file exists with identical text,
+    nothing is written. When it exists with different text, the new content
+    goes to a candidate file next to it so a reviewed file is not overwritten.
+
+    Args:
+        path: Destination file.
+        rows: Row dictionaries or a data frame.
+        fieldnames: Column order, applied as in `write_csv_rows`.
+        candidate_path: Where to write differing content; defaults to
+            `<stem>_candidate<suffix>` next to `path`.
+        overwrite: Replace an existing file even if its content differs.
+
+    Returns:
+        A dictionary with `status` (`"written"`, `"overwritten"`, `"unchanged"`
+        or `"candidate_written"`), `path`, and `candidate_path` (empty unless a
+        candidate file was written).
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     frame = _csv_frame(rows, fieldnames=fieldnames)
@@ -755,6 +910,19 @@ def write_csv_rows_if_changed(
 
 
 def normalize_dataset_id(dataset_id: str | None) -> str:
+    """Map a dataset name or alias to its canonical dataset id.
+
+    Args:
+        dataset_id: Dataset name; empty, `None`, `"main"` and `"default"` mean
+            the NICE dataset, and aliases such as `"hf"` or `"pure_context"` are
+            accepted. Case and hyphens are ignored.
+
+    Returns:
+        One of `DATASET_NICE`, `DATASET_MLM_TAPT` or `DATASET_PURE`.
+
+    Raises:
+        ValueError: If the name is not a known dataset or alias.
+    """
     normalized = str(dataset_id or DATASET_NICE).strip().lower().replace("-", "_")
     if normalized in {"", "main", "default", DATASET_NICE}:
         return DATASET_NICE
@@ -766,20 +934,56 @@ def normalize_dataset_id(dataset_id: str | None) -> str:
 
 
 def dataset_suffix(dataset_id: str | None) -> str:
+    """Return the artifact file-name suffix for a dataset.
+
+    Args:
+        dataset_id: Dataset name or alias, as accepted by `normalize_dataset_id`.
+
+    Returns:
+        The suffix, empty for the NICE dataset.
+    """
     return DATASET_SUFFIXES[normalize_dataset_id(dataset_id)]
 
 
 def variant_suffix(variant: str | None) -> str:
+    """Return the artifact file-name suffix for a benchmark variant.
+
+    Args:
+        variant: Benchmark variant, as accepted by `normalize_benchmark_variant`.
+
+    Returns:
+        An empty string for the `must` variant and `"_shall"` for `shall`.
+    """
     return "" if normalize_benchmark_variant(variant) == "must" else "_shall"
 
 
 def dataset_variant_suffix(dataset_id: str | None, variant: str | None = None) -> str:
+    """Return the combined dataset and variant suffix for artifact file names.
+
+    Args:
+        dataset_id: Dataset name or alias.
+        variant: Benchmark variant; `None` means `must`.
+
+    Returns:
+        The dataset suffix followed by the variant suffix.
+    """
     return f"{dataset_suffix(dataset_id)}{variant_suffix(variant)}"
 
 
 def artifact_path(
     path: str | Path, dataset_id: str | None = None, variant: str | None = None
 ) -> Path:
+    """Insert the dataset and variant suffix into a file name before its extension.
+
+    Args:
+        path: Base artifact path, as used for the NICE `must` benchmark.
+        dataset_id: Dataset name or alias.
+        variant: Benchmark variant; `None` means `must`.
+
+    Returns:
+        The path with the suffix added, or `path` unchanged when the suffix is
+        empty.
+    """
     path = Path(path)
     suffix = dataset_variant_suffix(dataset_id, variant)
     if not suffix:
@@ -798,12 +1002,25 @@ def task3_verification_items_path(
     run_id: Any = None,
     smoke: bool | None = None,
 ) -> Path:
-    """Path of the derived Task 3 audit items for one (source run, model, mode).
+    """Return the derived Task 3 audit item path for one (source run, model, mode).
 
-    ``run_id`` / ``smoke`` route smoke and fake runs into the parallel smoke tree
-    (``data/processed/task3_verification_items/smoke/``) through
-    :func:`resolve_run_artifact_path`, so a fake Task 3 run can never overwrite
+    `run_id` / `smoke` route smoke and fake runs into the parallel smoke tree
+    (`data/processed/task3_verification_items/smoke/`) through
+    `resolve_run_artifact_path`, so a fake Task 3 run can never overwrite
     the paper-facing item file. Full runs keep the unchanged default path.
+
+    Args:
+        root: Repository root.
+        dataset_id: Dataset name or alias.
+        variant: Benchmark variant.
+        source_run_id: Run whose answers the verification items audit.
+        model: Model whose answers are audited.
+        audit_mode: Task 3 audit mode, normalized by `normalize_task3_audit_mode`.
+        run_id: Run id used to detect smoke runs.
+        smoke: Explicit smoke flag; `None` infers it from `run_id`.
+
+    Returns:
+        The CSV path of the verification items.
     """
     parts = [
         "task3_verification_items",
@@ -823,16 +1040,43 @@ def task3_verification_items_path(
 
 
 def candidate_path(path: str | Path) -> Path:
+    """Return the `<stem>_candidate<suffix>` path next to a file.
+
+    Args:
+        path: File the candidate stands in for.
+
+    Returns:
+        The candidate file path.
+    """
     path = Path(path)
     return path.with_name(f"{path.stem}_candidate{path.suffix}")
 
 
 def auto_candidates_path(path: str | Path) -> Path:
+    """Return the `<stem>_candidates_auto<suffix>` path next to a file.
+
+    Args:
+        path: File the automatic candidates belong to.
+
+    Returns:
+        The automatic candidates file path.
+    """
     path = Path(path)
     return path.with_name(f"{path.stem}_candidates_auto{path.suffix}")
 
 
 def dataset_target_seed_count(config: Mapping[str, Any], dataset_id: str | None) -> int:
+    """Return how many seed requirements to select for a dataset.
+
+    Args:
+        config: Loaded configuration; `project.target_seed_count` applies to
+            every dataset except `mlm_tapt`, which uses
+            `datasets.mlm_tapt_target_seed_count` when set.
+        dataset_id: Dataset name or alias.
+
+    Returns:
+        The target seed count.
+    """
     dataset_id = normalize_dataset_id(dataset_id)
     project_config = config.get("project", {}) if isinstance(config, Mapping) else {}
     datasets_config = config.get("datasets", {}) if isinstance(config, Mapping) else {}
@@ -848,6 +1092,15 @@ def dataset_target_seed_count(config: Mapping[str, Any], dataset_id: str | None)
 
 
 def seed_review_fields(dataset_id: str | None = None) -> list[str]:
+    """Return the column order of the seed review file for a dataset.
+
+    Args:
+        dataset_id: Dataset name or alias. NICE omits `source_corpus` and PURE
+            adds the document-context columns.
+
+    Returns:
+        The review column names.
+    """
     dataset_id = normalize_dataset_id(dataset_id)
     if dataset_id == DATASET_NICE:
         return [field for field in BASE_SEED_REVIEW_FIELDS if field != "source_corpus"]
@@ -857,6 +1110,22 @@ def seed_review_fields(dataset_id: str | None = None) -> list[str]:
 
 
 def normalize_task_filter(task: str | Iterable[str] | None = None) -> list[str]:
+    """Resolve a task selection into canonical task names.
+
+    Args:
+        task: One task name, several, or `None`. `"both"`, `"all"` and empty
+            select Task 1 and Task 2; descriptive aliases such as
+            `"mandatory_entailment"`, `"modality_extraction"` and
+            `"modality_verification"` are accepted. Task 3 is only selected
+            explicitly.
+
+    Returns:
+        Unique task names (`"task1"`, `"task2"`, `"task3"`) in request order,
+        defaulting to Task 1 and Task 2.
+
+    Raises:
+        ValueError: If a task name is not recognised.
+    """
     if task is None:
         return ["task1", "task2"]
     if isinstance(task, str):
@@ -883,6 +1152,17 @@ def normalize_task_filter(task: str | Iterable[str] | None = None) -> list[str]:
 
 
 def normalize_benchmark_variant(variant: str | None) -> str:
+    """Map a benchmark variant name to `must` or `shall`.
+
+    Args:
+        variant: Variant name; empty, `None` and `"main"` mean `must`.
+
+    Returns:
+        `"must"` or `"shall"`.
+
+    Raises:
+        ValueError: If the name is neither variant.
+    """
     normalized = str(variant or "must").strip().lower()
     if normalized in {"", "main", "must"}:
         return "must"
@@ -892,6 +1172,20 @@ def normalize_benchmark_variant(variant: str | None) -> str:
 
 
 def selected_values(values: list[str], requested: str | None, name: str) -> list[str]:
+    """Restrict configured datasets or variants to the one requested by the user.
+
+    Args:
+        values: Canonical values configured for the run.
+        requested: Requested value; empty or `None` keeps all `values`.
+        name: `"dataset"` normalizes `requested` as a dataset id; any other value
+            normalizes it as a benchmark variant and names it in the error.
+
+    Returns:
+        `values` unchanged, or a one-element list with the requested value.
+
+    Raises:
+        ValueError: If the requested value is not among `values`.
+    """
     if not requested:
         return values
     normalized = (
@@ -909,6 +1203,17 @@ def selected_values(values: list[str], requested: str | None, name: str) -> list
 def logging_config_from_args(
     run_config: Mapping[str, Any], args: Any
 ) -> dict[str, Any]:
+    """Build the run logging config with command-line overrides applied.
+
+    Args:
+        run_config: Run configuration whose `logging` block is the base.
+        args: Parsed command-line arguments carrying the progress and warning
+            thresholds; `no_progress_artifacts` and `no_request_transcripts`
+            switch the corresponding artifacts off.
+
+    Returns:
+        The normalized logging config from `normalize_run_logging_config`.
+    """
     return normalize_run_logging_config(
         run_config.get("logging"),
         overrides={
@@ -927,6 +1232,18 @@ def logging_config_from_args(
 
 
 def normalize_task3_audit_mode(value: Any) -> str:
+    """Map a Task 3 audit mode name or alias to its canonical name.
+
+    Args:
+        value: Mode name; empty or `"official"` means the official mode, and
+            hyphens, spaces and case are ignored.
+
+    Returns:
+        The canonical audit mode, such as `"blind"` or `"declared_text"`.
+
+    Raises:
+        ValueError: If the mode is not recognised.
+    """
     normalized = (
         str(value or OFFICIAL_TASK3_AUDIT_MODE)
         .strip()
@@ -951,6 +1268,14 @@ def normalize_task3_audit_mode(value: Any) -> str:
 
 
 def normalize_base_url(value: Any) -> str:
+    """Return a provider base URL stripped of whitespace and trailing slashes.
+
+    Args:
+        value: Base URL; `None` becomes an empty string.
+
+    Returns:
+        The normalized URL.
+    """
     return str(value or "").strip().rstrip("/")
 
 
@@ -970,6 +1295,16 @@ def normalize_run_logging_config(
     logging_config: Mapping[str, Any] | None = None,
     overrides: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Validate the run logging settings over `DEFAULT_RUN_LOGGING`.
+
+    Args:
+        logging_config: Logging block from the run config; its keys replace the
+            defaults.
+        overrides: Command-line values applied last; `None` values are ignored.
+
+    Returns:
+        The logging settings with every value validated and typed.
+    """
     config = dict(DEFAULT_RUN_LOGGING)
     if logging_config:
         config.update(dict(logging_config))
@@ -1009,6 +1344,24 @@ def normalize_run_logging_config(
 def normalize_structured_output_mode(
     value: Any, *, json_mode: bool = False, json_schema: bool = False
 ) -> str:
+    """Map a structured-output setting or alias to its canonical mode.
+
+    Args:
+        value: Mode name or boolean. `True` and aliases such as `"json"` mean
+            `json_object`; `"schema"` and `"strict"` mean `json_schema`;
+            `"pydantic"` and `"validated"` mean `instructor`; `False` and
+            `"off"` mean `none`.
+        json_mode: Legacy switch used only when `value` is `None`; selects
+            `json_object`.
+        json_schema: Legacy switch used only when `value` is `None`; selects
+            `json_schema` and wins over `json_mode`.
+
+    Returns:
+        One of `"none"`, `"json_object"`, `"json_schema"` or `"instructor"`.
+
+    Raises:
+        ValueError: If the mode is not recognised.
+    """
     if value is None:
         if json_schema:
             return "json_schema"
@@ -1053,7 +1406,16 @@ DEFAULT_BATCH_ORDER = BATCH_ORDER_GROUPED
 
 
 def batching_arm_name(batch_size: int, batch_order: str) -> str:
-    """Stable request-composition identity, retaining archived 16-item names."""
+    """Return a stable request-composition identity, retaining archived 16-item names.
+
+    Args:
+        batch_size: Items per provider request.
+        batch_order: Batch composition, `grouped` or `shuffled`.
+
+    Returns:
+        `"single"` for one item per request, the bare order name for 16-item
+        batches, and `<order>_<size>` otherwise.
+    """
     size = positive_int(batch_size, "batch_size")
     order = normalize_batch_order(batch_order)
     if size == 1:
@@ -1067,6 +1429,17 @@ def normalize_batch_order(value: Any, field: str = "batch_order") -> str:
     `grouped` keeps consecutive request indices together (all four modality
     variants of a seed land in one batch); `shuffled` deterministically shuffles
     job order inside each batch key group before chunking so batches mix seeds.
+
+    Args:
+        value: Configured order; `None` or empty means `DEFAULT_BATCH_ORDER`.
+            Case and hyphens are ignored.
+        field: Setting name quoted in the error message.
+
+    Returns:
+        `"grouped"` or `"shuffled"`.
+
+    Raises:
+        ValueError: If the order is not recognised.
     """
     if value is None or value == "":
         return DEFAULT_BATCH_ORDER
@@ -1087,7 +1460,19 @@ DEFAULT_ITEM_CONTEXT = ITEM_CONTEXT_BARE
 
 
 def normalize_item_context(value: Any, field: str = "item_context") -> str:
-    """Normalize the document-context ablation knob (blank means bare)."""
+    """Normalize the document-context ablation knob (blank means bare).
+
+    Args:
+        value: Configured context, `bare` or `document`; case and hyphens are
+            ignored.
+        field: Setting name quoted in the error message.
+
+    Returns:
+        `"bare"` or `"document"`.
+
+    Raises:
+        ValueError: If the context is not recognised.
+    """
     if value is None or value == "":
         return DEFAULT_ITEM_CONTEXT
     normalized = str(value).strip().lower().replace("-", "_")
@@ -1106,6 +1491,15 @@ def _profile_bool(
     A profile that survived a round trip through YAML/JSON/CLI can carry
     `"false"`, which is truthy under `bool()`; parsing it here means a
     disabled knob stays disabled.
+
+    Args:
+        profile: Provider profile to read from.
+        key: Profile key holding the boolean.
+        default: Value used when the key is missing or `None`.
+        profile_id: Profile id quoted in the error message.
+
+    Returns:
+        The parsed boolean.
     """
     value = profile.get(key, default)
     if value is None:
@@ -1119,6 +1513,28 @@ def normalize_provider_profile(
     default_seed: int = DEFAULT_REQUEST_SEED,
     default_batch_order: str = DEFAULT_BATCH_ORDER,
 ) -> dict[str, Any]:
+    """Validate one provider profile and fill in its request defaults.
+
+    The profile names the endpoint, models and request settings of one
+    provider. Structured-output settings are reconciled here: `json_mode` is
+    switched on by any JSON-producing mode, `json_object` gets a default
+    `response_format` unless one is configured, and `instructor` drops any
+    `response_format`.
+
+    Args:
+        profile: Raw profile from the run config. `provider` and `host` are
+            accepted for `provider_id` and `base_url`, and `id` for `profile_id`.
+        default_seed: Request seed used when the profile sets none.
+        default_batch_order: Batch order used when the profile sets none.
+
+    Returns:
+        The normalized profile with every request setting present and typed.
+
+    Raises:
+        ValueError: If the provider id, profile id, base URL or models are
+            missing, if `api_key_env` is not an environment-variable name, or if
+            `extra_body` or `response_format` is not an object.
+    """
     provider_id = str(
         profile.get("provider_id") or profile.get("provider") or ""
     ).strip()
@@ -1234,6 +1650,23 @@ def normalize_provider_profile(
 
 
 def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a run config and fill in the defaults the pipeline relies on.
+
+    Sampling settings may sit at the top level or under `llm`; the top level
+    wins, then the `llm` block, then `DEFAULT_CONFIG`. The run-level seed and
+    batch order become the defaults of every provider profile.
+
+    Args:
+        config: Raw run config as loaded from `run_configs/*.json`.
+
+    Returns:
+        The normalized run config with datasets, variants, tasks, sampling,
+        logging and provider profiles resolved.
+
+    Raises:
+        ValueError: If `run_group_id` is missing or `profiles` is not a
+            non-empty list.
+    """
     run_group_id = str(config.get("run_group_id") or "").strip()
     if not run_group_id:
         raise ValueError("Run config must define run_group_id.")
@@ -1343,6 +1776,16 @@ def normalize_run_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def strip_json_trailing_commas(text: str) -> str:
+    """Remove commas that directly precede a closing bracket or brace.
+
+    Commas inside string literals, including escaped quotes, are left alone.
+
+    Args:
+        text: JSON text that may contain trailing commas.
+
+    Returns:
+        The text with trailing commas removed.
+    """
     output: list[str] = []
     in_string = False
     escaped = False
@@ -1377,6 +1820,18 @@ def strip_json_trailing_commas(text: str) -> str:
 
 
 def load_run_config(path: str | Path) -> dict[str, Any]:
+    """Load a JSON run config, tolerating trailing commas, and normalize it.
+
+    Args:
+        path: Run config file.
+
+    Returns:
+        The run config as normalized by `normalize_run_config`.
+
+    Raises:
+        ValueError: If the file is not valid JSON even after trailing commas are
+            removed; the message gives the line and column.
+    """
     config_path = Path(path)
     text = config_path.read_text(encoding="utf-8")
     try:
@@ -1404,7 +1859,14 @@ SAMPLING_PLAN_SOURCES = (SAMPLING_PLAN_SOURCE_PLANNED, SAMPLING_PLAN_SOURCE_INFE
 
 
 def _optional_float(value: Any) -> float | None:
-    """A registry cell as a float, or ``None`` when it is blank or unparseable."""
+    """Return a registry cell as a float, or `None` when it is blank or unparseable.
+
+    Args:
+        value: Registry cell value.
+
+    Returns:
+        The parsed float or `None`.
+    """
     text = str(value if value is not None else "").strip()
     if not text:
         return None
@@ -1418,18 +1880,32 @@ def _optional_float(value: Any) -> float | None:
 class SamplingPlan:
     """The repeated-sampling plan a run was executed under.
 
-    ``stochastic_samples`` is the number of stochastic samples the run PLANNED
+    `stochastic_samples` is the number of stochastic samples the run PLANNED
     per item. It is what makes a sample the run never wrote (crash, budget stop,
     interrupted resume) visible as a missing observation rather than as absent
     by design: three observed samples of a planned five are 3/5, not 3/3.
-    ``temperature`` and ``top_p`` are carried when the caller holds the run
+    `temperature` and `top_p` are carried when the caller holds the run
     config, so the sampling regime behind a score row stays reconstructable.
 
-    ``source`` is ``"planned"`` for a declared plan and ``"inferred"`` for the
+    `source` is `"planned"` for a declared plan and `"inferred"` for the
     explicitly requested exploratory mode that reconstructs the denominator from
     whatever rows happen to exist. It is stamped on every score row and every
     manifest the plan feeds, so an inferred denominator can never be read
     downstream as a declared one.
+
+    Attributes:
+        stochastic_samples: Planned stochastic samples per item; 0 for
+            deterministic-only runs and for the inferred plan.
+        temperature: Stochastic sampling temperature in [0, 2], or `None` when
+            not known.
+        top_p: Stochastic nucleus-sampling threshold in (0, 1], or `None` when
+            not known.
+        source: `"planned"` or `"inferred"`, as described above.
+
+    Raises:
+        ValueError: On construction, if `stochastic_samples` is not a
+            non-negative int, `temperature` or `top_p` is out of range, or
+            `source` is unknown.
     """
 
     stochastic_samples: int
@@ -1466,7 +1942,19 @@ class SamplingPlan:
 
     @classmethod
     def from_run_config(cls, run_config: Mapping[str, Any]) -> SamplingPlan:
-        """Read the plan from a run config or from a project config `llm` block."""
+        """Read the plan from a run config or from a project config `llm` block.
+
+        Args:
+            run_config: Run config with a top-level `stochastic` block, or a project
+                config whose `llm.stochastic` block is used instead.
+
+        Returns:
+            A planned sampling plan with the configured sample count, temperature
+            and top-p.
+
+        Raises:
+            ValueError: If neither location holds a stochastic sampling block.
+        """
         stochastic = run_config.get("stochastic")
         if not isinstance(stochastic, Mapping):
             llm_config = run_config.get("llm")
@@ -1490,12 +1978,20 @@ class SamplingPlan:
 
     @classmethod
     def from_registry_row(cls, row: Mapping[str, Any]) -> SamplingPlan | None:
-        """The plan a completed run recorded, or ``None`` if it recorded none.
+        """Return the plan a completed run recorded, or `None` if it recorded none.
 
-        Rows written before ``expected_stochastic_samples`` became a registry
-        column leave it blank. ``None`` says the run's own plan is unknown, so a
+        Rows written before `expected_stochastic_samples` became a registry
+        column leave it blank. `None` says the run's own plan is unknown, so a
         caller can decide between failing and falling back rather than silently
         reading a blank as zero.
+
+        Args:
+            row: Run registry row; `expected_stochastic_samples`, `temperature` and
+                `top_p` are read.
+
+        Returns:
+            The recorded plan, or `None` when the sample count is blank or
+            unparseable.
         """
         raw = str(row.get("expected_stochastic_samples", "")).strip()
         if not raw:
@@ -1510,11 +2006,22 @@ class SamplingPlan:
 
     @classmethod
     def inferred_from_observations(cls) -> SamplingPlan:
-        """Exploratory plan whose denominator is whatever rows were written."""
+        """Return the exploratory plan whose denominator is whatever rows were written.
+
+        Returns:
+            A plan with no planned samples and `source` set to `"inferred"`.
+        """
         return cls(stochastic_samples=0, source=SAMPLING_PLAN_SOURCE_INFERRED)
 
     def total_samples(self, observed: int) -> int:
-        """Denominator for one stochastic group of ``observed`` written rows."""
+        """Return the denominator for one stochastic group of `observed` written rows.
+
+        Args:
+            observed: Stochastic rows written for the group.
+
+        Returns:
+            The larger of `observed` and the planned sample count.
+        """
         return max(int(observed), self.stochastic_samples)
 
 
@@ -1529,7 +2036,22 @@ def resolve_sampling_plan(
     *,
     caller: str,
 ) -> SamplingPlan:
-    """Return the plan a scoring call must use, or refuse to guess a denominator."""
+    """Return the plan a scoring call must use, or refuse to guess a denominator.
+
+    Args:
+        sampling_plan: Declared plan of the run being scored.
+        infer_plan_from_observations: Opt into the exploratory inferred plan;
+            only allowed when `sampling_plan` is `None`.
+        caller: Name of the scoring function, quoted in error messages.
+
+    Returns:
+        `sampling_plan`, or the inferred plan when exploration was requested.
+
+    Raises:
+        ValueError: If both or neither of `sampling_plan` and
+            `infer_plan_from_observations` are given, or if `sampling_plan` is
+            not a `SamplingPlan`.
+    """
     if sampling_plan is not None and infer_plan_from_observations:
         raise ValueError(
             f"{caller}: pass either sampling_plan or "
@@ -1558,6 +2080,21 @@ def filter_run_profiles(
     profile_id: str | None = None,
     model: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Select the provider profiles and models a command should run.
+
+    Args:
+        run_config: Normalized run config.
+        profile_id: Keep only profiles whose profile id or provider id equals
+            this value; empty keeps all.
+        model: Keep only profiles that list this model, narrowed to that one
+            model; empty keeps all models.
+
+    Returns:
+        Copies of the matching profiles.
+
+    Raises:
+        ValueError: If no profile matches the filters.
+    """
     profiles = [dict(profile) for profile in run_config.get("profiles", [])]
     if profile_id:
         requested = str(profile_id).strip()
@@ -1581,6 +2118,15 @@ def filter_run_profiles(
 
 
 def validate_manual_server_profile(profile: Mapping[str, Any]) -> None:
+    """Check that a profile served by a manually restarted server runs one model.
+
+    Args:
+        profile: Normalized provider profile.
+
+    Raises:
+        ValueError: If the profile sets `requires_manual_server` and lists
+            other than exactly one model.
+    """
     if profile.get("requires_manual_server") and len(profile.get("models", [])) != 1:
         raise ValueError(
             f"Profile {profile.get('profile_id')} requires a manually restarted server; "
@@ -1602,13 +2148,20 @@ SMOKE_TREE_ENV_VAR = "RE_UQ_SMOKE_TREE"
 
 
 def is_smoke_run_id(run_id: Any) -> bool:
-    """True for run ids produced by smoke/fake Task 1/2/3 runs.
+    """Return True for run ids produced by smoke/fake Task 1/2/3 runs.
 
-    Runners other than Task 1/2 put their own components before ``smoke``:
+    Runners other than Task 1/2 put their own components before `smoke`:
     Task 3 an optional audit mode and benchmark variant
-    (``task3-declared-text-shall-smoke-*``), the weak-phrasing probe its name
-    (``weak-modality-probe-shall-smoke-*``). Checking only the historical
-    ``task3-smoke-*`` prefix would route their smoke runs into the real tree.
+    (`task3-declared-text-shall-smoke-*`), the weak-phrasing probe its name
+    (`weak-modality-probe-shall-smoke-*`). Checking only the historical
+    `task3-smoke-*` prefix would route their smoke runs into the real tree.
+
+    Args:
+        run_id: Run id to classify; `None` is not a smoke run.
+
+    Returns:
+        True when the id starts with `smoke-` or has one of the runner-specific
+        smoke shapes.
     """
     value = str(run_id or "").strip()
     if value.startswith(SMOKE_RUN_PREFIX):
@@ -1623,7 +2176,11 @@ def is_smoke_run_id(run_id: Any) -> bool:
 
 
 def smoke_tree_env_enabled() -> bool:
-    """Allow read-only consumers to opt into the smoke tree via the environment."""
+    """Allow read-only consumers to opt into the smoke tree via the environment.
+
+    Returns:
+        True when `RE_UQ_SMOKE_TREE` is set to `1`, `true`, `yes` or `on`.
+    """
     return str(os.environ.get(SMOKE_TREE_ENV_VAR, "")).strip().lower() in {
         "1",
         "true",
@@ -1633,7 +2190,14 @@ def smoke_tree_env_enabled() -> bool:
 
 
 def smoke_tree_path(path: str | Path) -> Path:
-    """Map ``data/processed/<name>`` to ``data/processed/smoke/<name>`` (idempotent)."""
+    """Map `data/processed/<name>` to `data/processed/smoke/<name>` (idempotent).
+
+    Args:
+        path: Artifact path, already in the smoke tree or not.
+
+    Returns:
+        The path inside the smoke directory next to the original file.
+    """
     path = Path(path)
     if path.parent.name == SMOKE_TREE_DIRNAME:
         return path
@@ -1648,8 +2212,17 @@ def resolve_run_artifact_path(
 ) -> Path:
     """Route run artifacts of smoke/fake runs into the parallel smoke tree.
 
-    Paper-facing full runs keep writing into ``data/processed/``; smoke runs never
+    Paper-facing full runs keep writing into `data/processed/`; smoke runs never
     touch those files so a fake run can never contaminate published numbers.
+
+    Args:
+        path: Default artifact path in the paper-facing tree.
+        run_id: Run id; a smoke run id selects the smoke tree.
+        smoke: Force the smoke tree when true. When both `smoke` and `run_id`
+            are `None`, `RE_UQ_SMOKE_TREE` decides.
+
+    Returns:
+        The smoke-tree path for smoke runs, otherwise `path`.
     """
     use_smoke = (
         bool(smoke)
@@ -1667,6 +2240,18 @@ def run_registry_path(
     run_id: Any = None,
     smoke: bool | None = None,
 ) -> Path:
+    """Return the Task 1/2 run registry CSV for a dataset and variant.
+
+    Args:
+        root: Repository root.
+        dataset_id: Dataset name or alias; selects the file-name suffix.
+        variant: Benchmark variant; selects the file-name suffix.
+        run_id: Run id; smoke runs are routed into the smoke tree.
+        smoke: Force the smoke tree when true; `None` infers it from `run_id`.
+
+    Returns:
+        The registry path, in the smoke tree for smoke runs.
+    """
     return resolve_run_artifact_path(
         artifact_path(
             Path(root) / "data/processed/run_registry.csv", dataset_id, variant
@@ -1684,6 +2269,18 @@ def model_outputs_raw_path(
     run_id: Any = None,
     smoke: bool | None = None,
 ) -> Path:
+    """Return the Task 1/2 raw model output JSONL for a dataset and variant.
+
+    Args:
+        root: Repository root.
+        dataset_id: Dataset name or alias; selects the file-name suffix.
+        variant: Benchmark variant; selects the file-name suffix.
+        run_id: Run id; smoke runs are routed into the smoke tree.
+        smoke: Force the smoke tree when true; `None` infers it from `run_id`.
+
+    Returns:
+        The raw output path, in the smoke tree for smoke runs.
+    """
     return resolve_run_artifact_path(
         artifact_path(
             Path(root) / "data/processed/model_outputs_raw.jsonl", dataset_id, variant
@@ -1701,6 +2298,18 @@ def task3_raw_path(
     run_id: Any = None,
     smoke: bool | None = None,
 ) -> Path:
+    """Return the Task 3 verification raw model output JSONL for a dataset and variant.
+
+    Args:
+        root: Repository root.
+        dataset_id: Dataset name or alias; selects the file-name suffix.
+        variant: Benchmark variant; selects the file-name suffix.
+        run_id: Run id; smoke runs are routed into the smoke tree.
+        smoke: Force the smoke tree when true; `None` infers it from `run_id`.
+
+    Returns:
+        The raw output path, in the smoke tree for smoke runs.
+    """
     return resolve_run_artifact_path(
         artifact_path(
             Path(root) / "data/processed/model_outputs_raw_task3_verification.jsonl",
@@ -1720,6 +2329,18 @@ def task3_registry_path(
     run_id: Any = None,
     smoke: bool | None = None,
 ) -> Path:
+    """Return the Task 3 verification run registry CSV for a dataset and variant.
+
+    Args:
+        root: Repository root.
+        dataset_id: Dataset name or alias; selects the file-name suffix.
+        variant: Benchmark variant; selects the file-name suffix.
+        run_id: Run id; smoke runs are routed into the smoke tree.
+        smoke: Force the smoke tree when true; `None` infers it from `run_id`.
+
+    Returns:
+        The registry path, in the smoke tree for smoke runs.
+    """
     return resolve_run_artifact_path(
         artifact_path(
             Path(root) / "data/processed/run_registry_task3_verification.csv",
@@ -1739,6 +2360,18 @@ def task3_progress_path(
     run_id: Any = None,
     smoke: bool | None = None,
 ) -> Path:
+    """Return the Task 3 verification live progress CSV for a dataset and variant.
+
+    Args:
+        root: Repository root.
+        dataset_id: Dataset name or alias; selects the file-name suffix.
+        variant: Benchmark variant; selects the file-name suffix.
+        run_id: Run id; smoke runs are routed into the smoke tree.
+        smoke: Force the smoke tree when true; `None` infers it from `run_id`.
+
+    Returns:
+        The progress file path, in the smoke tree for smoke runs.
+    """
     return resolve_run_artifact_path(
         artifact_path(
             Path(root) / "data/processed/run_progress_live_task3_verification.csv",
@@ -1758,6 +2391,18 @@ def task3_events_path(
     run_id: Any = None,
     smoke: bool | None = None,
 ) -> Path:
+    """Return the Task 3 verification event log JSONL for a dataset and variant.
+
+    Args:
+        root: Repository root.
+        dataset_id: Dataset name or alias; selects the file-name suffix.
+        variant: Benchmark variant; selects the file-name suffix.
+        run_id: Run id; smoke runs are routed into the smoke tree.
+        smoke: Force the smoke tree when true; `None` infers it from `run_id`.
+
+    Returns:
+        The event log path, in the smoke tree for smoke runs.
+    """
     return resolve_run_artifact_path(
         artifact_path(
             Path(root) / "data/processed/run_events_task3_verification.jsonl",
@@ -1770,17 +2415,34 @@ def task3_events_path(
 
 
 def run_log_path(root: str | Path, run_id: str) -> Path:
+    """Return the text log file of one run.
+
+    Args:
+        root: Repository root.
+        run_id: Run id; made safe for use as a file name.
+
+    Returns:
+        The log path under `data/processed/logs/`.
+    """
     return Path(root) / "data/processed/logs" / f"{safe_identifier(run_id)}.log"
 
 
 def acse_semantic_cache_dir(
     analysis_dir: str | Path, backend_label: str, model: str
 ) -> Path:
-    """Cache directory for one model's artifacts under one embedding backend.
+    """Return the cache directory for one model's artifacts under one embedding backend.
 
     The model is part of the path because one analysis dir can hold several
-    scored models: an empty ``model_filter`` expands to all of them, and without
+    scored models: an empty `model_filter` expands to all of them, and without
     the model component they would all write the same directory.
+
+    Args:
+        analysis_dir: Analysis output directory that holds the cache.
+        backend_label: Label of the embedding backend.
+        model: Scored model the artifacts belong to.
+
+    Returns:
+        The cache directory path; it is not created.
     """
     return Path(analysis_dir) / (
         f"acse_semantic_{safe_identifier(backend_label)}__{safe_identifier(model)}"
@@ -1788,27 +2450,58 @@ def acse_semantic_cache_dir(
 
 
 def utc_now_iso() -> str:
+    """Return the current UTC time as an ISO 8601 string with a `Z` suffix.
+
+    Returns:
+        The timestamp at second resolution.
+    """
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def sha256_file(path: str | Path) -> str:
-    """SHA-256 of a file's bytes.
+    """Return the SHA-256 of a file's bytes.
 
     `hashlib.file_digest` requires a freshly opened blocking binary file, which
     is exactly what this helper opens; the digest is identical to hashing the
     whole byte string.
+
+    Args:
+        path: File to hash.
+
+    Returns:
+        The hexadecimal digest.
     """
     with Path(path).open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def sha256_text(text: str) -> str:
+    """Return the SHA-256 of a string encoded as UTF-8.
+
+    Args:
+        text: Text to hash.
+
+    Returns:
+        The hexadecimal digest.
+    """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def artifact_metadata(
     path: str | Path, root: str | Path | None = None
 ) -> dict[str, Any]:
+    """Describe one artifact for a manifest: path, existence, hash, size and rows.
+
+    Args:
+        path: Artifact file.
+        root: Directory the recorded path is made relative to; paths outside it,
+            or any path when `root` is `None`, are recorded as given.
+
+    Returns:
+        A dictionary with `path`, `exists`, `sha256`, `bytes` and `rows`. A
+        missing file has an empty hash and zero bytes; `rows` is the data row
+        count for CSV files and empty otherwise.
+    """
     path = Path(path)
     root_path = Path(root).resolve() if root is not None else None
     resolved = path.resolve()
@@ -1838,6 +2531,18 @@ def write_benchmark_manifest(
     root: str | Path | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Write a JSON manifest that records the hash of every benchmark artifact.
+
+    Args:
+        paths: Artifacts to record.
+        output_path: Manifest file to write.
+        root: Directory the recorded artifact paths are made relative to.
+        metadata: Free-form metadata stored under `metadata`.
+
+    Returns:
+        The manifest as written, with a creation timestamp and one
+        `artifact_metadata` entry per path.
+    """
     output_path = Path(output_path)
     manifest = {
         "created_at_utc": utc_now_iso(),
@@ -1849,7 +2554,17 @@ def write_benchmark_manifest(
 
 
 def _manifest_artifact_required(rel_path: str) -> bool:
-    """Tracked artifacts whose absence invalidates the analysis (prompts + benchmark CSVs)."""
+    """Return True for tracked artifacts whose absence invalidates the analysis.
+
+    These are the prompts and the benchmark CSVs: `prompts/` files and
+    `data/processed/benchmark_items*.csv`.
+
+    Args:
+        rel_path: Artifact path relative to the project root.
+
+    Returns:
+        True when the artifact must exist.
+    """
     normalized = rel_path.replace("\\", "/")
     if normalized.startswith("prompts/"):
         return True
@@ -1866,9 +2581,21 @@ def verify_benchmark_manifest(
 ) -> dict[str, Any]:
     """Recompute sha256 for each artifact listed in the frozen benchmark manifest.
 
-    Hard-fails (ValueError) on any hash mismatch, and on a missing required artifact
-    (tracked prompts/ files or data/processed/benchmark_items*.csv). Missing gitignored
-    data artifacts are reported but not fatal. Returns a summary dict.
+    Hard-fails (`ValueError`) on any hash mismatch, and on a missing required
+    artifact (tracked `prompts/` files or `data/processed/benchmark_items*.csv`).
+    Missing gitignored data artifacts are reported but not fatal.
+
+    Args:
+        manifest_path: Manifest written by `write_benchmark_manifest`.
+        project_root: Root the manifest's relative paths are resolved against.
+
+    Returns:
+        A summary dict with the manifest path, the number of hashes `checked`,
+        the `missing` optional artifacts and their `missing_count`.
+
+    Raises:
+        ValueError: If the manifest is missing, a required artifact is missing,
+            or an artifact's hash differs from the recorded one.
     """
     manifest_path = Path(manifest_path)
     if not manifest_path.exists():
@@ -1937,7 +2664,17 @@ _RAW_STORE_SCALAR_TYPES = (str, int, float, bool)
 
 
 def raw_store_path(path: str | Path) -> Path:
-    """The compacted Parquet sibling of a raw JSONL path (`x.jsonl` -> `x.parquet`)."""
+    """Return the compacted Parquet sibling of a raw path (`x.jsonl` -> `x.parquet`).
+
+    Args:
+        path: Raw JSONL path.
+
+    Returns:
+        The Parquet path next to it.
+
+    Raises:
+        ValueError: If `path` does not end in `.jsonl`.
+    """
     path = Path(path)
     if path.suffix != ".jsonl":
         raise ValueError(f"raw store paths end with .jsonl, got {path}")
@@ -1945,20 +2682,46 @@ def raw_store_path(path: str | Path) -> Path:
 
 
 def raw_store_exists(path: str | Path) -> bool:
-    """Whether either half of the store holds rows for this raw path."""
+    """Return whether either half of the store exists for this raw path.
+
+    Only existence is checked, so an empty JSONL tail also counts.
+
+    Args:
+        path: Raw JSONL path.
+
+    Returns:
+        True when the JSONL tail or its Parquet sibling exists as a file.
+    """
     path = Path(path)
     return path.exists() or raw_store_path(path).exists()
 
 
 def raw_store_files(path: str | Path) -> list[Path]:
-    """The existing files backing a raw path, Parquet first."""
+    """Return the existing files backing a raw path, Parquet first.
+
+    Args:
+        path: Raw JSONL path.
+
+    Returns:
+        The Parquet sibling and the JSONL tail, each only if it exists.
+    """
     path = Path(path)
     store = raw_store_path(path)
     return [candidate for candidate in (store, path) if candidate.exists()]
 
 
 def _raw_store_json_columns(rows: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
-    """Columns that need JSON encoding, and columns present in every row."""
+    """Return columns that need JSON encoding, and columns present in every row.
+
+    A column needs JSON encoding when its non-null values have more than one
+    Python type or any non-scalar type.
+
+    Args:
+        rows: Raw rows about to be stored.
+
+    Returns:
+        The set of JSON-encoded columns and the set of dense columns.
+    """
     types: dict[str, set[type]] = defaultdict(set)
     counts: Counter[str] = Counter()
     for row in rows:
@@ -1976,7 +2739,18 @@ def _raw_store_json_columns(rows: list[dict[str, Any]]) -> tuple[set[str], set[s
 
 
 def raw_rows_to_table(rows: list[dict[str, Any]]) -> pa.Table:
-    """Arrow table for `rows`, with the encoding recorded in the schema metadata."""
+    """Build the Arrow table for `rows`, recording the encoding in the schema metadata.
+
+    Args:
+        rows: Raw rows to store; keys may differ between rows.
+
+    Returns:
+        The table, with the format tag and the JSON-encoded and dense column
+        lists in its schema metadata.
+
+    Raises:
+        ValueError: If a row uses the reserved null-keys column name.
+    """
     import pyarrow as pa
 
     json_columns, dense = _raw_store_json_columns(rows)
@@ -2013,7 +2787,18 @@ def raw_rows_to_table(rows: list[dict[str, Any]]) -> pa.Table:
 
 
 def raw_table_to_rows(table: pa.Table) -> list[dict[str, Any]]:
-    """Rows of a store table, decoding what `raw_rows_to_table` encoded."""
+    """Return the rows of a store table, decoding what `raw_rows_to_table` encoded.
+
+    Args:
+        table: Table read from a raw store Parquet file.
+
+    Returns:
+        The rows, with JSON columns decoded and keys that were absent from a row
+        left absent.
+
+    Raises:
+        ValueError: If the table lacks the raw store format metadata.
+    """
     metadata = table.schema.metadata or {}
     if metadata.get(RAW_STORE_FORMAT_KEY, b"").decode() != RAW_STORE_FORMAT:
         raise ValueError("not a re-uq raw store Parquet file (missing format metadata)")
@@ -2042,11 +2827,21 @@ def read_raw_store(
     columns: Iterable[str] | None = None,
     run_ids: Iterable[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Rows of the Parquet half of a raw path, optionally a column/run subset.
+    """Read the rows of the Parquet half of a raw path, optionally a column/run subset.
 
     Column projection and run-id filtering happen inside Parquet, which is what
     makes resume and the paper exporter cheap on a multi-GB corpus. A partial
     projection returns rows holding only those columns.
+
+    Args:
+        path: Raw JSONL path whose Parquet sibling is read.
+        columns: Columns to read; names absent from the file are skipped. `None`
+            reads all columns.
+        run_ids: Keep only rows of these runs; an empty iterable returns no rows.
+            `None` keeps every run.
+
+    Returns:
+        The decoded rows, or an empty list when no Parquet file exists.
     """
     import pyarrow.parquet as pq
 
@@ -2080,11 +2875,17 @@ def _read_jsonl_lines(path: Path) -> list[dict[str, Any]]:
 
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
-    """Every row of a raw path: the compacted Parquet rows, then the JSONL tail.
+    """Read every row of a raw path: the compacted Parquet rows, then the JSONL tail.
 
     Reads under a shared lock so a concurrent `compact_jsonl` cannot hand back
     a row twice (once from the new Parquet file, once from the not-yet-truncated
     tail).
+
+    Args:
+        path: Raw JSONL path.
+
+    Returns:
+        All rows in storage order, or an empty list when neither file exists.
     """
     path = Path(path)
     if not raw_store_exists(path):
@@ -2109,6 +2910,19 @@ def compact_jsonl(path: str | Path, *, verify: bool = True) -> dict[str, Any]:
     With `verify`, the merged file is read back and compared row for row
     before the tail is touched; a mismatch leaves both files as they were and
     raises, because losing raw rows is the one thing this must never do.
+
+    Args:
+        path: Raw JSONL path to compact.
+        verify: Read the merged Parquet file back and compare it with the input
+            rows before replacing the store and truncating the tail.
+
+    Returns:
+        A summary with the paths, row counts before and after, the tail and
+        store sizes in bytes, and whether anything was `compacted`.
+
+    Raises:
+        RuntimeError: If verification finds that the merged file does not
+            round-trip the rows.
     """
     import pyarrow.parquet as pq
 
@@ -2167,6 +2981,19 @@ def compact_jsonl(path: str | Path, *, verify: bool = True) -> dict[str, Any]:
 def latest_run_id(
     raw_rows: list[dict[str, Any]], prefix: str | Iterable[str] | None = None
 ) -> str | None:
+    """Return the run id of the last row whose run id matches a prefix.
+
+    "Latest" means last in row order, which for append-only raw files is the
+    most recently written run.
+
+    Args:
+        raw_rows: Raw output rows in storage order.
+        prefix: Run-id prefix or prefixes, matched as in `run_id_matches_prefix`;
+            empty matches every run.
+
+    Returns:
+        The run id, or `None` when no row matches.
+    """
     latest: str | None = None
     for row in raw_rows:
         run_id = str(row.get("run_id", "")).strip()
@@ -2183,6 +3010,17 @@ def select_run_rows(
     run_id: str | None = None,
     prefix: str | Iterable[str] | None = None,
 ) -> tuple[str | None, list[dict[str, Any]]]:
+    """Select the rows of one run: the requested run or the latest matching one.
+
+    Args:
+        raw_rows: Raw output rows in storage order.
+        run_id: Run to select; empty selects the latest run matching `prefix`.
+        prefix: Run-id prefix or prefixes the selected run must match.
+
+    Returns:
+        The selected run id (or `None`) and its rows. An explicit `run_id` that
+        does not match `prefix` is returned with no rows.
+    """
     selected_run_id = (
         str(run_id).strip() if run_id else latest_run_id(raw_rows, prefix=prefix)
     )
@@ -2198,6 +3036,19 @@ def select_run_rows(
 def run_id_matches_prefix(
     run_id: Any, prefix: str | Iterable[str] | None = None
 ) -> bool:
+    """Return whether a run id belongs to a run prefix.
+
+    The run id must start with `<prefix>-`. Benchmark variants are encoded
+    after the prefix, so `full` does not match `full-shall-*`.
+
+    Args:
+        run_id: Run id to test; an empty id matches only an empty prefix.
+        prefix: One prefix or several, any of which may match; `None`, an empty
+            string or an empty list matches every run id.
+
+    Returns:
+        True when the run id matches.
+    """
     if not prefix:
         return True
     if not isinstance(prefix, str):
@@ -2221,14 +3072,21 @@ def run_id_matches_prefix(
 
 
 @contextlib.contextmanager
-def file_lock(path: str | Path, *, shared: bool = False) -> Iterator[None]:
-    """Advisory lock on a sidecar ``<path>.lock`` file (exclusive by default).
+def file_lock(path: str | Path, *, shared: bool = False) -> Iterator[TextIO]:
+    """Hold an advisory lock on a sidecar `<path>.lock` file (exclusive by default).
 
     Concurrent runners share the per-dataset raw JSONL and registry CSVs, so
     every append/rewrite is serialized across processes. Readers of the raw
-    store take the lock ``shared`` so they never observe a half-compacted
+    store take the lock `shared` so they never observe a half-compacted
     file. The lock is advisory: it only protects callers that go through
     these helpers.
+
+    Args:
+        path: File to protect; the lock file is created next to it.
+        shared: Take a shared (reader) lock instead of an exclusive one.
+
+    Yields:
+        The open lock-file handle; callers use the context only for its lock.
     """
     lock_path = Path(str(path) + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2241,6 +3099,12 @@ def file_lock(path: str | Path, *, shared: bool = False) -> Iterator[None]:
 
 
 def append_jsonl(path: str | Path, row: dict[str, Any]) -> None:
+    """Append one row as a JSON line under the file lock and sync it to disk.
+
+    Args:
+        path: JSONL file; created with its parent directories if missing.
+        row: Row to append, written ASCII-escaped with sorted keys.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(row, ensure_ascii=True, sort_keys=True) + "\n"
@@ -2251,7 +3115,12 @@ def append_jsonl(path: str | Path, row: dict[str, Any]) -> None:
 
 
 def atomic_write_text(path: str | Path, text: str) -> None:
-    """Write ``text`` to ``path`` via a temp file + ``os.replace`` (never a torn file)."""
+    """Write `text` to `path` via a temp file + `os.replace` (never a torn file).
+
+    Args:
+        path: Destination file; parent directories are created.
+        text: Content to write as UTF-8.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     # Not a `with`: the temp file must stay named after it is closed so the
@@ -2276,6 +3145,12 @@ def atomic_write_text(path: str | Path, text: str) -> None:
 
 
 def write_json(path: str | Path, value: Any) -> None:
+    """Write a value as indented, key-sorted JSON with a trailing newline.
+
+    Args:
+        path: Destination file; overwritten, with parent directories created.
+        value: JSON-serializable value; non-ASCII characters are escaped.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
@@ -2284,12 +3159,32 @@ def write_json(path: str | Path, value: Any) -> None:
 
 
 def compact_json(value: Any) -> str:
+    """Serialize a value as compact, key-sorted JSON for a single CSV cell.
+
+    Args:
+        value: JSON-serializable value.
+
+    Returns:
+        The JSON text, or an empty string for `None`, `""`, `{}` and `[]`.
+    """
     if value in (None, "", {}, []):
         return ""
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
 def download_file(url: str, dest: str | Path, timeout_s: int = 120) -> Path:
+    """Download a URL to a local file.
+
+    An HTTP error status raises through `requests.Response.raise_for_status`.
+
+    Args:
+        url: URL to fetch.
+        dest: Destination file; overwritten, with parent directories created.
+        timeout_s: Request timeout in seconds.
+
+    Returns:
+        The destination path.
+    """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     response = requests.get(
@@ -2323,10 +3218,26 @@ STRANDED_PREPOSITION_RE = re.compile(
 
 
 def normalize_space(text: str) -> str:
+    """Collapse whitespace runs to single spaces and trim the ends.
+
+    Args:
+        text: Text to normalize; `None` or empty yields `""`.
+
+    Returns:
+        The normalized text.
+    """
     return SPACE_RE.sub(" ", (text or "").strip())
 
 
 def unwrap_outer_quotes(text: str) -> str:
+    """Strip straight and typographic quotes from both ends, repeatedly.
+
+    Args:
+        text: Text to unwrap; whitespace is normalized first.
+
+    Returns:
+        The text without surrounding quotes.
+    """
     previous = normalize_space(text)
     while previous:
         current = OUTER_QUOTES_RE.sub("", previous).strip()
@@ -2337,14 +3248,42 @@ def unwrap_outer_quotes(text: str) -> str:
 
 
 def strip_final_punctuation(text: str) -> str:
+    """Remove outer quotes and trailing sentence punctuation from a text.
+
+    Args:
+        text: Requirement or capability text.
+
+    Returns:
+        The text without surrounding quotes and without trailing spaces, periods,
+        semicolons, colons or quotes.
+    """
     return unwrap_outer_quotes(normalize_space(text)).rstrip(" .;:'\"“”‘’")
 
 
 def word_count(text: str) -> int:
+    """Count alphanumeric words, treating hyphenated and apostrophe forms as one.
+
+    Args:
+        text: Text to count; `None` counts as empty.
+
+    Returns:
+        The number of words.
+    """
     return len(WORD_RE.findall(text or ""))
 
 
 def lower_initial(text: str) -> str:
+    """Lowercase the first letter of a text so it can continue a sentence.
+
+    Text that starts with two uppercase characters, such as an acronym, keeps
+    its case. Outer quotes and final punctuation are stripped first.
+
+    Args:
+        text: Capability or requirement text.
+
+    Returns:
+        The adjusted text.
+    """
     text = strip_final_punctuation(text)
     if not text:
         return text
@@ -2378,6 +3317,21 @@ GENERIC_MODAL_PREFIX_RE = re.compile(
 
 
 def auto_capability_text(requirement: str, *, preserve_subject: bool = False) -> str:
+    """Derive the capability phrase of a requirement by stripping subject and modal.
+
+    List markers, a leading actor such as "The system" or "Users", the modal
+    verb and "be able to" are removed, and the first letter is lowercased, so
+    "The system shall be able to export reports." becomes "export reports".
+
+    Args:
+        requirement: Original requirement sentence.
+        preserve_subject: Keep the whole sentence (without final punctuation)
+            unless it starts with "the system" plus a modal; used for PURE, whose
+            requirements have varied actors and leading conditions.
+
+    Returns:
+        The automatic capability text, meant for manual review.
+    """
     text = strip_final_punctuation(requirement)
     text = re.sub(r"^[\-\*\d.)\s]+", "", text)
     if preserve_subject:
@@ -2417,6 +3371,20 @@ def auto_capability_text(requirement: str, *, preserve_subject: bool = False) ->
 
 
 def automatic_filter(requirement: str, capability: str) -> tuple[bool, str]:
+    """Apply the automatic seed eligibility checks to a requirement and capability.
+
+    The checks reject requirements under 5 or over 35 words, multiple
+    sentences, negation, formulas or symbols, more than one "and"/"or"/";",
+    a missing or one-word capability, a modal left in the capability, and a
+    capability that starts with a stranded preposition.
+
+    Args:
+        requirement: Original requirement sentence.
+        capability: Automatic capability text derived from it.
+
+    Returns:
+        Whether the pair passes, and the failed check names joined by `;`.
+    """
     reasons: list[str] = []
     requirement_word_count = word_count(requirement)
     cleaned_requirement = strip_final_punctuation(requirement)
@@ -2453,6 +3421,23 @@ def mlm_tapt_filter(
     source_corpus: str = "",
     exclude_source_regex: str = "_PURE$",
 ) -> tuple[bool, str]:
+    """Apply the stricter seed checks for the Hugging Face requirements corpus.
+
+    On top of `automatic_filter`, this rejects excluded source corpora,
+    requirements without a requirement cue, table or figure references, colon
+    structures, list or heading markers, notes and symbol-heavy text.
+
+    Args:
+        requirement: Original requirement sentence.
+        capability: Automatic capability text derived from it.
+        source_corpus: Corpus the requirement comes from.
+        exclude_source_regex: Pattern of source corpora to exclude; the default
+            drops PURE documents, which have their own dataset. Empty disables
+            the check.
+
+    Returns:
+        Whether the pair passes, and the unique failed check names joined by `;`.
+    """
     auto_include, reason = automatic_filter(requirement, capability)
     reasons = [item for item in reason.split(";") if item]
     if exclude_source_regex and re.search(exclude_source_regex, source_corpus or ""):
@@ -2476,6 +3461,20 @@ def mlm_tapt_filter(
 
 
 def find_requirement_text_column(rows: list[dict[str, str]]) -> str:
+    """Find the column that holds the requirement text in a source dataset.
+
+    Known names such as `RequirementText` are tried first (case-insensitive),
+    then any column containing "requirement" or named `text` or `sentence`.
+
+    Args:
+        rows: Source dataset rows; the first row's keys are inspected.
+
+    Returns:
+        The column name.
+
+    Raises:
+        ValueError: If there are no rows or no matching column.
+    """
     if not rows:
         raise ValueError("No rows found in the source dataset.")
     columns = list(rows[0].keys())
@@ -2502,6 +3501,25 @@ def make_seed_candidates(
     text_column: str | None = None,
     source_corpus_field: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Build seed candidate rows from a requirements dataset for manual review.
+
+    Requirements are whitespace-normalized and deduplicated case-insensitively.
+    Each one gets a sequential seed id, an automatic capability text and the
+    `automatic_filter` verdict; the first `target_count` eligible rows are
+    marked for inclusion.
+
+    Args:
+        dataset_rows: Source dataset rows.
+        target_count: Number of eligible rows to mark `include = yes`.
+        source_dataset: Dataset label stored in every candidate.
+        text_column: Column holding the requirement; found automatically when
+            `None`.
+        source_corpus_field: Column whose value is stored as `source_corpus`;
+            `None` omits that field.
+
+    Returns:
+        One candidate row per distinct requirement, in dataset order.
+    """
     text_column = text_column or find_requirement_text_column(dataset_rows)
     seen: set[str] = set()
     candidates: list[dict[str, Any]] = []
@@ -2539,6 +3557,18 @@ def make_seed_candidates(
 
 
 def load_mlm_tapt_rows(config: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Load the `limsc/mlm-tapt-requirements` dataset from Hugging Face.
+
+    Args:
+        config: Loaded configuration; the repository, dataset configuration and
+            splits are read from `datasets` with `DEFAULT_CONFIG` fallbacks.
+
+    Returns:
+        One row per requirement with `source`, `reqs` and `split`.
+
+    Raises:
+        ImportError: If the `datasets` package is not installed.
+    """
     try:
         from datasets import load_dataset
     except ImportError as exc:
@@ -2583,6 +3613,28 @@ def weighted_sample_candidate_indices(
     source_cap: int = 30,
     source_field: str = "source_corpus",
 ) -> list[int]:
+    """Sample eligible candidates so that no single source corpus dominates.
+
+    Only rows with a truthy `auto_include` are eligible. Each draw weights a
+    candidate by the inverse of its source's eligible count and skips sources
+    that already reached `source_cap`, so the result is spread across sources
+    and reproducible for a given seed.
+
+    Args:
+        candidates: Candidate rows to sample from.
+        target_count: Number of candidates to select.
+        seed: Random seed for the draws.
+        source_cap: Maximum selections from one source.
+        source_field: Column naming the source; blank values count as
+            `"unknown"`.
+
+    Returns:
+        Indices into `candidates`, in draw order.
+
+    Raises:
+        ValueError: If fewer than `target_count` candidates are eligible, or the
+            source cap leaves no candidate before the target is reached.
+    """
     eligible_indices = [
         index
         for index, row in enumerate(candidates)
@@ -2636,6 +3688,23 @@ def make_mlm_tapt_seed_candidates(
     exclude_source_regex: str = "_PURE$",
     source_cap: int = 30,
 ) -> list[dict[str, Any]]:
+    """Build seed candidate rows from the Hugging Face requirements corpus.
+
+    Requirements are deduplicated case-insensitively and screened with
+    `mlm_tapt_filter`. The included seeds are then drawn from the eligible pool
+    by `weighted_sample_candidate_indices`; eligible rows that were not drawn
+    are marked `not_sampled_weighted_pool`.
+
+    Args:
+        dataset_rows: Rows from `load_mlm_tapt_rows`, with `source` and `reqs`.
+        target_count: Number of seeds to include.
+        seed: Random seed for the weighted draw.
+        exclude_source_regex: Pattern of source corpora to exclude.
+        source_cap: Maximum included seeds from one source corpus.
+
+    Returns:
+        One candidate row per distinct requirement, in dataset order.
+    """
     seen: set[str] = set()
     candidates: list[dict[str, Any]] = []
     for row in dataset_rows:
@@ -2718,7 +3787,15 @@ def _pure_document_id(member_name: str) -> str:
 
 
 def _pure_requirement_fields(req: ET.Element) -> dict[str, Any]:
-    """Split one `<req>` into its clean text and its author marker."""
+    """Split one `<req>` into its clean text and its author marker.
+
+    Args:
+        req: The `<req>` element of a PURE XML document.
+
+    Returns:
+        The marker-free `text`, the `marked_text` up to the last inline marker,
+        the `marker` (`M`, `O`, `I` or empty) and the `marker_count`.
+    """
     text = _pure_element_text(req.find(f"{PURE_XML_NS}text_body"))
     modifier = _pure_element_text(req.find(f"{PURE_XML_NS}modifier"))
     inline_markers = PURE_INLINE_MARKER_RE.findall(text)
@@ -2752,6 +3829,14 @@ def parse_pure_document(
 
     Each row carries the requirement id and marker, the section title path,
     and its previous/next requirement in document order (empty at the edges).
+
+    Args:
+        xml_text: Content of the XML document.
+        document_id: Document id, the archive member's file stem; selects the
+            known title and marker legend.
+
+    Returns:
+        One row per requirement in document order.
     """
     root = ET.fromstring(xml_text)
     document_title = PURE_DOCUMENT_TITLES.get(
@@ -2799,7 +3884,16 @@ def parse_pure_document(
 
 
 def load_pure_requirement_rows(config: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Download (once) and parse the PURE XML documents named in the config."""
+    """Download (once) and parse the PURE XML documents named in the config.
+
+    Args:
+        config: Loaded configuration; the archive URL, local zip path and
+            document members are read from `datasets` with `DEFAULT_CONFIG`
+            fallbacks.
+
+    Returns:
+        The requirement rows of all configured documents, in document order.
+    """
     datasets_config = config.get("datasets", {}) if isinstance(config, Mapping) else {}
     defaults = DEFAULT_CONFIG["datasets"]
     zip_path = project_root() / str(
@@ -2827,7 +3921,18 @@ def load_pure_requirement_rows(config: Mapping[str, Any]) -> list[dict[str, Any]
 def pure_filter(
     requirement: str, capability: str, marker: str, marker_count: int
 ) -> tuple[bool, str]:
-    """Seed filter for PURE rows: the mlm_tapt screen plus marker checks."""
+    """Apply the seed filter for PURE rows: the `mlm_tapt` screen plus marker checks.
+
+    Args:
+        requirement: Requirement text without its marker.
+        capability: Automatic capability text derived from it.
+        marker: Author marker, `M`, `O` or `I`; `I` (informative) is rejected.
+        marker_count: Number of markers on the requirement; zero or several are
+            rejected.
+
+    Returns:
+        Whether the row passes, and the unique failed check names joined by `;`.
+    """
     _, reason = mlm_tapt_filter(
         requirement, capability, source_corpus="", exclude_source_regex=""
     )
@@ -2855,6 +3960,20 @@ def make_pure_seed_candidates(
     is small and is the one the context ablation reports on; the remainder is
     filled with mandatory (M) requirements sampled deterministically, in
     proportion to each document's eligible M pool.
+
+    Args:
+        document_rows: Requirement rows from `load_pure_requirement_rows`.
+        target_count: Total number of seeds to include.
+        seed: Random seed for the mandatory draw.
+
+    Returns:
+        One candidate row per distinct requirement, with its document context.
+        Included rows have an empty final capability text, to be written in
+        review.
+
+    Raises:
+        ValueError: If the optional requirements exceed `target_count` or too
+            few mandatory requirements are eligible to fill it.
     """
     seen: set[str] = set()
     candidates: list[dict[str, Any]] = []
@@ -2948,6 +4067,20 @@ def _review_compare_text(value: Any) -> str:
 def refresh_capability_suggestions(
     rows: list[dict[str, Any]], force: bool = False
 ) -> tuple[list[dict[str, Any]], int]:
+    """Recompute automatic capability texts and update unedited final texts.
+
+    A final capability text counts as unedited when it is empty or equals the
+    old automatic text or the original requirement, ignoring case and final
+    punctuation. Reviewer edits are kept unless `force` is set.
+
+    Args:
+        rows: Seed review rows; they are copied, not modified.
+        force: Overwrite the final text of every included row, even if edited.
+
+    Returns:
+        The refreshed rows and the number of included rows whose final text
+        changed.
+    """
     refreshed: list[dict[str, Any]] = []
     updated = 0
     for row in rows:
@@ -2976,6 +4109,15 @@ def refresh_capability_suggestions(
 
 
 def refresh_capability_suggestions_file(path: str | Path, force: bool = False) -> int:
+    """Apply `refresh_capability_suggestions` to a seed review CSV in place.
+
+    Args:
+        path: Seed review CSV; rewritten with its original column order.
+        force: Overwrite reviewer-edited final texts as well.
+
+    Returns:
+        The number of included rows whose final text changed.
+    """
     rows = read_csv_rows(path)
     refreshed, updated = refresh_capability_suggestions(rows, force=force)
     write_csv_rows(path, refreshed, fieldnames=list(read_csv_frame(path).columns))
@@ -2983,6 +4125,15 @@ def refresh_capability_suggestions_file(path: str | Path, force: bool = False) -
 
 
 def is_truthy(value: Any) -> bool:
+    """Return whether a review cell means yes.
+
+    Args:
+        value: Cell value; `1`, `true`, `yes`, `y` and `include` are truthy,
+            case-insensitive.
+
+    Returns:
+        True for a truthy value.
+    """
     return str(value).strip().lower() in {"1", "true", "yes", "y", "include"}
 
 
@@ -2991,6 +4142,23 @@ def load_reviewed_seeds(
     target_count: int = DEFAULT_CONFIG["project"]["target_seed_count"],
     strict: bool = True,
 ) -> list[dict[str, Any]]:
+    """Load the included seeds with a final capability text from a review CSV.
+
+    Rows marked for inclusion fall back to the automatic capability text when
+    the final one is empty, and rows with neither are skipped.
+
+    Args:
+        path: Seed review CSV.
+        target_count: Number of included seeds expected.
+        strict: Require exactly `target_count` included seeds.
+
+    Returns:
+        Copies of the included rows with a cleaned `capability_text_final`.
+
+    Raises:
+        ValueError: If `strict` is set and the count differs from
+            `target_count`.
+    """
     rows = read_csv_rows(path)
     selected: list[dict[str, Any]] = []
     for row in rows:
@@ -3020,6 +4188,19 @@ def load_reviewed_seeds(
 
 
 def included_capability_review_frame(path: str | Path) -> pd.DataFrame:
+    """Build the reader-facing table of included seeds and their capability texts.
+
+    Args:
+        path: Seed review CSV with `seed_id`, `original_requirement`,
+            `capability_text_final` and `include`.
+
+    Returns:
+        The included rows with display column names; `Source corpus` is present
+        only when the review has a `source_corpus` column.
+
+    Raises:
+        ValueError: If a required review column is missing.
+    """
     frame = read_csv_frame(path)
     for column in [
         "seed_id",
@@ -3050,6 +4231,16 @@ def included_capability_review_frame(path: str | Path) -> pd.DataFrame:
 def write_included_capability_review(
     path: str | Path, output_dir: str | Path, suffix: str = ""
 ) -> dict[str, Path]:
+    """Write the included-capability review table as Markdown and CSV.
+
+    Args:
+        path: Seed review CSV.
+        output_dir: Directory for the two files; created if missing.
+        suffix: Dataset and variant suffix appended to the file names.
+
+    Returns:
+        The written paths under `markdown` and `csv`.
+    """
     frame = included_capability_review_frame(path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3061,12 +4252,37 @@ def write_included_capability_review(
 
 
 def capability_clause(capability: str) -> str:
+    """Return a capability text without outer quotes or final punctuation.
+
+    Args:
+        capability: Capability text to embed in a statement.
+
+    Returns:
+        The cleaned clause.
+    """
     return strip_final_punctuation(capability)
 
 
 def source_statement(
     capability: str, modality: str, mandatory_keyword: str = "MUST"
 ) -> str:
+    """Render the controlled source statement of a capability for one modality.
+
+    Mandatory uses the given keyword, recommended `SHOULD`, optional `MAY`, and
+    nice-to-have the wish frame "It would be useful if the system could ...".
+
+    Args:
+        capability: Capability text.
+        modality: `mandatory`, `recommended`, `optional` or `nice_to_have`.
+        mandatory_keyword: Keyword of the mandatory variant, `MUST` or `SHALL`;
+            uppercased.
+
+    Returns:
+        The statement, ending with a period.
+
+    Raises:
+        ValueError: If the modality is unknown.
+    """
     cap = capability_clause(capability)
     if modality == "mandatory":
         return f"The system {mandatory_keyword.upper()} {cap}."
@@ -3080,6 +4296,17 @@ def source_statement(
 
 
 def weak_modality_template_by_id(template_id: str) -> dict[str, str]:
+    """Look up a weak-phrasing probe template by its id.
+
+    Args:
+        template_id: Template id from `WEAK_MODALITY_PROBE_TEMPLATES`.
+
+    Returns:
+        The template with `template_id` and `source_template`.
+
+    Raises:
+        ValueError: If no template has this id.
+    """
     for template in WEAK_MODALITY_PROBE_TEMPLATES:
         if template["template_id"] == template_id:
             return template
@@ -3090,6 +4317,19 @@ def build_weak_modality_probe_items(
     seed_rows: list[dict[str, Any]],
     templates: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
+    """Build the weak-phrasing probe items: one per seed and wish template.
+
+    Every item is a nice-to-have statement, so its Task 2 gold modality is
+    `nice_to_have` whichever template phrased it.
+
+    Args:
+        seed_rows: Reviewed seeds with `seed_id` and `capability_text_final`.
+        templates: Templates to render; defaults to
+            `WEAK_MODALITY_PROBE_TEMPLATES`.
+
+    Returns:
+        The probe items, seed by seed in template order.
+    """
     templates = templates or WEAK_MODALITY_PROBE_TEMPLATES
     items: list[dict[str, Any]] = []
     for seed in seed_rows:
@@ -3126,6 +4366,19 @@ def build_task3_verification_items(
     Text-modality recognition determines scoring eligibility, not whether the
     model can audit the output. Unknown and negated wording has no ordinal
     reference relation; it remains available for review and coverage reporting.
+
+    Args:
+        benchmark_rows: Benchmark items the Task 2 answers refer to.
+        task2_raw_rows: Raw Task 2 output rows. They are deduplicated and
+            restricted to the current benchmark; only deterministic, parsed
+            answers with a non-empty requirement and a recognised modality
+            become items.
+        audit_mode: Task 3 audit mode, stored in every item and its id.
+
+    Returns:
+        One verification item per (model, source item), carrying the relation
+        implied by the declared modality and, when the extracted wording is
+        recognised, the reference relation implied by the text.
     """
     audit_mode = normalize_task3_audit_mode(audit_mode)
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
@@ -3206,6 +4459,19 @@ def build_task3_verification_items(
 
 
 def task3_items_from_raw_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recover the Task 3 verification items from Task 3 raw output rows.
+
+    Rows that lack a required item field are skipped, and so are rows with no
+    valid reference relation unless they are explicitly unscored because the
+    extracted wording is unknown or negated.
+
+    Args:
+        raw_rows: Raw output rows; rows of other tasks are ignored.
+
+    Returns:
+        One item per distinct item id, restricted to
+        `TASK3_VERIFICATION_FIELDS`.
+    """
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
     required_fields = {
@@ -3241,6 +4507,14 @@ def task3_items_from_raw_rows(raw_rows: list[dict[str, Any]]) -> list[dict[str, 
 
 
 def weak_modality_template_sanity_rows() -> list[dict[str, Any]]:
+    """Return blank review rows for checking the weak-phrasing probe templates.
+
+    Each row shows a template with an example statement, so a reviewer can
+    confirm that it reads weaker than SHOULD; the review columns are empty.
+
+    Returns:
+        One row per template in `WEAK_MODALITY_PROBE_TEMPLATES`.
+    """
     rows: list[dict[str, Any]] = []
     for template in WEAK_MODALITY_PROBE_TEMPLATES:
         rows.append(
@@ -3262,6 +4536,18 @@ def weak_modality_template_sanity_rows() -> list[dict[str, Any]]:
 def write_weak_modality_template_sanity_check(
     output_dir: str | Path, suffix: str = ""
 ) -> dict[str, Path]:
+    """Write the weak-phrasing template review sheet as CSV and Markdown.
+
+    An existing CSV is kept so reviewer answers survive; the Markdown table is
+    always regenerated from the CSV.
+
+    Args:
+        output_dir: Directory for both files; created if missing.
+        suffix: Dataset and variant suffix appended to the file names.
+
+    Returns:
+        The paths under `csv` and `markdown`.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / f"weak_modality_template_sanity_check{suffix}.csv"
@@ -3294,10 +4580,17 @@ def main_modality_template_rows(
 ) -> list[dict[str, Any]]:
     """Return the full modality-template inventory used to build benchmark sources.
 
-    Covers the four main benchmark conditions (``MUST`` wording), the ``SHALL``
+    Covers the four main benchmark conditions (`MUST` wording), the `SHALL`
     robustness variant of the mandatory condition, and the four weak-intent
-    phrasing-probe templates. Mirrors ``weak_modality_template_sanity_rows`` and
+    phrasing-probe templates. Mirrors `weak_modality_template_sanity_rows` and
     is exported for the experimental-setup documentation.
+
+    Args:
+        capability: Capability used to render the example statements.
+
+    Returns:
+        One row per template with its condition, variant, template text,
+        example statement, intended gold modality and a note.
     """
     cap = capability_clause(capability)
     rows: list[dict[str, Any]] = []
@@ -3377,7 +4670,15 @@ def write_main_modality_template_inventory(
     path: str | Path,
     capability: str = MODALITY_TEMPLATE_INVENTORY_EXAMPLE_CAPABILITY,
 ) -> dict[str, Path]:
-    """Write the modality-template inventory as a CSV plus a sibling Markdown table."""
+    """Write the modality-template inventory as a CSV plus a sibling Markdown table.
+
+    Args:
+        path: CSV path; the Markdown file gets the same name with `.md`.
+        capability: Capability used to render the example statements.
+
+    Returns:
+        The paths under `csv` and `markdown`.
+    """
     csv_path = Path(path)
     markdown_path = csv_path.with_suffix(".md")
     rows = main_modality_template_rows(capability)
@@ -3399,6 +4700,16 @@ def _sanity_answer(value: Any) -> str:
 
 
 def weak_modality_sanity_status(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Check that every weak-phrasing template was confirmed weaker than SHOULD.
+
+    Args:
+        rows: Rows of the template review sheet; yes/no answers are read from
+            `weaker_than_should`.
+
+    Returns:
+        `valid` plus the template ids that are `missing`, `incomplete` (some
+        answer is not yes) or `disagreeing` (some answer is no).
+    """
     required = [template["template_id"] for template in WEAK_MODALITY_PROBE_TEMPLATES]
     frame = pd.DataFrame.from_records(rows)
     if frame.empty:
@@ -3436,6 +4747,15 @@ def weak_modality_sanity_status(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def weak_modality_construct_review_rows(
     reviewer_ids: Iterable[str] = ("R1", "R2"),
 ) -> list[dict[str, Any]]:
+    """Return blank construct-review rows: one per reviewer and weak-phrasing template.
+
+    Args:
+        reviewer_ids: Reviewer ids to prepare rows for.
+
+    Returns:
+        Rows with the template text and an example statement; the reviewer role,
+        answer, ordinal rank and note are left empty.
+    """
     rows: list[dict[str, Any]] = []
     for reviewer_id in reviewer_ids:
         for template in WEAK_MODALITY_PROBE_TEMPLATES:
@@ -3460,6 +4780,20 @@ def weak_modality_construct_review_status(
     rows: list[dict[str, Any]],
     expected_reviewers_per_template: int = 2,
 ) -> dict[str, Any]:
+    """Check that enough reviewers confirmed every weak-phrasing template.
+
+    Args:
+        rows: Rows of the construct review sheet; yes/no answers are read from
+            `weaker_than_should` and reviewers from `reviewer_id`.
+        expected_reviewers_per_template: Distinct reviewers and answers required
+            per template.
+
+    Returns:
+        `valid`, the expected reviewer count, `reviewer_counts` per template,
+        and the template ids that are `missing`, `insufficient` (too few
+        reviewers), `incomplete` (too few or non-yes answers) or `disagreeing`
+        (some answer is no).
+    """
     required = [template["template_id"] for template in WEAK_MODALITY_PROBE_TEMPLATES]
     frame = pd.DataFrame.from_records(rows)
     if frame.empty:
@@ -3514,6 +4848,15 @@ def weak_modality_construct_review_status(
 
 
 def candidate_requirement(capability: str, mandatory_keyword: str = "MUST") -> str:
+    """Render the mandatory candidate requirement that Task 1 asks about.
+
+    Args:
+        capability: Capability text.
+        mandatory_keyword: Mandatory keyword, `MUST` or `SHALL`; uppercased.
+
+    Returns:
+        "The system MUST <capability>." with the given keyword.
+    """
     return f"The system {mandatory_keyword.upper()} {capability_clause(capability)}."
 
 
@@ -3524,7 +4867,27 @@ def build_benchmark_items(
     *,
     passthrough_fields: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
-    """Render seed x modality items; `passthrough_fields` copies extra seed columns."""
+    """Render seed x modality items; `passthrough_fields` copies extra seed columns.
+
+    Each seed yields one item per modality in `MODALITIES`, with its source
+    statement, the mandatory candidate requirement, the Task 1 and Task 2 gold
+    labels, and the ordinal and numeric strength of the source modality.
+
+    Args:
+        seed_rows: Reviewed seeds with `seed_id` and `capability_text_final`.
+        numeric_strength: Numeric strength per modality; defaults to
+            `NUMERIC_STRENGTH_DEFAULT`.
+        mandatory_keyword: Keyword of the mandatory variant, `MUST` or `SHALL`
+            (case-insensitive).
+        passthrough_fields: Seed columns copied unchanged into every item, such
+            as the PURE document context.
+
+    Returns:
+        The benchmark items, seed by seed in modality order.
+
+    Raises:
+        ValueError: If the mandatory keyword is neither `MUST` nor `SHALL`.
+    """
     numeric_strength = numeric_strength or NUMERIC_STRENGTH_DEFAULT
     passthrough = list(passthrough_fields)
     mandatory_keyword = mandatory_keyword.upper()
@@ -3564,6 +4927,18 @@ def build_benchmark_items(
 def benchmark_statement_review_frame(
     items: list[dict[str, Any]] | pd.DataFrame | str | Path,
 ) -> pd.DataFrame:
+    """Build a review table with one row per seed and one column per source statement.
+
+    Args:
+        items: Benchmark items as rows, a data frame, or a CSV path.
+
+    Returns:
+        One row per seed with the capability, the four source statements and
+        the mandatory candidate, under display column names.
+
+    Raises:
+        ValueError: If a required benchmark column is missing.
+    """
     if isinstance(items, (str, Path)):
         frame = read_csv_frame(items)
     elif isinstance(items, pd.DataFrame):
@@ -3616,6 +4991,16 @@ def write_benchmark_statement_review(
     output_dir: str | Path,
     suffix: str = "",
 ) -> dict[str, Path]:
+    """Write the benchmark statement review table as Markdown and CSV.
+
+    Args:
+        items: Benchmark items as rows, a data frame, or a CSV path.
+        output_dir: Directory for the two files; created if missing.
+        suffix: Dataset and variant suffix appended to the file names.
+
+    Returns:
+        The written paths under `markdown` and `csv`.
+    """
     frame = benchmark_statement_review_frame(items)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3640,10 +5025,27 @@ JOB_CONFIG_SHA_VERSION = 3
 
 
 def load_prompt(path: str | Path) -> str:
+    """Read a frozen prompt template.
+
+    Args:
+        path: Prompt file under `prompts/`.
+
+    Returns:
+        The template text.
+    """
     return Path(path).read_text(encoding="utf-8")
 
 
 def render_prompt(template: str, **values: Any) -> str:
+    """Fill a prompt template's `str.format` placeholders.
+
+    Args:
+        template: Prompt template text.
+        **values: Placeholder values, such as `source_statement`.
+
+    Returns:
+        The rendered prompt.
+    """
     return template.format(**values)
 
 
@@ -3653,6 +5055,15 @@ def document_context_text(item: Mapping[str, Any]) -> str:
     One renderer serves both the single-item template (`context_block`) and the
     per-item `context` value of the batched wrapper, so the two never drift.
     The source statement itself is never repeated here.
+
+    Args:
+        item: Benchmark item carrying the `context_*` fields; empty fields are
+            left out.
+
+    Returns:
+        Newline-separated lines naming the document and its marker legend, the
+        section, the preceding requirement, this requirement's id and marker,
+        and the following requirement.
     """
     marker = str(item.get("context_marker", "")).strip()
     legend = str(item.get("context_legend", "")).strip()
@@ -3685,6 +5096,27 @@ def prompt_for_benchmark_task(
     item_context: str = DEFAULT_ITEM_CONTEXT,
     task2_context_template: str | None = None,
 ) -> str:
+    """Render the single-item prompt of a benchmark item for Task 1 or Task 2.
+
+    Args:
+        task: `"task1"` (mandatory entailment) or `"task2"` (modality
+            extraction).
+        item: Benchmark item with `source_statement` and, for Task 1,
+            `candidate_requirement`.
+        task1_template: Task 1 prompt template.
+        task2_template: Task 2 prompt template for bare items.
+        item_context: `"bare"` or `"document"`; the document arm applies to
+            Task 2 only.
+        task2_context_template: Task 2 template with a `context_block`
+            placeholder, required for the document arm.
+
+    Returns:
+        The rendered prompt.
+
+    Raises:
+        ValueError: If the task is unsupported, or the document arm is selected
+            without a context template.
+    """
     if task == "task1":
         return render_prompt(
             task1_template,
@@ -3707,13 +5139,23 @@ def prompt_for_benchmark_task(
 
 
 def task_response_schema(task: str, *, batched: bool = False) -> dict[str, Any]:
-    """Strict provider JSON Schema for `task`, derived from its Pydantic model.
+    """Build the strict provider JSON Schema for `task` from its Pydantic model.
 
     Derived rather than written out here so the schema a request carries and
     the model Instructor validates against cannot drift apart. The derivation
     reproduces the handwritten schema byte for byte; those bytes are pinned in
-    tests/test_structured_outputs.py because they are part of the request
+    `tests/test_structured_outputs.py` because they are part of the request
     fingerprint every archived run resumes on.
+
+    Args:
+        task: Task name with a response model in `structured_outputs`.
+        batched: Return the schema of the multi-item batch answer.
+
+    Returns:
+        The JSON Schema as a dictionary.
+
+    Raises:
+        ValueError: If the task has no response model.
     """
     if task not in so.TASK_RESPONSE_MODELS:
         raise ValueError(f"Unsupported task for JSON Schema response format: {task}")
@@ -3723,6 +5165,17 @@ def task_response_schema(task: str, *, batched: bool = False) -> dict[str, Any]:
 def response_format_for_task(
     task: str, structured_output: str, *, batched: bool = False
 ) -> dict[str, Any] | None:
+    """Build the `response_format` request argument for a structured-output mode.
+
+    Args:
+        task: Task whose answer schema is used for `json_schema`.
+        structured_output: Structured-output mode or alias.
+        batched: Use the multi-item batch schema.
+
+    Returns:
+        `None` for `none` and `instructor`, `{"type": "json_object"}` for
+        `json_object`, and a strict named JSON Schema format for `json_schema`.
+    """
     mode = normalize_structured_output_mode(structured_output)
     if mode in {"none", "instructor"}:
         return None
@@ -3748,6 +5201,28 @@ def resolve_response_format_args(
     extra_body: Mapping[str, Any] | None = None,
     batched: bool = False,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Decide where a request's response format goes: its own argument or `extra_body`.
+
+    For `instructor` no response format is sent and any `response_format` is
+    removed from `extra_body`. For `none` the profile's `response_format` is
+    passed through unchanged. Otherwise the task's format is computed; a
+    provider that already expects `response_format` inside `extra_body` gets it
+    there instead of as the request argument.
+
+    Args:
+        task: Task whose answer schema is used.
+        structured_output: Structured-output mode or alias; `None` falls back to
+            `json_mode`.
+        json_mode: Legacy switch used when `structured_output` is `None`.
+        response_format: Profile-level response format, used only in `none`
+            mode.
+        extra_body: Provider-specific request body; copied, not modified.
+        batched: Use the multi-item batch schema.
+
+    Returns:
+        The `response_format` argument (or `None`) and the `extra_body` to send
+        (or `None`).
+    """
     extra = dict(extra_body) if extra_body else None
     mode = normalize_structured_output_mode(structured_output, json_mode=json_mode)
     if mode == "instructor":
@@ -3786,7 +5261,7 @@ def compute_job_config_sha(
     fallback_batch_size: int = 1,
     item_context: str = DEFAULT_ITEM_CONTEXT,
 ) -> str:
-    """Config fingerprint for a single completion job.
+    """Return the config fingerprint for a single completion job.
 
     Covers the request parameters that change model output but are not part of
     completion_record_key, so config-aware resume can detect stale cached rows.
@@ -3796,7 +5271,7 @@ def compute_job_config_sha(
 
     Version 3 additionally hashes the batching setup: batch_size, batch_order,
     fallback_batch_size, and -- only when batch_size > 1 -- the SHA of the batch
-    prompt wrapper for `task` (see :func:`batch_prompt_wrapper_sha`). A batched
+    prompt wrapper for `task` (see `batch_prompt_wrapper_sha`). A batched
     request sees a different prompt envelope and neighbouring items than a
     single-item request, so a cached row produced under a different batching
     setup is not interchangeable with the planned one. Single-item plans
@@ -3817,6 +5292,29 @@ def compute_job_config_sha(
     only when it is not `bare`, so every fingerprint written before the knob
     existed stays valid and no version bump is needed; the `document` arm
     also hashes its own batch wrapper.
+
+    Args:
+        prompt: Rendered prompt text of the job.
+        prompt_version: Prompt version of the run.
+        temperature: Sampling temperature.
+        top_p: Nucleus-sampling threshold.
+        max_tokens: Completion token limit.
+        structured_output: Structured-output mode or alias, normalized together
+            with `json_mode`.
+        json_mode: JSON-mode switch, hashed as given.
+        extra_body: Provider-specific request body as it will be sent.
+        response_format: Response format argument as it will be sent.
+        instructor_mode: Instructor library mode name.
+        validation_retries: Instructor validation retries.
+        seed: Request seed, or `None` when no seed is sent.
+        task: Task whose batch prompt wrapper is hashed for batched plans.
+        batch_size: Items per provider request.
+        batch_order: Batch composition, `grouped` or `shuffled`.
+        fallback_batch_size: Profile setting recorded with the batching setup.
+        item_context: `bare` or `document`.
+
+    Returns:
+        The hexadecimal SHA-256 of the canonical JSON of the hashed parameters.
     """
     resolved_batch_size = positive_int(batch_size, "batch_size")
     resolved_item_context = normalize_item_context(item_context)
@@ -3900,6 +5398,53 @@ def completion_request_job(
     server_model_probe: Mapping[str, Any] | str | None = None,
     item_context: str = DEFAULT_ITEM_CONTEXT,
 ) -> dict[str, Any]:
+    """Build one planned single-item completion job with its config fingerprint.
+
+    The response format and `extra_body` are resolved with
+    `resolve_response_format_args`, and the fingerprint is computed from the
+    resolved values, so it describes the request that is actually sent.
+
+    Args:
+        item: Benchmark item the prompt was rendered from; copied into the job.
+        task: Task name, such as `"task1"` or `"task2"`.
+        model: Model id requested from the provider.
+        host: Provider base URL.
+        run_id: Run the job belongs to.
+        sample_kind: `"deterministic"` or `"stochastic"`.
+        sample_index: Index of the sample within its kind.
+        temperature: Sampling temperature.
+        top_p: Nucleus-sampling threshold.
+        prompt: Rendered prompt text.
+        prompt_version: Prompt version of the run.
+        max_tokens: Completion token limit.
+        timeout_s: Request timeout in seconds.
+        api_key_env: Name of the environment variable holding the provider key.
+        request_index: Position of the job in the run's plan.
+        provider_id: Provider id of the profile.
+        profile_id: Profile id within the run config.
+        run_group_id: Run group of the run config.
+        json_mode: JSON-mode switch of the profile.
+        structured_output: Structured-output mode or alias.
+        response_format: Profile-level response format.
+        extra_body: Provider-specific request body.
+        instructor_mode: Instructor library mode name.
+        validation_retries: Instructor validation retries.
+        fallback_batch_size: Profile setting recorded on the job and in its
+            fingerprint.
+        seed: Request seed.
+        send_seed: Send `seed` with the request; when false the job records no
+            seed.
+        max_retries: Total number of attempts for a request, as in
+            `call_with_retries` (3 means one call plus two retries).
+        batch_order: Batch composition, `grouped` or `shuffled`.
+        batch_size: Items per provider request.
+        server_model_probe: Result of the server preflight check, recorded on the
+            job.
+        item_context: `bare` or `document`.
+
+    Returns:
+        The job dictionary, including `job_config_sha` and its version.
+    """
     resolved_response_format, resolved_extra_body = resolve_response_format_args(
         task,
         structured_output=structured_output,
@@ -4003,7 +5548,46 @@ def _append_completion_jobs(
     server_model_probe: Mapping[str, Any] | str | None,
     item_context: str = DEFAULT_ITEM_CONTEXT,
 ) -> None:
-    """Append the deterministic job and any stochastic samples for one rendered prompt."""
+    """Append the deterministic job and any stochastic samples for one rendered prompt.
+
+    The deterministic job uses `seed`; stochastic sample `i` uses `seed + i + 1`.
+    Each job's request index is its position in `jobs`.
+
+    Args:
+        jobs: Plan to extend in place.
+        item: Benchmark item the prompt was rendered from.
+        task: Task name.
+        prompt: Rendered prompt text.
+        prompt_version: Prompt version of the run.
+        model: Model id requested from the provider.
+        host: Provider base URL.
+        run_id: Run the jobs belong to.
+        deterministic: Deterministic sampling settings with `temperature` and
+            `top_p`.
+        stochastic: Stochastic sampling settings with `temperature`, `top_p` and
+            the number of `samples`.
+        max_tokens: Completion token limit.
+        timeout_s: Request timeout in seconds.
+        api_key_env: Name of the environment variable holding the provider key.
+        provider_id: Provider id of the profile.
+        profile_id: Profile id within the run config.
+        run_group_id: Run group of the run config.
+        json_mode: JSON-mode switch of the profile.
+        structured_output: Structured-output mode or alias.
+        response_format: Profile-level response format.
+        extra_body: Provider-specific request body.
+        instructor_mode: Instructor library mode name.
+        validation_retries: Instructor validation retries.
+        fallback_batch_size: Profile setting recorded on each job.
+        seed: Base request seed.
+        send_seed: Send seeds with the requests.
+        max_retries: Total number of attempts for a request, as in
+            `call_with_retries` (3 means one call plus two retries).
+        batch_order: Batch composition, `grouped` or `shuffled`.
+        batch_size: Items per provider request.
+        server_model_probe: Result of the server preflight check.
+        item_context: `bare` or `document`.
+    """
     shared = {
         "item": item,
         "task": task,
@@ -4091,6 +5675,54 @@ def planned_completion_jobs(
     item_context: str = DEFAULT_ITEM_CONTEXT,
     task2_context_template: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Plan the deterministic and stochastic completion jobs for benchmark items.
+
+    Each item is rendered once per requested task with `prompt_for_benchmark_task`
+    and expanded by `_append_completion_jobs` into one deterministic job plus the
+    planned stochastic samples, so request indices follow item order and, within
+    an item, task order.
+
+    Args:
+        benchmark_rows: Benchmark items to plan.
+        tasks: Tasks to plan for every item, resolved with `normalize_task_filter`.
+        model: Model id requested from the provider.
+        host: Provider base URL.
+        run_id: Run the jobs belong to.
+        prompt_version: Prompt version of the run.
+        task1_template: Task 1 prompt template.
+        task2_template: Task 2 prompt template for bare items.
+        deterministic: Deterministic sampling settings with `temperature` and
+            `top_p`.
+        stochastic: Stochastic sampling settings with `temperature`, `top_p` and
+            the number of `samples`.
+        max_tokens: Completion token limit.
+        timeout_s: Request timeout in seconds.
+        api_key_env: Name of the environment variable holding the provider key.
+        provider_id: Provider id of the profile.
+        profile_id: Profile id within the run config.
+        run_group_id: Run group of the run config.
+        json_mode: JSON-mode switch of the profile.
+        structured_output: Structured-output mode or alias.
+        response_format: Profile-level response format.
+        extra_body: Provider-specific request body.
+        instructor_mode: Instructor library mode name.
+        validation_retries: Instructor validation retries.
+        fallback_batch_size: Profile setting recorded on each job.
+        seed: Base request seed; stochastic sample `i` uses `seed + i + 1`.
+        send_seed: Send seeds with the requests.
+        max_retries: Total number of attempts for a request, as in
+            `call_with_retries` (3 means one call plus two retries).
+        batch_order: Batch composition, `grouped` or `shuffled`.
+        batch_size: Items per provider request.
+        server_model_probe: Result of the server preflight check.
+        item_context: `bare` or `document`; the document arm applies to Task 2
+            only.
+        task2_context_template: Task 2 template with a `context_block`
+            placeholder, required for the document arm.
+
+    Returns:
+        The planned jobs in request order.
+    """
     jobs: list[dict[str, Any]] = []
     task_list = normalize_task_filter(tasks)
     resolved_item_context = normalize_item_context(item_context)
@@ -4172,7 +5804,43 @@ def planned_completion_jobs_for_items(
     """Plan deterministic + stochastic jobs for pre-built items with a per-item prompt.
 
     The Task 3 runner renders one prompt per audit item (rather than per task as in
-    planned_completion_jobs); prompt_fn maps each item to that rendered prompt.
+    `planned_completion_jobs`); `prompt_fn` maps each item to that rendered prompt.
+
+    Args:
+        items: Pre-built items, such as Task 3 audit items.
+        prompt_fn: Renders the prompt of one item.
+        prompt_version: Prompt version of the run.
+        model: Model id requested from the provider.
+        host: Provider base URL.
+        run_id: Run the jobs belong to.
+        deterministic: Deterministic sampling settings with `temperature` and
+            `top_p`.
+        stochastic: Stochastic sampling settings with `temperature`, `top_p` and
+            the number of `samples`.
+        max_tokens: Completion token limit.
+        timeout_s: Request timeout in seconds.
+        api_key_env: Name of the environment variable holding the provider key.
+        task: Task name stamped on every job.
+        provider_id: Provider id of the profile.
+        profile_id: Profile id within the run config.
+        run_group_id: Run group of the run config.
+        json_mode: JSON-mode switch of the profile.
+        structured_output: Structured-output mode or alias.
+        response_format: Profile-level response format.
+        extra_body: Provider-specific request body.
+        instructor_mode: Instructor library mode name.
+        validation_retries: Instructor validation retries.
+        fallback_batch_size: Profile setting recorded on each job.
+        seed: Base request seed; stochastic sample `i` uses `seed + i + 1`.
+        send_seed: Send seeds with the requests.
+        max_retries: Total number of attempts for a request, as in
+            `call_with_retries` (3 means one call plus two retries).
+        batch_order: Batch composition, `grouped` or `shuffled`.
+        batch_size: Items per provider request.
+        server_model_probe: Result of the server preflight check.
+
+    Returns:
+        The planned jobs in request order.
     """
     jobs: list[dict[str, Any]] = []
     for item in items:
@@ -4219,6 +5887,19 @@ def planned_completion_jobs_for_items(
 
 
 def extract_json_object(text: str) -> str | None:
+    """Return the first brace-balanced JSON object embedded in a model response.
+
+    The scan starts at the first `{` and tracks brace depth outside string
+    literals, so prose or code fences around the object are ignored. The returned
+    text is not validated as JSON.
+
+    Args:
+        text: Raw response text.
+
+    Returns:
+        The substring from the first `{` to its matching `}`, or `None` when the
+        text is empty, has no `{`, or the braces never balance.
+    """
     if not text:
         return None
     start = text.find("{")
@@ -4249,6 +5930,17 @@ def extract_json_object(text: str) -> str | None:
 
 
 def extract_json_value(text: str) -> Any | None:
+    """Decode the first JSON object or array that parses anywhere in a response.
+
+    Each `{` or `[` position is tried in turn with `json.JSONDecoder.raw_decode`,
+    so leading prose and trailing text are tolerated.
+
+    Args:
+        text: Raw response text.
+
+    Returns:
+        The decoded value, or `None` when the text is empty or nothing parses.
+    """
     if not text:
         return None
     decoder = json.JSONDecoder()
@@ -4266,6 +5958,19 @@ def extract_json_value(text: str) -> Any | None:
 def normalize_confidence_scale(
     value: Any, default: str = CONFIDENCE_SCALE_0_100
 ) -> str:
+    """Map a confidence-scale name or alias to its canonical constant.
+
+    Args:
+        value: Scale name such as `0_1`, `probability`, `percent` or `legacy`;
+            case is ignored and hyphens count as underscores.
+        default: Scale returned for an empty or `None` value.
+
+    Returns:
+        `CONFIDENCE_SCALE_0_1` or `CONFIDENCE_SCALE_0_100`.
+
+    Raises:
+        ValueError: If the value is not a known alias.
+    """
     if value in {"", None}:
         return default
     normalized = str(value).strip().lower().replace("-", "_")
@@ -4287,11 +5992,32 @@ def normalize_confidence_scale(
 
 
 def prompt_version_uses_confidence_0_1(prompt_version: Any) -> bool:
+    """Return whether a prompt version asks for confidence on the 0-1 scale.
+
+    Args:
+        prompt_version: Prompt version label. Versions listed in
+            `CONFIDENCE_0_1_PROMPT_VERSIONS` or starting with `v2-` use the 0-1
+            scale.
+
+    Returns:
+        True for prompt versions with the 0-1 confidence contract.
+    """
     normalized = str(prompt_version or "").strip().lower()
     return normalized in CONFIDENCE_0_1_PROMPT_VERSIONS or normalized.startswith("v2-")
 
 
 def prompt_text_uses_confidence_0_1(prompt: Any) -> bool:
+    """Return whether a rendered prompt asks for confidence as a decimal probability.
+
+    Looks for phrases such as `0.0-1.0` or `decimal probability` in the
+    whitespace-normalized, lower-cased text.
+
+    Args:
+        prompt: Rendered prompt text; `None` or empty counts as no.
+
+    Returns:
+        True when the prompt requests confidence on the 0-1 scale.
+    """
     text = normalize_space(str(prompt or "")).lower()
     if not text:
         return False
@@ -4305,12 +6031,33 @@ def prompt_text_uses_confidence_0_1(prompt: Any) -> bool:
 
 
 def output_contract_uses_confidence_0_1(output_contract_version: Any) -> bool:
+    """Return whether an output contract version reports confidence on the 0-1 scale.
+
+    Args:
+        output_contract_version: Contract version recorded on a raw row.
+
+    Returns:
+        True when the version is listed in
+        `structured_outputs.CONFIDENCE_0_1_OUTPUT_CONTRACT_VERSIONS`.
+    """
     return (
         str(output_contract_version or "") in so.CONFIDENCE_0_1_OUTPUT_CONTRACT_VERSIONS
     )
 
 
 def confidence_scale_for_record(record: Mapping[str, Any]) -> str:
+    """Infer the confidence scale a raw record was answered on.
+
+    An explicit `confidence_scale` field wins. Otherwise the output contract
+    version, the prompt version and finally the prompt text are checked for the
+    0-1 contract; a record with none of these signals is on the 0-100 scale.
+
+    Args:
+        record: Raw record or scored row.
+
+    Returns:
+        `CONFIDENCE_SCALE_0_1` or `CONFIDENCE_SCALE_0_100`.
+    """
     explicit = str(record.get("confidence_scale", "")).strip()
     if explicit:
         return normalize_confidence_scale(explicit)
@@ -4326,6 +6073,19 @@ def confidence_scale_for_record(record: Mapping[str, Any]) -> str:
 def parse_confidence(
     value: Any, confidence_scale: str = CONFIDENCE_SCALE_0_100
 ) -> float | None:
+    """Parse a reported confidence and check that it lies within its scale.
+
+    Booleans are always rejected, and strings are rejected on the 0-1 scale.
+
+    Args:
+        value: Confidence value from the parsed response.
+        confidence_scale: Scale the value is reported on, in any form accepted by
+            `normalize_confidence_scale`.
+
+    Returns:
+        The confidence on its own scale, or `None` when it is missing,
+        non-numeric or out of range.
+    """
     scale = normalize_confidence_scale(confidence_scale)
     if isinstance(value, bool) or (
         scale == CONFIDENCE_SCALE_0_1 and isinstance(value, str)
@@ -4343,12 +6103,34 @@ def parse_confidence(
 
 
 def row_uses_confidence_0_1(row: Mapping[str, Any]) -> bool:
+    """Return whether a row reports confidence on the 0-1 scale.
+
+    Args:
+        row: Raw record or scored row, read with `confidence_scale_for_record`.
+
+    Returns:
+        True for the 0-1 scale.
+    """
     return confidence_scale_for_record(row) == CONFIDENCE_SCALE_0_1
 
 
 def confidence_probability(
     row_or_parsed: Mapping[str, Any], parsed: Mapping[str, Any] | None = None
 ) -> float:
+    """Return the reported confidence as a probability between 0 and 1.
+
+    Confidences on the 0-100 scale are divided by 100; a missing confidence
+    counts as 0.
+
+    Args:
+        row_or_parsed: Raw row or parsed response. Its scale fields decide the
+            scale, and its `parsed_json`, when present, supplies the confidence
+            unless `parsed` is given.
+        parsed: Parsed response to read `confidence` from.
+
+    Returns:
+        The confidence as a probability.
+    """
     if parsed is None and isinstance(row_or_parsed.get("parsed_json"), Mapping):
         parsed = row_or_parsed["parsed_json"]  # type: ignore[index]
     value_source = parsed if parsed is not None else row_or_parsed
@@ -4357,6 +6139,15 @@ def confidence_probability(
 
 
 def normalize_decision(value: Any) -> str | None:
+    """Map a reported yes/no decision to `"yes"` or `"no"`.
+
+    Args:
+        value: Decision as reported. `y`, `true` and `1` count as yes, `n`,
+            `false` and `0` as no, case-insensitively.
+
+    Returns:
+        `"yes"`, `"no"`, or `None` for anything else.
+    """
     text = str(value).strip().lower()
     if text in {"yes", "y", "true", "1"}:
         return "yes"
@@ -4366,6 +6157,16 @@ def normalize_decision(value: Any) -> str | None:
 
 
 def normalize_modality(value: Any) -> str | None:
+    """Map a modality label or modal verb to its canonical modality category.
+
+    Args:
+        value: Label such as `must`, `should`, `may` or `nice to have`; case is
+            ignored and hyphens and spaces count as underscores.
+
+    Returns:
+        `mandatory`, `recommended`, `optional` or `nice_to_have`, or `None` when
+        the label is unknown.
+    """
     text = str(value).strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
         "must": "mandatory",
@@ -4386,6 +6187,16 @@ def normalize_modality(value: Any) -> str | None:
 
 
 def normalize_relation(value: Any) -> str | None:
+    """Map a Task 3 relation label or synonym to its canonical relation.
+
+    Args:
+        value: Label such as `preserved`, `upgrade` or `content mismatch`; case is
+            ignored and hyphens and spaces count as underscores.
+
+    Returns:
+        `preserves`, `strengthens`, `weakens` or `content_changed`, or `None` when
+        the label is unknown.
+    """
     text = str(value).strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
         "preserve": "preserves",
@@ -4421,6 +6232,21 @@ def normalize_relation(value: Any) -> str | None:
 
 
 def task3_gold_relation(source_modality: str, extracted_modality: str) -> str:
+    """Derive the gold Task 3 relation from the source and extracted modalities.
+
+    The relation compares the ordinal strengths in `ORDINAL_STRENGTH`, so it is
+    never `content_changed`.
+
+    Args:
+        source_modality: Modality of the source statement.
+        extracted_modality: Modality of the extracted requirement.
+
+    Returns:
+        `strengthens`, `weakens` or `preserves`.
+
+    Raises:
+        ValueError: If either modality is not a recognized label.
+    """
     source = normalize_modality(source_modality)
     extracted = normalize_modality(extracted_modality)
     if source is None:
@@ -4437,11 +6263,34 @@ def task3_gold_relation(source_modality: str, extracted_modality: str) -> str:
 
 
 def safe_identifier(value: Any, fallback: str = "value") -> str:
+    """Turn a value into a lower-case identifier for file names and item ids.
+
+    Runs of characters other than ASCII letters and digits become one underscore,
+    and leading and trailing underscores are stripped.
+
+    Args:
+        value: Value to convert, such as a run id or model id.
+        fallback: Identifier returned when nothing remains.
+
+    Returns:
+        The identifier, or `fallback`.
+    """
     text = re.sub(r"[^A-Za-z0-9]+", "_", str(value).strip()).strip("_").lower()
     return text or fallback
 
 
 def evidence_phrase_in_source(evidence_phrase: Any, source_statement_text: Any) -> bool:
+    """Return whether an evidence phrase occurs verbatim in the source statement.
+
+    The comparison is case-insensitive and ignores whitespace differences.
+
+    Args:
+        evidence_phrase: Phrase the model quoted as evidence.
+        source_statement_text: Source statement of the item.
+
+    Returns:
+        True when the phrase is non-empty and a substring of the source.
+    """
     evidence = normalize_space(str(evidence_phrase or "")).lower()
     source = normalize_space(str(source_statement_text or "")).lower()
     return bool(evidence and evidence in source)
@@ -4450,6 +6299,19 @@ def evidence_phrase_in_source(evidence_phrase: Any, source_statement_text: Any) 
 def raw_record_matches_benchmark_item(
     raw: Mapping[str, Any], item: Mapping[str, Any]
 ) -> bool:
+    """Return whether a raw record was generated from the item's current source text.
+
+    A record matches when its prompt contains the item's whitespace-normalized
+    `source_statement`. Records without a prompt and items without a source
+    statement match by default.
+
+    Args:
+        raw: Raw record with its rendered `prompt`.
+        item: Current benchmark item.
+
+    Returns:
+        False only when the prompt lacks the current source statement.
+    """
     prompt = raw.get("prompt")
     if not prompt:
         return True
@@ -4463,6 +6325,19 @@ def filter_raw_rows_to_current_benchmark(
     benchmark_rows: list[dict[str, Any]],
     raw_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Keep the raw rows that belong to an item of the current benchmark.
+
+    A row is kept when its `item_id` is in the benchmark and
+    `raw_record_matches_benchmark_item` accepts it, which drops rows generated
+    from an earlier version of the item text.
+
+    Args:
+        benchmark_rows: Current benchmark items.
+        raw_rows: Raw records to filter.
+
+    Returns:
+        The matching raw rows in input order.
+    """
     item_by_id = {str(row["item_id"]): row for row in benchmark_rows}
     filtered: list[dict[str, Any]] = []
     for raw in raw_rows:
@@ -4476,16 +6351,22 @@ def dedupe_raw_rows(raw_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any
     """Collapse duplicate completions of the same request to one row (latest ok wins).
 
     A raw JSONL file is append-only, so a resumed or retried run can hold several
-    rows for one ``run_id`` + :func:`completion_record_key`. Scoring and progress
-    must count each planned request exactly once; this keeps the LAST row in file
-    order whose ``parse_status`` is ``ok`` (a later successful retry supersedes an
-    earlier failure), or the last row of the group when none parsed. The relative
-    order of the surviving rows follows the first appearance of each key so
-    downstream ordering (and grouping) stays stable.
+    rows for one `run_id` + `completion_record_key`. Scoring and progress must
+    count each planned request exactly once; this keeps the LAST row in file order
+    whose `parse_status` is `ok` (a later successful retry supersedes an earlier
+    failure), or the last row of the group when none parsed. The relative order of
+    the surviving rows follows the first appearance of each key so downstream
+    ordering (and grouping) stays stable.
 
-    This is the implementation of :attr:`AttemptLedger.latest_logical_observations`
+    This is the implementation of `AttemptLedger.latest_logical_observations`
     (Section 9); prefer the ledger when a caller needs to say which of the two
     views of a raw file it is consuming.
+
+    Args:
+        raw_rows: Raw rows in file order.
+
+    Returns:
+        Copies of the surviving rows, one per request.
     """
     rows = [dict(row) for row in raw_rows]
     first_position: dict[tuple[Any, ...], int] = {}
@@ -4509,6 +6390,18 @@ def benchmark_rows_with_current_raw_outputs(
     benchmark_rows: list[dict[str, Any]],
     raw_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Keep the benchmark items that have at least one current raw output.
+
+    A raw row counts when `raw_record_matches_benchmark_item` accepts it for its
+    item. With no raw rows at all, every item is kept.
+
+    Args:
+        benchmark_rows: Current benchmark items.
+        raw_rows: Raw records of the run.
+
+    Returns:
+        The items with a matching raw row, in benchmark order.
+    """
     if not raw_rows:
         return list(benchmark_rows)
     item_by_id = {str(row["item_id"]): row for row in benchmark_rows}
@@ -4524,6 +6417,20 @@ def benchmark_rows_with_current_raw_outputs(
 
 
 def rule_based_source_modality(source_statement_text: str) -> str | None:
+    """Classify a source statement's modality from its template opening.
+
+    Recognizes the openings `The system must`, `The system shall`,
+    `The system should`, `The system may` and
+    `It would be useful if the system could`, case-insensitively and ignoring
+    whitespace differences.
+
+    Args:
+        source_statement_text: Source statement of a benchmark item.
+
+    Returns:
+        `mandatory`, `recommended`, `optional` or `nice_to_have`, or `None` when
+        no template opening matches.
+    """
     text = normalize_space(source_statement_text).lower()
     if re.match(r"^the system\s+(?:must|shall)\b", text):
         return "mandatory"
@@ -4572,12 +6479,21 @@ MODAL_CATEGORY_PRIORITY = ["mandatory", "recommended", "optional"]
 
 
 def _modal_cue_scan(text: str) -> tuple[list[str], list[str], list[str]]:
-    """Return ``(cues_found, positive_cues, negated_cues)`` for lowercased ``text``.
+    """Return `(cues_found, positive_cues, negated_cues)` for lowercased `text`.
 
-    ``cues_found`` is the sorted set of surface modal cues seen anywhere in the
+    `cues_found` is the sorted set of surface modal cues seen anywhere in the
     text. A cue counts as negated when it is a negated contraction, when a
-    negation token appears within ``MODAL_NEGATION_LOOKBACK`` preceding tokens,
-    or when it is directly followed by ``not`` / ``n't``.
+    negation token (`not` or `never`) appears within `MODAL_NEGATION_LOOKBACK`
+    preceding tokens, or when it is directly followed by `not`, `n't` or `never`.
+    The phrase `required to` counts as negated only when `not` or `never`
+    directly precedes it.
+
+    Args:
+        text: Lower-cased, whitespace-normalized requirement text.
+
+    Returns:
+        The sorted unique cues, then the positive and the negated cue
+        occurrences, each listed once per occurrence.
     """
     tokens = re.findall(r"[a-z]+(?:'[a-z]+)?", text)
     positive: list[str] = []
@@ -4609,8 +6525,8 @@ def _modal_cue_scan(text: str) -> tuple[list[str], list[str], list[str]]:
 def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, Any]:
     """Classify the modal force expressed by generated requirement text.
 
-    Returns the backward-compatible ``text_modality`` / ``text_modality_basis``
-    pair plus ``text_modality_multi_modal`` and ``text_modality_modals_found``.
+    Returns the backward-compatible `text_modality` / `text_modality_basis`
+    pair plus `text_modality_multi_modal` and `text_modality_modals_found`.
 
     Precedence, applied in this order:
 
@@ -4618,15 +6534,26 @@ def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, Any
        cues in its wish frame, but never hides a positive obligation or
        recommendation. Mixed weak/strong wording is flagged for review.
     2. A POSITIVE modal cue wins over any negated cue, ranked by
-       ``MODAL_CATEGORY_PRIORITY`` (mandatory > recommended > optional). Text
+       `MODAL_CATEGORY_PRIORITY` (mandatory > recommended > optional). Text
        such as "The system must ensure that users cannot delete records." states
        a mandatory obligation whose *content* is a prohibition; scoring it as
-       ``negated`` would drop a real strengthening case. Mixed cues still set
-       ``text_modality_multi_modal`` when the categories differ.
+       `negated` would drop a real strengthening case. Mixed cues still set
+       `text_modality_multi_modal` when the categories differ.
     3. Only when there is NO positive cue does a negated modal ("must not",
-       "cannot", "shouldn't", ...) resolve to ``text_modality = "negated"`` with
-       basis ``negated_modal``, so an explicitly negated obligation is never
+       "cannot", "shouldn't", ...) resolve to `text_modality = "negated"` with
+       basis `negated_modal`, so an explicitly negated obligation is never
        scored as a positive (strengthening) modality.
+
+    Args:
+        requirement_text: Generated requirement text; `None` or empty text is
+            classified as `unknown`.
+
+    Returns:
+        A dict with `text_modality` (a modality category, `negated` or
+        `unknown`), `text_modality_basis` (`weak_phrase`, `explicit_modal`,
+        `negated_modal`, `heuristic_system_verb` or `unknown`),
+        `text_modality_multi_modal` and the sorted cue list
+        `text_modality_modals_found`.
     """
     text = normalize_space(str(requirement_text or "")).lower()
     if not text:
@@ -4709,6 +6636,14 @@ def requirement_text_modality_diagnostic(requirement_text: Any) -> dict[str, Any
 
 
 def empty_text_modality_fields() -> dict[str, Any]:
+    """Return the text-modality columns with blank values.
+
+    Rows that are not scored for text modality carry these blanks, so every
+    scored row has the columns that `text_modality_fields` fills.
+
+    Returns:
+        A dict mapping each text-modality column to an empty string.
+    """
     return {
         "text_modality": "",
         "text_modality_basis": "",
@@ -4736,6 +6671,28 @@ def text_modality_fields(
     pred_modality: str,
     confidence: float,
 ) -> dict[str, Any]:
+    """Score the modality expressed by generated requirement text against the gold.
+
+    The text modality comes from `requirement_text_modality_diagnostic`. Only a
+    parsed modality category can over- or under-commit; `negated` and `unknown`
+    never do. A strict over-commitment also needs a basis in
+    `STRICT_TEXT_MODALITY_BASES`, and its kind records whether the modal itself
+    escalated or only the wish frame of a nice-to-have source was dropped.
+
+    Args:
+        requirement_text: Generated requirement text.
+        gold_modality: Gold modality of the source statement.
+        pred_modality: Modality label the model reported; decides
+            `label_text_consistent` and the label-correct columns.
+        confidence: Reported confidence as a probability, compared with the 0.80
+            and 0.90 thresholds.
+
+    Returns:
+        The text-modality columns: modality, basis, multi-modal flag and
+        `|`-joined cues, parse status, correctness, label consistency, over- and
+        under-commitment, strict over-commitment and its kind, and the
+        high-confidence variants at 0.80 and 0.90.
+    """
     diagnostic = requirement_text_modality_diagnostic(requirement_text)
     text_modality = diagnostic["text_modality"]
     text_modality_basis = diagnostic["text_modality_basis"]
@@ -4828,7 +6785,15 @@ TASK_CONTRACT_FIELDS: dict[str, frozenset[str]] = {
 
 
 def _with_parse_repairs(parsed: dict[str, Any], repairs: list[str]) -> dict[str, Any]:
-    """Attach the repair list, deduplicated, in the order the repairs applied."""
+    """Attach the repair list, deduplicated, in the order the repairs applied.
+
+    Args:
+        parsed: Parsed payload, updated in place.
+        repairs: Repair names in the order they were applied.
+
+    Returns:
+        `parsed` with `PARSE_REPAIRS_FIELD` set.
+    """
     parsed[PARSE_REPAIRS_FIELD] = list(dict.fromkeys(repairs))
     return parsed
 
@@ -4843,6 +6808,16 @@ def _repaired_contract_text(
 
     The strict paths reject an absent, non-string, or over-long value outright;
     here each of those is fixed up and recorded so the row stays auditable.
+
+    Args:
+        parsed: Parsed payload, updated in place.
+        field: Contract field to repair.
+        repairs: Repair list that receives `coerced_<field>`,
+            `defaulted_<field>` or `truncated_<field>`.
+        max_length: Contract length limit; `None` means no limit.
+
+    Returns:
+        The repaired value.
     """
     if field in parsed:
         value = parsed[field]
@@ -4864,13 +6839,27 @@ def parse_task_response(
     raw_text: str,
     confidence_scale: str = CONFIDENCE_SCALE_0_100,
 ) -> tuple[dict[str, Any] | None, str]:
-    """Tolerant per-response parser that names every repair it applies.
+    """Parse one response tolerantly, naming every repair applied.
 
     Deliberately accepts responses the strict JSON Schema and Instructor paths
     reject -- prose around the JSON object, label aliases, a missing or
     over-long free-text field, extra keys -- so a run is not lost to a
     formatting slip. Each concession is listed under `parse_repairs` in the
     returned payload; an empty list means the response conformed as sent.
+
+    Args:
+        task: `task1`, `task2` or `task3`; selects the label field and the
+            free-text fields.
+        raw_text: Raw response text.
+        confidence_scale: Scale the confidence is reported on.
+
+    Returns:
+        The parsed payload, or `None` when no JSON object decodes, and the parse
+        status: `ok`, `invalid_json`, `invalid_confidence`, `invalid_label` or
+        `missing_fields`.
+
+    Raises:
+        ValueError: If the task is unknown.
     """
     json_text = extract_json_object(raw_text)
     if json_text is None:
@@ -4937,6 +6926,20 @@ def parse_task_response(
 def parse_instructor_task_response(
     task: str, raw_text: str
 ) -> tuple[dict[str, Any] | None, str]:
+    """Parse one response against the strict per-task response model.
+
+    Validation uses `structured_outputs.validated_json_for_task`, so nothing is
+    repaired except lifting the JSON object out of surrounding prose, which is
+    recorded as a prose-wrapper repair.
+
+    Args:
+        task: Task whose response model validates the object.
+        raw_text: Raw response text.
+
+    Returns:
+        The validated payload, or `None`, and the parse status: `ok`,
+        `invalid_json` or `instructor_validation_error`.
+    """
     json_text = extract_json_object(raw_text)
     if json_text is None:
         return None, "invalid_json"
@@ -4952,7 +6955,14 @@ def parse_instructor_task_response(
 
 
 def parse_repairs_for_record(row: Mapping[str, Any]) -> list[str]:
-    """Repairs recorded on a raw row; empty for conforming and pre-field rows."""
+    """Return a raw row's recorded repairs; empty for conforming and pre-field rows.
+
+    Args:
+        row: Raw row whose `parsed_json` may carry the repair list.
+
+    Returns:
+        The repair names as strings.
+    """
     parsed = row.get("parsed_json")
     if not isinstance(parsed, Mapping):
         return []
@@ -4963,11 +6973,17 @@ def parse_repairs_for_record(row: Mapping[str, Any]) -> list[str]:
 
 
 def parse_repair_counts(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
-    """Repair histogram over raw rows, for run-quality reporting.
+    """Count parse repairs over raw rows, for run-quality reporting.
 
     `repaired_records` counts rows that needed at least one repair; the other
     keys count how often each individual repair was applied. A run whose rows
     all parsed as sent reports `{"repaired_records": 0}`.
+
+    Args:
+        raw_rows: Raw rows of a run.
+
+    Returns:
+        The repair histogram.
     """
     counts: dict[str, int] = {"repaired_records": 0}
     for row in raw_rows:
@@ -4981,6 +6997,25 @@ def parse_repair_counts(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str, int]
 
 
 def batch_prompt_for_completion_jobs(jobs: list[Mapping[str, Any]]) -> str:
+    """Render the batched prompt that asks for one result per job.
+
+    Every item is listed as JSON with its `request_index`, under task-specific
+    instructions that ask for a `results` array keyed by `request_index` and for
+    confidence as a decimal between 0.0 and 1.0. Task 2 items carry their
+    document context in the document arm, and Task 3 items carry a declared
+    extracted modality in the declared audit modes.
+
+    Args:
+        jobs: Planned completion jobs of one batch, in prompt order; all must
+            share one task and one item context.
+
+    Returns:
+        The rendered batch prompt.
+
+    Raises:
+        ValueError: If `jobs` is empty, mixes tasks or item contexts, or its task
+            cannot be batched.
+    """
     if not jobs:
         raise ValueError("Cannot build a batch prompt for an empty job list.")
     task = str(jobs[0]["task"])
@@ -5119,13 +7154,21 @@ BATCH_WRAPPER_PROBE_ITEM = {
 def batch_prompt_wrapper_sha(
     task: str, item_context: str = DEFAULT_ITEM_CONTEXT
 ) -> str:
-    """SHA-256 of the batch prompt wrapper for ``task`` and ``item_context``.
+    """Return the SHA-256 of the batch prompt wrapper for `task` and `item_context`.
 
-    Renders :func:`batch_prompt_for_completion_jobs` for two fixed dummy jobs
+    Renders `batch_prompt_for_completion_jobs` for two fixed dummy jobs
     (request_index 0 and 1, fixed placeholder statements) so the digest depends
     only on the instruction envelope and item layout, not on real benchmark
-    content. Hashed into ``compute_job_config_sha`` for batched plans (v3) so
-    editing the wrapper invalidates cached batched rows on resume.
+    content. Hashed into `compute_job_config_sha` for batched plans
+    (`JOB_CONFIG_SHA_VERSION` 3) so editing the wrapper invalidates cached
+    batched rows on resume.
+
+    Args:
+        task: Task whose wrapper is fingerprinted.
+        item_context: `bare` or `document`.
+
+    Returns:
+        The hex digest, cached per argument pair.
     """
     probe_jobs = [
         {
@@ -5142,6 +7185,21 @@ def batch_prompt_wrapper_sha(
 def parse_batch_completion_results(
     raw_text: str,
 ) -> tuple[dict[int, dict[str, Any]], str]:
+    """Parse a batched response into per-item results keyed by request index.
+
+    Accepts a `{"results": [...]}` object or a bare array. Each result is keyed by
+    its `request_index`, or by `id` when that is absent; a result without a
+    usable index gets the negative key `-(position + 1)`, so it matches no
+    planned job. Entries that are not objects are skipped, and only the first
+    result per index is kept.
+
+    Args:
+        raw_text: Raw response text.
+
+    Returns:
+        The results by request index and the parse status: `ok`, `invalid_json`,
+        `missing_results` or `duplicate_request_index`.
+    """
     payload = extract_json_value(raw_text)
     if payload is None:
         return {}, "invalid_json"
@@ -5203,7 +7261,15 @@ NON_RETRYABLE_STATUS_CODES = frozenset({400, 401, 403, 404, 422})
 
 
 def request_payload_sha(request_kwargs: Mapping[str, Any]) -> str:
-    """SHA-256 over the canonical JSON of the request payload actually sent."""
+    """Return the SHA-256 over the canonical JSON of the request payload actually sent.
+
+    Args:
+        request_kwargs: Keyword arguments of the provider call; only the fields in
+            `REQUEST_PAYLOAD_SHA_FIELDS` are hashed.
+
+    Returns:
+        The hex digest.
+    """
     payload = {
         key: request_kwargs.get(key)
         for key in REQUEST_PAYLOAD_SHA_FIELDS
@@ -5221,12 +7287,19 @@ def request_payload_sha(request_kwargs: Mapping[str, Any]) -> str:
 
 
 def transcript_request_payload(request_kwargs: Mapping[str, Any]) -> dict[str, Any]:
-    """JSON-safe copy of the payload actually sent, for the run transcript.
+    """Return a JSON-safe copy of the payload actually sent, for the run transcript.
 
     Everything a provider request carries is already JSON except Instructor's
     `response_model`, which is a Pydantic class; it is rendered as its name so
     the transcript stays a plain JSONL file. The API key is never here -- it
     lives on the client, not in the payload.
+
+    Args:
+        request_kwargs: Keyword arguments of the provider call.
+
+    Returns:
+        The payload, with values that are not JSON-serializable replaced by their
+        `__name__` or `repr`.
     """
     payload: dict[str, Any] = {}
     for key, value in request_kwargs.items():
@@ -5258,6 +7331,14 @@ def is_model_output_format_error(exc: BaseException) -> bool:
     Re-generating this answer would replace a failed sample with a new draw.
     Match narrowly: other 5xx errors still use the ordinary transport policy.
     Some validation clients wrap the original exception in their cause chain.
+
+    Args:
+        exc: Exception raised by a provider call; its cause and context chain is
+            searched as well.
+
+    Returns:
+        True when the message or body of an exception in the chain says the model
+        output does not match the expected PEG-native format.
     """
     seen: set[int] = set()
     current: BaseException | None = exc
@@ -5275,10 +7356,19 @@ def is_model_output_format_error(exc: BaseException) -> bool:
 
 
 def is_transient_provider_error(exc: BaseException) -> bool:
-    """True for transport/service failures, but not generated-output rejections.
+    """Return True for transport or service failures, not generated-output rejections.
 
     Deliberately excludes 400/401/403-class failures: a budget or auth rejection
     will never succeed on retry and must surface immediately.
+
+    Args:
+        exc: Exception raised by a provider call.
+
+    Returns:
+        True for status codes 408, 429 and 5xx and, when no status code is
+        available, for OpenAI timeout, connection, rate-limit and server errors
+        and builtin timeout and connection errors. False for 400, 401, 403, 404
+        and 422 and for generated-output rejections.
     """
     if is_model_output_format_error(exc):
         return False
@@ -5299,7 +7389,15 @@ def is_transient_provider_error(exc: BaseException) -> bool:
 def retry_delay_seconds(
     attempt: int, base_delay_s: float = RETRY_BASE_DELAY_S
 ) -> float:
-    """Exponential backoff with full jitter for the given zero-based attempt."""
+    """Return an exponential backoff delay with full jitter for a zero-based attempt.
+
+    Args:
+        attempt: Zero-based attempt number.
+        base_delay_s: Delay scale in seconds.
+
+    Returns:
+        A delay drawn uniformly between 0 and `base_delay_s * 2**attempt`.
+    """
     return random.uniform(0.0, base_delay_s * (2**attempt))
 
 
@@ -5312,13 +7410,22 @@ def call_with_retries(
 ) -> tuple[Any, int, BaseException | None]:
     """Run `call`, retrying transient provider failures with bounded backoff.
 
-    Returns (result, retry_count, error). `max_retries` is the number of total
-    attempts (3 means one initial call plus two retries); non-transient errors
-    fail fast on the first attempt.
+    `max_retries` is the number of total attempts (3 means one initial call plus
+    two retries); non-transient errors fail fast on the first attempt.
 
     `on_attempt_error(attempt, exc)` is called for every attempt that is
     retried, so a transcript can keep the attempts that only survive here as a
     count. The final failure is returned rather than reported through it.
+
+    Args:
+        call: Provider call without arguments.
+        max_retries: Total number of attempts; at least one is made.
+        base_delay_s: Backoff scale passed to `retry_delay_seconds`.
+        on_attempt_error: Callback for each failed attempt that is retried.
+
+    Returns:
+        `(result, retry_count, error)`: the call's result or `None`, the number of
+        retries made, and the final exception or `None` on success.
     """
     attempts = max(1, int(max_retries))
     retry_count = 0
@@ -5338,7 +7445,16 @@ def call_with_retries(
 
 
 def provider_error_record(error: BaseException) -> dict[str, Any]:
-    """Retain an HTTP failure's body without copying request headers or credentials."""
+    """Retain an HTTP failure's body without copying request headers or credentials.
+
+    Args:
+        error: Exception raised by a provider call.
+
+    Returns:
+        A dict with `error` (the exception's repr), `error_kind`
+        (`model_output_format` or `provider_error`), `status_code`,
+        `response_json` (the decoded response or the error body) and `raw_text`.
+    """
     response = getattr(error, "response", None)
     body = getattr(error, "body", None)
     raw_text = ""
@@ -5379,6 +7495,36 @@ def chat_completion(
     seed: int | None = DEFAULT_REQUEST_SEED,
     max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> dict[str, Any]:
+    """Send one chat-completion request to an OpenAI-compatible endpoint.
+
+    The SDK's own retries are disabled, so `call_with_retries` is the only retry
+    mechanism and every retried attempt is recorded. Every result carries the
+    transcript provenance: the JSON-safe request payload, its
+    `request_payload_sha`, the request seed, the errors of retried attempts and
+    the start time.
+
+    Args:
+        host: Provider base URL.
+        model: Model id requested from the provider.
+        prompt: Prompt sent as the single user message.
+        temperature: Sampling temperature.
+        top_p: Nucleus-sampling threshold.
+        max_tokens: Completion token limit.
+        timeout_s: Request timeout in seconds.
+        api_key_env: Name of the environment variable holding the provider key;
+            `EMPTY` is sent when it is unset.
+        logprobs: Request token log probabilities.
+        top_logprobs: Alternatives per token, sent only with `logprobs`.
+        response_format: Response format sent with the request.
+        extra_body: Provider-specific request body.
+        seed: Request seed; `None` sends no seed.
+        max_retries: Total attempts allowed by `call_with_retries`.
+
+    Returns:
+        A result with `ok`, `raw_text`, `response_json`, `latency_s`, `error` and
+        `retry_count` plus the provenance fields; a failed request also carries
+        the fields of `provider_error_record`.
+    """
     api_key = os.getenv(api_key_env, "EMPTY")
     # max_retries=0: the SDK's own retry loop is invisible to us, so it would
     # silently inflate wall-clock latency and hide attempts from retry_count.
@@ -5462,6 +7608,18 @@ def chat_completion(
 
 
 def normalize_instructor_mode_name(value: Any) -> str:
+    """Map an Instructor mode name or alias to its canonical name.
+
+    Args:
+        value: Mode name such as `json`, `tools`, `strict` or `markdown_json`;
+            empty means `json`, case is ignored and hyphens count as underscores.
+
+    Returns:
+        `json`, `tools`, `tools_strict` or `md_json`.
+
+    Raises:
+        ValueError: If the name is not a known alias.
+    """
     normalized = str(value or "json").strip().lower().replace("-", "_")
     aliases = {
         "json": "json",
@@ -5480,6 +7638,14 @@ def normalize_instructor_mode_name(value: Any) -> str:
 
 
 def instructor_mode_value(value: Any) -> Any:
+    """Return the `instructor.Mode` member for an Instructor mode name.
+
+    Args:
+        value: Mode name or alias accepted by `normalize_instructor_mode_name`.
+
+    Returns:
+        The matching `instructor.Mode` member.
+    """
     import instructor
 
     mode = normalize_instructor_mode_name(value)
@@ -5494,6 +7660,17 @@ def instructor_mode_value(value: Any) -> Any:
 def instructor_extra_body(
     extra_body: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
+    """Return `extra_body` without `response_format`, for the Instructor path.
+
+    Instructor derives the response schema from the response model, so a
+    `response_format` entry is dropped.
+
+    Args:
+        extra_body: Provider-specific request body of the profile.
+
+    Returns:
+        The remaining entries, or `None` when none remain.
+    """
     if not extra_body:
         return None
     cleaned = {
@@ -5521,6 +7698,48 @@ def instructor_completion(
     seed: int | None = DEFAULT_REQUEST_SEED,
     max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> dict[str, Any]:
+    """Send one request through Instructor, validating the reply with a response model.
+
+    `response_format` is accepted for call-signature parity with
+    `chat_completion` and ignored, because Instructor derives the schema from the
+    response model. Two retry loops stay separate: Instructor's own loop retries
+    failed attempts, including schema-validation failures, but never the server's
+    generated-output rejection, while `call_with_retries` retries transport
+    failures and records them.
+
+    Args:
+        host: Provider base URL.
+        model: Model id requested from the provider.
+        prompt: Prompt sent as the single user message.
+        temperature: Sampling temperature.
+        top_p: Nucleus-sampling threshold.
+        max_tokens: Completion token limit.
+        timeout_s: Request timeout in seconds.
+        api_key_env: Name of the environment variable holding the provider key;
+            `EMPTY` is sent when it is unset.
+        response_format: Ignored; see above.
+        extra_body: Provider-specific request body, cleaned with
+            `instructor_extra_body`.
+        task: Task whose response model is used when `response_model` is not
+            given.
+        batched: Use the batched response model of the task.
+        instructor_mode: Instructor mode name or alias.
+        validation_retries: Attempts Instructor makes to obtain a schema-valid
+            reply; at least one is made.
+        response_model: Pydantic model that overrides the task's response model.
+        seed: Request seed; `None` sends no seed.
+        max_retries: Total transport attempts allowed by `call_with_retries`.
+
+    Returns:
+        A result with `ok`, `raw_text`, `response_json`, `latency_s`, `error`,
+        `retry_count` and the request payload, its SHA, seed and attempt errors.
+        On success `raw_text` is the validated payload as JSON and
+        `response_json` holds it under `instructor_validated`, merged with the
+        provider response. On failure the result also carries the fields of
+        `provider_error_record`, `raw_text` holds the rejected output or the last
+        completion, and `parse_status_override` is `instructor_validation_error`
+        for validation and retry errors.
+    """
     # response_format is accepted for call-signature parity with chat_completion;
     # Instructor derives the schema from response_model instead.
     import instructor
@@ -5643,6 +7862,18 @@ def instructor_completion(
 
 
 def normalize_logprob_tokens(content: Any) -> list[dict[str, Any]]:
+    """Normalize a provider's token log-probability entries to one shape.
+
+    Entries that are not dicts or whose `logprob` is not numeric are skipped.
+
+    Args:
+        content: Token entries as returned by the provider, each with `token`,
+            `logprob` and optionally `top_logprobs`.
+
+    Returns:
+        Dicts with the `token` as a string, the `logprob` as a float and the
+        `top_logprobs` as given; empty when `content` is not a list.
+    """
     if not isinstance(content, list):
         return []
     tokens: list[dict[str, Any]] = []
@@ -5668,6 +7899,19 @@ def normalize_logprob_tokens(content: Any) -> list[dict[str, Any]]:
 def response_logprob_tokens(
     response_json: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
+    """Extract token log probabilities from a chat-completion or Responses API payload.
+
+    Looks in the first choice's `logprobs.content` (chat completions), then in
+    the `logprobs` of the `output` items and their `content` parts (Responses
+    API), and finally in a top-level `logprobs` list; the first location that
+    yields tokens wins.
+
+    Args:
+        response_json: Provider response payload.
+
+    Returns:
+        The normalized token entries, empty when none are found.
+    """
     if not isinstance(response_json, dict):
         return []
 
@@ -5700,6 +7944,15 @@ def response_logprob_tokens(
 
 
 def responses_endpoint_url(host: str) -> str:
+    """Return the Responses API endpoint for a provider base URL.
+
+    Args:
+        host: Provider base URL, with or without `/v1` or `/responses` at the end.
+
+    Returns:
+        The URL ending in `/v1/responses`, or the host itself when it already
+        ends in `/responses`.
+    """
     base = host.rstrip("/")
     if base.endswith("/responses"):
         return base
@@ -5709,6 +7962,17 @@ def responses_endpoint_url(host: str) -> str:
 
 
 def responses_output_text(response_json: dict[str, Any] | None) -> str:
+    """Return the generated text of a Responses API payload.
+
+    Uses `output_text` when present; otherwise concatenates the `text` of each
+    `output` item and of its `content` parts.
+
+    Args:
+        response_json: Responses API payload.
+
+    Returns:
+        The text, empty when the payload is not a dict or carries none.
+    """
     if not isinstance(response_json, dict):
         return ""
     output_text = response_json.get("output_text")
@@ -5740,6 +8004,26 @@ def logprob_support_probe(
     timeout_s: int = 120,
     max_tokens: int = 48,
 ) -> dict[str, Any]:
+    """Probe whether an endpoint returns token log probabilities via the Responses API.
+
+    Posts `LOGPROB_PROBE_PROMPT` to the Responses endpoint and asks for
+    output-text log probabilities with five alternatives per token. Request
+    failures are recorded in the result rather than raised.
+
+    Args:
+        host: Provider base URL.
+        model: Model id to probe.
+        api_key_env: Name of the environment variable holding the provider key;
+            no `Authorization` header is sent when it is unset.
+        timeout_s: Request timeout in seconds.
+        max_tokens: Output token limit of the probe.
+
+    Returns:
+        The probe result with `model`, `host`, `endpoint`, `supported` (the
+        request succeeded and returned tokens), `token_count`, the requested
+        `include` and `top_logprobs`, `raw_text` (the output text or the first 500
+        characters of the body), `error` and `latency_s`.
+    """
     endpoint = responses_endpoint_url(host)
     api_key = os.getenv(api_key_env, "")
     headers = {"Content-Type": "application/json"}
@@ -5788,6 +8072,14 @@ def logprob_support_probe(
 
 
 def new_run_id(prefix: str = "run") -> str:
+    """Return a new run id built from a prefix, the local time and a random suffix.
+
+    Args:
+        prefix: Leading part of the id.
+
+    Returns:
+        An id of the form `<prefix>-YYYYmmdd-HHMMSS-<8 hex digits>`.
+    """
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     return f"{prefix}-{timestamp}-{uuid.uuid4().hex[:8]}"
 
@@ -5815,6 +8107,15 @@ def extract_response_fields(response_json: Any) -> dict[str, Any]:
 
     Missing values stay at their empty defaults ("" for strings, None for token
     counts) so downstream tables have a stable schema regardless of provider.
+
+    Args:
+        response_json: Provider response payload; anything but a mapping yields
+            the defaults.
+
+    Returns:
+        `finish_reason`, the prompt, completion and total token counts (the
+        Responses API names `input_tokens` and `output_tokens` are accepted),
+        `served_model`, `system_fingerprint` and `response_id`.
     """
     fields = dict(EMPTY_RESPONSE_FIELDS)
     if not isinstance(response_json, Mapping):
@@ -5884,6 +8185,69 @@ def build_raw_record(
     batch_variant_mix: int | str = "",
     item_context: str = DEFAULT_ITEM_CONTEXT,
 ) -> dict[str, Any]:
+    """Build the raw record of one item from a completed provider request.
+
+    The response is parsed with `parse_instructor_task_response` for the
+    Instructor output contract and with `parse_task_response` otherwise. A
+    completion's `parse_status_override` replaces the parse status and drops the
+    parsed payload; a failed request becomes `model_output_error` or
+    `request_error`, and a parse failure cut off at the token limit becomes
+    `truncated`. Optional provenance is written only when set, selected item
+    fields are copied, and every field except `parsed_json` is checked with
+    `assert_no_credential_shaped_values` before the record is returned.
+
+    Args:
+        run_id: Run the record belongs to.
+        model: Model id requested from the provider.
+        host: Provider base URL.
+        task: Task name; selects the response parser.
+        item: Benchmark or audit item, with at least `item_id`, `seed_id` and
+            `source_modality`.
+        sample_index: Index of the sample within its kind.
+        sample_kind: `deterministic` or `stochastic`.
+        temperature: Sampling temperature.
+        top_p: Nucleus-sampling threshold.
+        prompt_version: Prompt version of the run.
+        prompt: Single-item prompt of the job.
+        completion: Result of `chat_completion` or `instructor_completion`.
+        request_index: Position of the job in the run's plan.
+        provider_id: Provider id of the profile.
+        profile_id: Profile id within the run config.
+        run_group_id: Run group of the run config.
+        base_url: Provider base URL recorded as `base_url`.
+        api_key_env: Name of the environment variable holding the provider key.
+        json_mode: JSON-mode switch of the profile.
+        structured_output: Structured-output mode or alias; `none` is not
+            recorded.
+        response_format: Response format sent with the request.
+        request_extra_body: Provider-specific request body that was sent.
+        server_model_probe: Result of the server preflight check.
+        batch_id: Id of the batched request; empty for single-item requests.
+        batch_size: Batch size recorded on the row.
+        batch_item_count: Number of items the batched request carried.
+        batch_prompt_hash: Hash of the batch prompt.
+        output_contract_version: Output contract of the request; when empty and
+            the prompt version or text asks for 0-1 confidence, the prompt
+            contract is recorded.
+        confidence_scale: Confidence scale of the response; inferred with
+            `confidence_scale_for_record` when empty.
+        job_config_sha: Config fingerprint of the job.
+        job_config_sha_version: Fingerprint version recorded on the row.
+        request_seed: Seed sent with the request; recorded when the completion
+            carries none.
+        max_tokens: Completion token limit, used with the sampling settings,
+            `request_seed`, `response_format` and `request_extra_body` to
+            recompute the payload SHA when the completion carries none.
+        batch_order: Batch composition, `grouped` or `shuffled`.
+        batch_seed_ids: Seed ids sharing the batched request; defaults to the
+            item's own seed id.
+        batch_variant_mix: Number of distinct source modalities in the batch;
+            defaults to 1.
+        item_context: `bare` or `document`.
+
+    Returns:
+        The raw record.
+    """
     record_contract_version = output_contract_version
     record_confidence_scale = confidence_scale
     if not record_contract_version and (
@@ -6079,7 +8443,15 @@ def build_raw_record(
 
 
 def batch_composition(jobs: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """Auditable summary of which items share one batched provider request."""
+    """Summarize which items share one batched provider request, for auditing.
+
+    Args:
+        jobs: Jobs of one batched request.
+
+    Returns:
+        `batch_seed_ids`, the sorted distinct seed ids, and `batch_variant_mix`,
+        the number of distinct source modalities.
+    """
     items = [dict(job.get("item", {})) for job in jobs]
     return {
         "batch_seed_ids": sorted({str(item.get("seed_id", "")) for item in items}),
@@ -6109,6 +8481,25 @@ def _job_record(
     Centralizes the ~20 job-derived fields shared by the single, batch, and
     instructor-batch completion paths; callers supply only the fields that
     genuinely differ between paths.
+
+    Args:
+        job: Planned job; supplies the run, model, sampling, prompt and
+            provenance fields.
+        completion: Result of the completion call.
+        request_index: Position of the job in the run's plan.
+        response_format: Response format sent with the request.
+        request_extra_body: Provider-specific request body that was sent.
+        batch_id: Id of the batched request; empty for single-item requests.
+        batch_size: Batch size recorded on the row.
+        batch_item_count: Number of items the batched request carried.
+        batch_prompt_hash: Hash of the batch prompt.
+        output_contract_version: Output contract of the request.
+        confidence_scale: Confidence scale of the response; inferred when empty.
+        batch_jobs: Jobs that shared the request, summarized with
+            `batch_composition`; defaults to `job` alone.
+
+    Returns:
+        The raw record built by `build_raw_record`.
     """
     composition = batch_composition(batch_jobs if batch_jobs is not None else [job])
     return build_raw_record(
@@ -6155,12 +8546,30 @@ def _job_record(
 
 
 def job_uses_instructor(job: Mapping[str, Any]) -> bool:
+    """Return whether a job is answered through Instructor.
+
+    Args:
+        job: Planned completion job; its `structured_output` mode decides.
+
+    Returns:
+        True when the structured-output mode is `instructor`.
+    """
     return (
         normalize_structured_output_mode(job.get("structured_output")) == "instructor"
     )
 
 
 def output_contract_version_for_job(job: Mapping[str, Any]) -> str:
+    """Return the output contract version a job's responses follow.
+
+    Args:
+        job: Planned completion job.
+
+    Returns:
+        `structured_outputs.INSTRUCTOR_OUTPUT_CONTRACT_VERSION` for Instructor
+        jobs, `structured_outputs.PROMPT_OUTPUT_CONTRACT_VERSION` for prompt
+        versions with 0-1 confidence, and an empty string otherwise.
+    """
     if job_uses_instructor(job):
         return so.INSTRUCTOR_OUTPUT_CONTRACT_VERSION
     if prompt_version_uses_confidence_0_1(job.get("prompt_version")):
@@ -6169,6 +8578,16 @@ def output_contract_version_for_job(job: Mapping[str, Any]) -> str:
 
 
 def confidence_scale_for_job(job: Mapping[str, Any]) -> str:
+    """Return the confidence scale a job's responses are known to use.
+
+    Args:
+        job: Planned completion job.
+
+    Returns:
+        `CONFIDENCE_SCALE_0_1` for Instructor jobs and prompt versions with 0-1
+        confidence; otherwise an empty string, which leaves the scale to be
+        inferred from the record.
+    """
     if job_uses_instructor(job) or prompt_version_uses_confidence_0_1(
         job.get("prompt_version")
     ):
@@ -6180,6 +8599,19 @@ def completion_runner_for_job(
     job: Mapping[str, Any],
     completion_fn: Callable[..., dict[str, Any]],
 ) -> Callable[..., dict[str, Any]]:
+    """Return the completion function that answers a job.
+
+    Instructor jobs are routed to `instructor_completion` when the caller passed
+    the default `chat_completion`; any other function, such as a test fake, is
+    used as given.
+
+    Args:
+        job: Planned completion job.
+        completion_fn: Completion function chosen by the caller.
+
+    Returns:
+        `instructor_completion` or `completion_fn`.
+    """
     if job_uses_instructor(job) and completion_fn is chat_completion:
         return instructor_completion
     return completion_fn
@@ -6194,6 +8626,24 @@ def completion_kwargs_for_job(
     extra_body: Mapping[str, Any] | None,
     batched: bool,
 ) -> dict[str, Any]:
+    """Build the keyword arguments of the completion call for a job.
+
+    Instructor jobs also get the task, the batching flag, the Instructor mode, the
+    validation retries and the task's response model.
+
+    Args:
+        job: Planned completion job; supplies host, model, sampling, timeout, key,
+            seed and retry settings.
+        prompt: Prompt to send, the job's own or a batch prompt.
+        max_tokens: Completion token limit of the request.
+        response_format: Response format to send.
+        extra_body: Provider-specific request body to send.
+        batched: The request answers several jobs; selects the batched response
+            model.
+
+    Returns:
+        Keyword arguments for `chat_completion` or `instructor_completion`.
+    """
     kwargs: dict[str, Any] = {
         "host": str(job["host"]),
         "model": str(job["model"]),
@@ -6237,7 +8687,18 @@ class TranscriptSink(Protocol):
         batch_id: str = "",
         batch_size: int = 1,
         request_indices: Any = (),
-    ) -> None: ...
+    ) -> None:
+        """Write the attempts behind one provider call.
+
+        Args:
+            job: Any planned completion job of the call (the first one, for a
+                batch); supplies the run identity.
+            completion: The dict the completion function returned.
+            batch_id: Batch wrapper identifier; empty for a single-item call.
+            batch_size: Number of items the call carried.
+            request_indices: Request indices of the items the call covered.
+        """
+        ...
 
 
 def run_completion_job(
@@ -6246,6 +8707,17 @@ def run_completion_job(
     *,
     transcript: TranscriptSink | None = None,
 ) -> dict[str, Any]:
+    """Run one single-item completion job and build its raw record.
+
+    Args:
+        job: Planned completion job.
+        completion_fn: Completion function; Instructor jobs are routed to
+            `instructor_completion` when this is `chat_completion`.
+        transcript: Sink that records the request and its completion.
+
+    Returns:
+        The raw record of the job.
+    """
     runner = completion_runner_for_job(job, completion_fn)
     completion = runner(
         **completion_kwargs_for_job(
@@ -6279,6 +8751,18 @@ def run_completion_job(
 
 
 def completion_batch_key(job: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Return the request settings that jobs must share to be batched together.
+
+    The key covers endpoint, model, run, task, sample kind and index, sampling,
+    prompt version, limits, profile, structured-output and seed settings and the
+    batch order; the items themselves are not part of it.
+
+    Args:
+        job: Planned completion job.
+
+    Returns:
+        The batching key.
+    """
     return (
         str(job.get("host", "")),
         str(job.get("model", "")),
@@ -6319,22 +8803,36 @@ def _shuffled_group_jobs(
     seed: Any,
     batch_size: int = 1,
 ) -> list[list[dict[str, Any]]]:
-    """Deterministic seed-disjoint batches for one batch-key group.
+    """Build deterministic seed-disjoint batches for one batch-key group.
 
-    Seeding the RNG from a SHA-256 of ``(seed, batch key)`` keeps the permutation
+    Seeding the RNG from a SHA-256 of `(seed, batch key)` keeps the permutation
     stable across processes and independent of dict iteration order, so a
     `shuffled` run is exactly reproducible from its recorded seed.
 
     The permutation is applied to the SEED GROUPS (and to the variants within a
     seed), not to the flat job list: the jobs of one seed are then handed out to
     distinct batches, always filling the currently emptiest one. So a shuffled
-    batch holds ``batch_size`` DIFFERENT seeds -- the point of the ablation is to
+    batch holds `batch_size` DIFFERENT seeds -- the point of the ablation is to
     break the grouped default's "4 variants of one seed in one prompt" confound,
     and a plain shuffle would still collide two variants of a seed in the same
-    request by chance. When a group has fewer distinct seeds than ``batch_size``
+    request by chance. When a group has fewer distinct seeds than `batch_size`
     (or a seed has more jobs than there are batches) a collision is unavoidable;
     the batches are still filled, and the shortfall is logged as a warning rather
     than passing silently.
+
+    Args:
+        ordered: Jobs of one batch-key group in request order.
+        group_key: Batch key of the group, mixed into the RNG seed.
+        seed: Recorded seed of the run.
+        batch_size: Jobs per batch; values below 1 count as 1.
+
+    Returns:
+        The batches, as many as needed to hold all jobs at `batch_size` per
+        batch.
+
+    Raises:
+        RuntimeError: If no batch has room for a job, which the batch count rules
+            out.
     """
     digest = sha256_text(f"{seed}|{compact_json([str(part) for part in group_key])}")
     rng = random.Random(int(digest[:16], 16))
@@ -6409,11 +8907,24 @@ def completion_job_batches(
     themselves.
 
     `planned_jobs` makes resume batch-stable: pass the FULL plan there and the
-    already-completed subset in `jobs`, and the batches are computed over the
-    plan and then filtered (by :func:`completion_record_key`) to the jobs that
-    still have to run, dropping batches that are left empty. Without it a resumed
-    run would re-shuffle the pending subset and send different batch neighbours
-    than the first attempt.
+    jobs that still have to run in `jobs`, and the batches are computed over the
+    plan and then filtered (by `completion_record_key`) to those pending jobs,
+    dropping batches that are left empty. Without it a resumed run would
+    re-shuffle the pending subset and send different batch neighbours than the
+    first attempt.
+
+    Args:
+        jobs: Jobs to batch; with `planned_jobs`, the jobs that still have to
+            run.
+        batch_size: Jobs per provider request; 1 gives one batch per job.
+        batch_order: `grouped` or `shuffled`; defaults to the first job's
+            `batch_order`.
+        seed: Seed of the shuffled order; defaults to the first job's `seed`.
+        planned_jobs: Full plan of the run, for batch-stable resume.
+
+    Returns:
+        The batches; batch-key groups are ordered by their smallest request
+        index, and an empty `jobs` gives no batches.
     """
     job_list = [dict(job) for job in jobs]
     if not job_list:
@@ -6480,11 +8991,17 @@ BATCH_DRIVER_PROVENANCE_FIELDS = ("request_payload_sha", "request_seed", "retry_
 
 
 def batch_driver_provenance(completion: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the driver provenance fields present on a batch ``completion``.
+    """Return the driver provenance fields present on a batch `completion`.
 
-    Absent keys are omitted rather than defaulted, so build_raw_record keeps its
+    Absent keys are omitted rather than defaulted, so `build_raw_record` keeps its
     fallbacks (job seed, locally recomputed payload sha) for drivers that do not
     report them.
+
+    Args:
+        completion: Result of the batch's provider call.
+
+    Returns:
+        The fields of `BATCH_DRIVER_PROVENANCE_FIELDS` that the completion carries.
     """
     return {
         key: completion[key]
@@ -6498,6 +9015,22 @@ def valid_instructor_batch_results(
     parsed_results: Mapping[int, Mapping[str, Any]],
     jobs: list[Mapping[str, Any]],
 ) -> tuple[dict[int, dict[str, Any]], list[dict[str, Any]]]:
+    """Split a batched Instructor response into valid results and jobs to re-send.
+
+    A job's result, without its `request_index`, must pass
+    `parse_instructor_task_response`, and the response must not carry results for
+    request indices outside the batch; otherwise the job falls back to a
+    single-item request.
+
+    Args:
+        task: Task whose response model validates each result.
+        parsed_results: Results of the batched response keyed by request index,
+            as returned by `parse_batch_completion_results`.
+        jobs: Jobs of the batch.
+
+    Returns:
+        The valid results by request index and copies of the jobs to re-send.
+    """
     expected = {int(job["request_index"]) for job in jobs}
     valid: dict[int, dict[str, Any]] = {}
     fallback_jobs: list[dict[str, Any]] = []
@@ -6526,6 +9059,23 @@ def run_instructor_completion_batch(
     *,
     transcript: TranscriptSink | None = None,
 ) -> list[dict[str, Any]]:
+    """Run a batch of Instructor jobs in one request, re-sending failed items alone.
+
+    A batch of one job runs as a single-item job. Otherwise the batch prompt is
+    sent with the batched response model and a token limit scaled by the number of
+    jobs. A generated-output rejection becomes the record of every job in the
+    batch. Otherwise each item whose result validates gets a record carrying the
+    batch request's provenance, and every other job is re-run on its own.
+
+    Args:
+        jobs: Jobs of one batch, sharing a batch key.
+        completion_fn: Completion function; routed to `instructor_completion`
+            when this is `chat_completion`.
+        transcript: Sink that records every provider call.
+
+    Returns:
+        The raw records in job order.
+    """
     if not jobs:
         return []
     if len(jobs) == 1:
@@ -6639,6 +9189,26 @@ def run_completion_batch(
     *,
     transcript: TranscriptSink | None = None,
 ) -> list[dict[str, Any]]:
+    """Run a batch of jobs in one provider request, re-sending failed items alone.
+
+    A batch of one job runs as a single-item job, and Instructor batches go to
+    `run_instructor_completion_batch`. Otherwise the batch prompt is sent with the
+    batched response format and a token limit scaled by the number of jobs. A
+    generated-output rejection becomes the record of every job in the batch,
+    because it is already that sample's result. When the request fails, every
+    job is re-sent alone through `_batch_fallback_record`, and so is each job
+    whose result is missing from the response; the other jobs get a record
+    carrying the batch request's provenance.
+
+    Args:
+        jobs: Jobs of one batch, sharing a batch key.
+        completion_fn: Completion function for the batch request and the
+            single-item re-sends.
+        transcript: Sink that records every provider call.
+
+    Returns:
+        The raw records in job order.
+    """
     if not jobs:
         return []
     if len(jobs) == 1:
@@ -6776,10 +9346,19 @@ def _batch_fallback_record(
     """Re-send one job of a failed batch as a single-item request.
 
     The record is the fallback's own record (its status, its payload sha), tagged
-    with ``batch_size = 1`` so a batched run stays auditable down to the rows that
+    with `batch_size = 1` so a batched run stays auditable down to the rows that
     were actually sent alone. Only when the fallback itself fails to parse does
-    the failure stand; the original batch error is then kept in ``error`` behind a
-    ``batch_fallback:`` prefix so the batch-level cause is not lost.
+    the failure stand; the original batch error is then kept in `error` behind a
+    `batch_fallback:` prefix so the batch-level cause is not lost.
+
+    Args:
+        job: Job of the failed batch.
+        completion_fn: Completion function for the re-send.
+        batch_error: Why the batch could not serve the job.
+        transcript: Sink that records the re-send.
+
+    Returns:
+        The raw record of the re-sent job.
     """
     record = run_completion_job(job, completion_fn=completion_fn, transcript=transcript)
     record["batch_size"] = 1
@@ -6802,14 +9381,28 @@ def run_completion_jobs(
     planned_jobs: Iterable[Mapping[str, Any]] | None = None,
     transcript: TranscriptSink | None = None,
 ) -> Iterable[dict[str, Any]]:
-    """Run planned jobs, batched per :func:`completion_job_batches`.
+    """Run planned jobs, batched per `completion_job_batches`.
 
-    ``planned_jobs`` carries the FULL plan on a resumed run so the pending subset
+    `planned_jobs` carries the FULL plan on a resumed run so the pending subset
     keeps the batch composition of the first attempt instead of being re-batched
-    on its own; see :func:`completion_job_batches`.
+    on its own; see `completion_job_batches`.
 
-    ``transcript`` receives one row per provider call, including the single-item
+    `transcript` receives one row per provider call, including the single-item
     re-sends a failed batch falls back to; None turns transcripts off.
+
+    Args:
+        jobs: Jobs to run.
+        max_workers: Upper bound on batches run concurrently; must be positive.
+        completion_fn: Completion function passed to every batch.
+        batch_size: Jobs per provider request.
+        batch_order: `grouped` or `shuffled`; defaults to the jobs' own setting.
+        seed: Seed of the shuffled order; defaults to the jobs' own seed.
+        planned_jobs: Full plan of a resumed run.
+        transcript: Sink for the provider calls.
+
+    Yields:
+        Raw records, batch by batch: in batch order with one worker, and in the
+        order the batches finish with several workers.
     """
     batches = completion_job_batches(
         jobs,
@@ -6853,18 +9446,50 @@ def run_completion_jobs(
 
 
 def accuracy_score(y_true: list[Any], y_pred: list[Any]) -> float:
+    """Return the share of predictions that equal the gold labels.
+
+    Args:
+        y_true: Gold labels.
+        y_pred: Predicted labels, aligned with `y_true`.
+
+    Returns:
+        The accuracy, or NaN when there are no labels.
+    """
     if not y_true:
         return math.nan
     return float(sklearn_accuracy_score(y_true, y_pred))
 
 
 def binary_f1_score(y_true: list[int], y_pred: list[int]) -> float:
+    """Return the F1 score of the positive class 1.
+
+    An undefined precision or recall counts as 0.
+
+    Args:
+        y_true: Gold labels, 0 or 1.
+        y_pred: Predicted labels, 0 or 1.
+
+    Returns:
+        The F1 score, or NaN when there are no labels.
+    """
     if not y_true:
         return math.nan
     return float(f1_score(y_true, y_pred, pos_label=1, zero_division=0))
 
 
 def macro_f1_score(y_true: list[str], y_pred: list[str], labels: list[str]) -> float:
+    """Return the unweighted mean of the per-class F1 scores.
+
+    An undefined per-class score counts as 0.
+
+    Args:
+        y_true: Gold labels.
+        y_pred: Predicted labels.
+        labels: Classes to average over, including classes that never occur.
+
+    Returns:
+        The macro F1 score, or NaN when there are no labels.
+    """
     if not y_true:
         return math.nan
     return float(
@@ -6873,12 +9498,35 @@ def macro_f1_score(y_true: list[str], y_pred: list[str], labels: list[str]) -> f
 
 
 def brier_score(y_true: list[int], probabilities: list[float]) -> float:
+    """Return the mean squared gap between predicted probabilities and binary outcomes.
+
+    Args:
+        y_true: Binary outcomes.
+        probabilities: Predicted probabilities of outcome 1.
+
+    Returns:
+        The Brier score, or NaN when there are no outcomes.
+    """
     if not y_true:
         return math.nan
     return float(brier_score_loss(y_true, probabilities))
 
 
 def ece_score(y_true: list[int], probabilities: list[float], bins: int = 10) -> float:
+    """Return the expected calibration error over equal-width probability bins.
+
+    Each non-empty bin contributes its share of the samples times the absolute
+    gap between its outcome rate and its mean probability. The last bin includes
+    1.0.
+
+    Args:
+        y_true: Binary outcomes.
+        probabilities: Predicted probabilities of outcome 1, between 0 and 1.
+        bins: Number of equal-width bins.
+
+    Returns:
+        The calibration error, or NaN when there are no outcomes.
+    """
     if not y_true:
         return math.nan
     y = np.asarray(y_true, dtype=float)
@@ -6900,6 +9548,18 @@ def ece_score(y_true: list[int], probabilities: list[float], bins: int = 10) -> 
 
 
 def spearman_corr(xs: list[float], ys: list[float]) -> float:
+    """Return the Spearman rank correlation of two paired samples.
+
+    Pairs with a NaN are omitted.
+
+    Args:
+        xs: First sample.
+        ys: Second sample, paired with `xs`.
+
+    Returns:
+        The correlation, or NaN for fewer than two pairs, unequal lengths or an
+        undefined result.
+    """
     if len(xs) < 2 or len(xs) != len(ys):
         return math.nan
     statistic = spearmanr(xs, ys, nan_policy="omit").statistic
@@ -6907,6 +9567,16 @@ def spearman_corr(xs: list[float], ys: list[float]) -> float:
 
 
 def pearson_corr(xs: list[float], ys: list[float]) -> float:
+    """Return the Pearson correlation of two paired samples, ignoring pairs with a NaN.
+
+    Args:
+        xs: First sample.
+        ys: Second sample, paired with `xs`.
+
+    Returns:
+        The correlation, or NaN for unequal lengths, fewer than two complete pairs
+        or a constant sample.
+    """
     if len(xs) < 2 or len(xs) != len(ys):
         return math.nan
     x = np.asarray(xs, dtype=float)
@@ -6920,6 +9590,16 @@ def pearson_corr(xs: list[float], ys: list[float]) -> float:
 
 
 def auroc_score(y_true: list[int], probabilities: list[float]) -> float:
+    """Return the area under the ROC curve of probabilities against binary outcomes.
+
+    Args:
+        y_true: Binary outcomes.
+        probabilities: Predicted probabilities of outcome 1.
+
+    Returns:
+        The AUROC, or NaN when there are no outcomes, only one class occurs or
+        scikit-learn rejects the input.
+    """
     if not y_true or len(set(y_true)) < 2:
         return math.nan
     try:
@@ -6929,6 +9609,18 @@ def auroc_score(y_true: list[int], probabilities: list[float]) -> float:
 
 
 def class_order_for_task(task: str) -> list[str]:
+    """Return the label set of a task in its canonical order.
+
+    Args:
+        task: `task1`, `task2` or `task3`.
+
+    Returns:
+        `yes` and `no`, the modalities of `MODALITIES` or the relations of
+        `TASK3_RELATIONS`.
+
+    Raises:
+        ValueError: If the task is unknown.
+    """
     if task == "task1":
         return ["yes", "no"]
     if task == "task2":
@@ -6939,6 +9631,20 @@ def class_order_for_task(task: str) -> list[str]:
 
 
 def label_from_parsed(task: str, parsed: dict[str, Any]) -> str:
+    """Return the canonical label of a parsed response.
+
+    Args:
+        task: `task1`, `task2` or `task3`; selects the `decision`, `modality` or
+            `relation` field.
+        parsed: Parsed response payload.
+
+    Returns:
+        The normalized label.
+
+    Raises:
+        ValueError: If the label is missing or unrecognized, or the task is
+            unknown.
+    """
     if task == "task1":
         decision = normalize_decision(parsed.get("decision"))
         if decision is None:
@@ -6958,6 +9664,16 @@ def label_from_parsed(task: str, parsed: dict[str, Any]) -> str:
 
 
 def label_distribution(labels: list[str], label_order: list[str]) -> dict[str, float]:
+    """Return the relative frequency of each label.
+
+    Args:
+        labels: Observed labels.
+        label_order: Labels to report, in order; labels outside it still count
+            towards the total.
+
+    Returns:
+        The share of each label in `label_order`, all 0.0 when `labels` is empty.
+    """
     if not labels:
         return dict.fromkeys(label_order, 0.0)
     counts = Counter(labels)
@@ -6968,11 +9684,30 @@ def label_distribution(labels: list[str], label_order: list[str]) -> dict[str, f
 def label_distribution_from_rows(
     task: str, rows: list[dict[str, Any]]
 ) -> dict[str, float]:
+    """Return the label distribution of a task's parsed raw rows.
+
+    Args:
+        task: Task of the rows; fixes the labels and their order.
+        rows: Raw rows with a parsed `parsed_json`.
+
+    Returns:
+        The share of each label of the task, in canonical order.
+    """
     labels = [label_from_parsed(task, row["parsed_json"]) for row in rows]
     return label_distribution(labels, class_order_for_task(task))
 
 
 def label_distribution_json(distribution: dict[str, float]) -> str:
+    """Serialize a label distribution as compact JSON with sorted keys.
+
+    Values are rounded to 12 decimal places.
+
+    Args:
+        distribution: Share per label.
+
+    Returns:
+        The JSON text.
+    """
     normalized = {
         label: round(float(value), 12) for label, value in distribution.items()
     }
@@ -6982,6 +9717,18 @@ def label_distribution_json(distribution: dict[str, float]) -> str:
 
 
 def normalized_predictive_entropy(distribution: dict[str, float]) -> float:
+    """Return the entropy of a label distribution divided by its maximum.
+
+    The maximum is the log of the number of labels, so the result lies between 0
+    (one label carries all mass) and 1 (uniform).
+
+    Args:
+        distribution: Share per label, including labels with zero share.
+
+    Returns:
+        The normalized entropy; 0.0 for fewer than two labels and NaN when no
+        label has a positive share.
+    """
     if len(distribution) < 2:
         return 0.0
     probabilities = np.asarray(
@@ -6994,12 +9741,36 @@ def normalized_predictive_entropy(distribution: dict[str, float]) -> float:
 
 
 def variation_ratio(distribution: dict[str, float]) -> float:
+    """Return one minus the share of the most frequent label.
+
+    Args:
+        distribution: Share per label.
+
+    Returns:
+        The variation ratio, or NaN for an empty distribution.
+    """
     if not distribution:
         return math.nan
     return 1.0 - max(float(value) for value in distribution.values())
 
 
 def semantic_response_text(task: str, parsed: Mapping[str, Any]) -> str:
+    """Render the meaning-bearing fields of a parsed response as one line of text.
+
+    This is the text the ACSE semantic embedding sees. The label comes first,
+    normalized when possible and otherwise the raw stripped value, followed by the
+    task's free-text fields: the reason for Task 1, the rewritten requirement for
+    Task 2, the evidence phrase and reason for Task 3. Empty parts are dropped and
+    all whitespace is collapsed to single spaces.
+
+    Args:
+        task: `task1`, `task2` or `task3`; any other value serializes the whole
+            payload as sorted JSON.
+        parsed: Parsed response payload.
+
+    Returns:
+        The single-line text, empty when no field has content.
+    """
     if task == "task1":
         decision = (
             normalize_decision(parsed.get("decision"))
@@ -7035,6 +9806,18 @@ def semantic_response_text(task: str, parsed: Mapping[str, Any]) -> str:
 
 
 def semantic_texts_from_rows(task: str, rows: list[dict[str, Any]]) -> list[str]:
+    """Return the semantic response text of every raw row with a parsed payload.
+
+    Rows whose `parsed_json` is not a mapping (failed parses) are skipped, so the
+    result can be shorter than `rows`.
+
+    Args:
+        task: Task of the rows; selects the fields `semantic_response_text` uses.
+        rows: Raw rows of one item.
+
+    Returns:
+        One text per parsed row, in row order.
+    """
     texts: list[str] = []
     for row in rows:
         parsed = row.get("parsed_json")
@@ -7044,6 +9827,19 @@ def semantic_texts_from_rows(task: str, rows: list[dict[str, Any]]) -> list[str]
 
 
 def normalize_embedding_rows(embeddings: np.ndarray) -> np.ndarray:
+    """Scale every row of an embedding matrix to unit Euclidean length.
+
+    All-zero rows stay all zero instead of dividing by zero.
+
+    Args:
+        embeddings: One embedding per row.
+
+    Returns:
+        The row-normalized float matrix.
+
+    Raises:
+        ValueError: If the input is not two-dimensional.
+    """
     matrix = np.asarray(embeddings, dtype=float)
     if matrix.ndim != 2:
         raise ValueError(f"Expected a 2D embedding matrix, got shape {matrix.shape}")
@@ -7102,8 +9898,12 @@ def _mlx_text_embedding_matrix(
 def apply_acse_embedding_env(config: Mapping[str, Any]) -> None:
     """Export the run config's ACSE embedding choice as environment variables.
 
-    Uses ``setdefault``, so explicitly exported environment variables still
-    take precedence (for example a manual ``RE_UQ_ACSE_MLX_MODEL`` override).
+    Uses `setdefault`, so explicitly exported environment variables still
+    take precedence (for example a manual `RE_UQ_ACSE_MLX_MODEL` override).
+
+    Args:
+        config: Run config; `acse_embedding_backend` and
+            `acse_embedding_mlx_model` are read, and blank values export nothing.
     """
     backend = str(config.get("acse_embedding_backend") or "").strip()
     model_name = str(config.get("acse_embedding_mlx_model") or "").strip()
@@ -7117,6 +9917,24 @@ def semantic_embedding_backend_label(
     embedding_backend: str | None = None,
     mlx_model_name: str | None = None,
 ) -> tuple[str, str | None]:
+    """Resolve the ACSE embedding backend and return its persisted label.
+
+    Explicit arguments win over the `RE_UQ_ACSE_EMBEDDING_BACKEND` and
+    `RE_UQ_ACSE_MLX_MODEL` environment variables, which win over the defaults
+    (the character TF-IDF proxy and `ACSE_MLX_DEFAULT_MODEL`).
+
+    Args:
+        embedding_backend: `tfidf`, the TF-IDF proxy label or `mlx`; `None` or
+            empty falls back to the environment.
+        mlx_model_name: MLX embedding model; used only for the MLX backend.
+
+    Returns:
+        The label (`tfidf_char_wb_3_5` or `mlx:<model>`) and the MLX model name,
+        which is `None` for the TF-IDF proxy.
+
+    Raises:
+        ValueError: If the backend is unknown.
+    """
     backend = str(
         embedding_backend
         or os.environ.get(ACSE_EMBEDDING_BACKEND_ENV, ACSE_PROXY_EMBEDDING_BACKEND)
@@ -7144,6 +9962,18 @@ def semantic_embedding_backend_args(
     process can reproduce the run's embedding choice without inheriting the
     runner's environment. An empty label retains the legacy environment/default
     lookup used by runs created before this provenance field existed.
+
+    Args:
+        backend_label: Label written by `semantic_embedding_backend_label`, or
+            empty for legacy runs.
+
+    Returns:
+        The backend and MLX model name to pass back to
+        `semantic_embedding_matrix`; `(None, None)` for an empty label and a
+        `None` model for the TF-IDF proxy.
+
+    Raises:
+        ValueError: If the label is neither the TF-IDF proxy nor `mlx:<model>`.
     """
     label = str(backend_label or "").strip()
     if not label:
@@ -7164,6 +9994,16 @@ def recorded_semantic_embedding_backend(rows: Iterable[Mapping[str, Any]]) -> st
     Missing values are allowed for legacy rows, but conflicting non-empty
     values indicate that rows from incompatible embedding configurations were
     mixed under one analysis request and therefore fail closed.
+
+    Args:
+        rows: Raw rows of the run; `semantic_embedding_backend` is read.
+
+    Returns:
+        The recorded label, or the currently configured label when no row
+        records one.
+
+    Raises:
+        ValueError: If the rows record more than one backend.
     """
     labels = {
         str(row.get("semantic_embedding_backend", "")).strip()
@@ -7185,6 +10025,23 @@ def semantic_embedding_matrix(
     embedding_backend: str | None = None,
     mlx_model_name: str | None = None,
 ) -> tuple[np.ndarray, str]:
+    """Embed texts with the configured ACSE backend.
+
+    The TF-IDF proxy fits a character n-gram vectorizer on exactly these texts;
+    the MLX backend loads (and caches) the embedding model and truncates inputs to
+    `RE_UQ_ACSE_MLX_MAX_LENGTH` tokens, 512 by default.
+
+    Args:
+        texts: Texts to embed, one per row of the result.
+        embedding_backend: Backend override; see `semantic_embedding_backend_label`.
+        mlx_model_name: MLX model override; see `semantic_embedding_backend_label`.
+
+    Returns:
+        The row-normalized embedding matrix and the resolved backend label.
+
+    Raises:
+        AssertionError: If the resolved label matches no backend.
+    """
     backend_label, model_name = semantic_embedding_backend_label(
         embedding_backend, mlx_model_name
     )
@@ -7204,9 +10061,13 @@ def semantic_embedding_matrix(
 class AcseClusterAnalysis(NamedTuple):
     """One ACSE clustering pass: the diagnostics row and the labels behind it.
 
-    ``cluster_labels`` are exactly the labels the diagnostics were computed
+    `cluster_labels` are exactly the labels the diagnostics were computed
     from, so callers that persist per-sample cluster assignments never have to
     re-run the clustering and risk disagreeing with the score.
+
+    Attributes:
+        diagnostics: The `semantic_*` diagnostic fields of the item.
+        cluster_labels: Size-ranked cluster label of each sample, in sample order.
     """
 
     diagnostics: dict[str, Any]
@@ -7216,7 +10077,15 @@ class AcseClusterAnalysis(NamedTuple):
 def _acse_diagnostics_without_samples(
     semantic_embedding_backend: str, distance_threshold: float
 ) -> dict[str, Any]:
-    """Diagnostics for an item with no parsable samples: every metric is NaN."""
+    """Return the diagnostics for an item with no parsable samples: every metric is NaN.
+
+    Args:
+        semantic_embedding_backend: Backend label to record.
+        distance_threshold: Clustering threshold to record.
+
+    Returns:
+        The diagnostics row with zero clusters.
+    """
     return {
         "semantic_embedding_backend": semantic_embedding_backend,
         "semantic_distance_threshold": float(distance_threshold),
@@ -7234,7 +10103,15 @@ def _acse_diagnostics_without_samples(
 def _acse_diagnostics_for_single_sample(
     semantic_embedding_backend: str, distance_threshold: float
 ) -> dict[str, Any]:
-    """Diagnostics for a lone sample: one cluster, zero dispersion, zero score."""
+    """Return diagnostics for a lone sample: one cluster, zero dispersion, zero score.
+
+    Args:
+        semantic_embedding_backend: Backend label to record.
+        distance_threshold: Clustering threshold to record.
+
+    Returns:
+        The diagnostics row of a single cluster.
+    """
     return {
         "semantic_embedding_backend": semantic_embedding_backend,
         "semantic_distance_threshold": float(distance_threshold),
@@ -7258,14 +10135,28 @@ def acse_semantic_cluster_analysis(
     """Cluster one item's sample embeddings and report the ACSE diagnostics.
 
     This is the single place ACSE clustering happens. The rows are normalized
-    once, the cosine distance matrix is built once, and ``fit_predict`` runs
+    once, the cosine distance matrix is built once, and `fit_predict` runs
     once. Labels are renamed by descending cluster size, ties broken by the raw
-    scikit-learn label, so ``cluster_0`` is always the dominant cluster.
+    scikit-learn label, so `cluster_0` is always the dominant cluster.
 
-    ``dispersion_weight`` is the weight of the dispersion component in the
-    score (entropy weight ``1 - dispersion_weight``). It defaults to the
+    `dispersion_weight` is the weight of the dispersion component in the
+    score (entropy weight `1 - dispersion_weight`). It defaults to the
     reported setting and exists so an offline sensitivity analysis can vary
     the mixture without touching the module constant.
+
+    Args:
+        embeddings: One embedding per sample of the item.
+        semantic_embedding_backend: Backend label recorded in the diagnostics.
+        distance_threshold: Cosine-distance threshold of the average-linkage
+            clustering; it also scales the dispersion component.
+        dispersion_weight: Weight of the dispersion component, in [0, 1].
+
+    Returns:
+        The diagnostics and the per-sample cluster labels; no samples give NaN
+        metrics and one sample gives a single cluster with score 0.
+
+    Raises:
+        ValueError: If `dispersion_weight` is outside [0, 1].
     """
     if not 0.0 <= float(dispersion_weight) <= 1.0:
         raise ValueError(
@@ -7362,7 +10253,15 @@ def acse_cluster_labels_for_embeddings(
     embeddings: np.ndarray,
     distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
 ) -> list[str]:
-    """Size-ranked cluster labels only; see ``acse_semantic_cluster_analysis``."""
+    """Return the size-ranked cluster labels only; see `acse_semantic_cluster_analysis`.
+
+    Args:
+        embeddings: One embedding per sample of the item.
+        distance_threshold: Cosine-distance threshold of the clustering.
+
+    Returns:
+        The cluster label of each sample, `cluster_0` being the largest cluster.
+    """
     return acse_semantic_cluster_analysis(
         embeddings, "", distance_threshold
     ).cluster_labels
@@ -7374,7 +10273,17 @@ def acse_semantic_diagnostics_from_embeddings(
     distance_threshold: float = ACSE_PROXY_DISTANCE_THRESHOLD,
     dispersion_weight: float = ACSE_PROXY_INTERNAL_DISPERSION_WEIGHT,
 ) -> dict[str, Any]:
-    """Diagnostics only; see ``acse_semantic_cluster_analysis``."""
+    """Return the diagnostics only; see `acse_semantic_cluster_analysis`.
+
+    Args:
+        embeddings: One embedding per sample of the item.
+        semantic_embedding_backend: Backend label recorded in the diagnostics.
+        distance_threshold: Cosine-distance threshold of the clustering.
+        dispersion_weight: Weight of the dispersion component, in [0, 1].
+
+    Returns:
+        The `semantic_*` diagnostic fields of the item.
+    """
     return acse_semantic_cluster_analysis(
         embeddings,
         semantic_embedding_backend,
@@ -7389,6 +10298,21 @@ def acse_semantic_proxy_diagnostics(
     embedding_backend: str | None = None,
     mlx_model_name: str | None = None,
 ) -> dict[str, Any]:
+    """Embed one item's sample texts and return their ACSE diagnostics.
+
+    Whitespace is collapsed before embedding. With zero or one text the
+    diagnostics are returned without loading the embedding backend.
+
+    Args:
+        texts: Semantic response text of each sample.
+        distance_threshold: Cosine-distance threshold of the clustering.
+        embedding_backend: Backend override; see `semantic_embedding_backend_label`.
+        mlx_model_name: MLX model override; see `semantic_embedding_backend_label`.
+
+    Returns:
+        The `semantic_*` diagnostic fields of the item, computed with the default
+        dispersion weight.
+    """
     cleaned = [re.sub(r"\s+", " ", str(text or "").strip()) for text in texts]
     backend_label, _ = semantic_embedding_backend_label(
         embedding_backend, mlx_model_name
@@ -7412,6 +10336,21 @@ def acse_semantic_proxy_diagnostics(
 
 
 def majority_label(distribution: dict[str, float], label_order: list[str]) -> str:
+    """Return the label with the highest share, breaking ties toward the weakest label.
+
+    Ties go to the label that comes last in `label_order`, so a tie can never
+    inflate over-commitment. Labels outside `label_order` lose every tie.
+
+    Args:
+        distribution: Share per label.
+        label_order: Labels from strongest to weakest.
+
+    Returns:
+        The majority label.
+
+    Raises:
+        ValueError: If the distribution is empty.
+    """
     if not distribution:
         raise ValueError("Cannot choose a majority label from an empty distribution")
     # Primary sort is highest probability. Constraint: ties must not inflate
@@ -7425,12 +10364,35 @@ def majority_label(distribution: dict[str, float], label_order: list[str]) -> st
 
 
 def one_hot_distribution(label: str, label_order: list[str]) -> dict[str, float]:
+    """Return the distribution that puts all mass on one label.
+
+    Args:
+        label: Label that receives share 1.0.
+        label_order: Labels to report; a label outside it gives all zeros.
+
+    Returns:
+        The share of each label in `label_order`.
+    """
     return {candidate: 1.0 if candidate == label else 0.0 for candidate in label_order}
 
 
 def task3_score_fields(
     item: dict[str, Any], pred_relation: str, evidence_phrase: Any = ""
 ) -> dict[str, Any]:
+    """Return the Task 3 columns of a score row.
+
+    Copies the gold relation, the Task 2 output under audit and the audit mode from
+    the verification item, and checks whether the evidence phrase occurs in the
+    source statement.
+
+    Args:
+        item: Task 3 verification item.
+        pred_relation: Predicted relation.
+        evidence_phrase: Evidence phrase the model quoted, if any.
+
+    Returns:
+        The Task 3 fields, keyed by score-row column.
+    """
     return {
         "source_item_id": item.get("source_item_id", item.get("item_id", "")),
         "gold_relation": item.get("task3_gold_relation", ""),
@@ -7457,6 +10419,25 @@ def monotonicity_violation_diagnostics(
     score_field: str = "p_yes",
     tolerance: float = MONOTONICITY_TOLERANCE,
 ) -> dict[str, float]:
+    """Measure how often a score rises as the source modality weakens.
+
+    Each seed's variants are ordered from strongest (`mandatory`) to weakest
+    modality, and the largest step increase of the score along that order is
+    taken; seeds without all four variants are skipped. A seed violates
+    monotonicity strictly when that increase is positive and tolerantly when it
+    exceeds `tolerance`.
+
+    Args:
+        rows: Score rows with `seed_id`, `source_modality` and `score_field`.
+        score_field: Score that should not increase as the modality weakens;
+            blank cells are dropped.
+        tolerance: Increase allowed before a seed counts as a tolerant violation.
+
+    Returns:
+        The share of checked seeds with a tolerant and with a strict violation,
+        the tolerance, and the mean and maximum of the per-seed largest increase;
+        all NaN except the tolerance when no seed can be checked.
+    """
     frame = pd.DataFrame.from_records(rows)
     if frame.empty or score_field not in frame.columns:
         return {
@@ -7510,21 +10491,33 @@ def monotonicity_violation_diagnostics(
 
 
 def raw_batch_id(raw: Any) -> str:
-    """The provider request a raw completion record was sent in.
+    """Return the provider request a raw completion record was sent in.
 
     Blank for legacy rows written before requests were batched, for
     single-item requests, and for synthesised (fake-completion) rows.
+
+    Args:
+        raw: Raw completion record; anything but a mapping gives a blank id.
+
+    Returns:
+        The `batch_id`, or an empty string.
     """
     return str(raw.get("batch_id", "") or "") if isinstance(raw, Mapping) else ""
 
 
 def sample_batch_ids_field(sample_rows: Iterable[Any]) -> str:
-    """Semicolon-joined request ids behind one collapsed score row.
+    """Return the semicolon-joined request ids behind one collapsed score row.
 
     A stochastic group collapses its repeated samples into a single score row,
     and each sample index was its own request, so the row is decided by several
     requests. First-seen order is kept so the value is stable across runs;
     blank ids are dropped, and the result is blank when nothing was batched.
+
+    Args:
+        sample_rows: Raw rows of the group's samples.
+
+    Returns:
+        The distinct request ids joined by `;`.
     """
     seen: dict[str, None] = {}
     for row in sample_rows:
@@ -7537,13 +10530,22 @@ def sample_batch_ids_field(sample_rows: Iterable[Any]) -> str:
 def answer_length_fields(
     raw: Mapping[str, Any], item: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Answer-length / bloat fields for one raw completion record.
+    """Return the answer-length / bloat fields for one raw completion record.
 
-    ``requirement_word_count`` is read from the raw record when available;
-    legacy rows fall back to counting words in ``parsed_json.requirement``.
-    ``completion_tokens`` is populated only for single-item requests because a
+    `requirement_word_count` is read from the raw record when available;
+    legacy rows fall back to counting words in `parsed_json.requirement`.
+    `completion_tokens` is populated only for single-item requests because a
     provider's batched usage is not attributable to an individual answer.
-    ``source_word_count`` always comes from the benchmark ``source_statement``.
+    `source_word_count` always comes from the benchmark `source_statement`.
+
+    Args:
+        raw: Raw completion record.
+        item: Benchmark item the record answers.
+
+    Returns:
+        `requirement_word_count`, `source_word_count`, `length_ratio` (requirement
+        words over source words) and `completion_tokens`; a value that cannot be
+        determined is an empty string.
     """
     parsed = raw.get("parsed_json") if isinstance(raw, Mapping) else None
     requirement_text = ""
@@ -7590,6 +10592,11 @@ def answer_length_fields(
 
 
 def empty_answer_length_fields() -> dict[str, Any]:
+    """Return the answer-length fields with every value blank.
+
+    Returns:
+        The keys of `answer_length_fields`, each mapped to an empty string.
+    """
     return {
         "requirement_word_count": "",
         "source_word_count": "",
@@ -7604,19 +10611,31 @@ def resolve_bootstrap_cluster_field(
     fallback_field: str = BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
     item_field: str | None = BOOTSTRAP_ITEM_CLUSTER_FIELD,
 ) -> str:
-    """Which field these rows can actually be clustered on.
+    """Return the field these rows can actually be clustered on.
 
-    ``cluster_field`` is used only when *every* row carries a non-blank value
+    `cluster_field` is used only when *every* row carries a non-blank value
     for it. Requiring the column to be complete matters because a partially
-    populated ``batch_id`` (legacy runs, synthesised completions) would collapse
+    populated `batch_id` (legacy runs, synthesised completions) would collapse
     every unbatched row into one meaningless cluster keyed on the empty string.
-    Rows without a request then cluster on ``item_field`` when every row
+    Rows without a request then cluster on `item_field` when every row
     carries one (the single-item protocol: one request per item), and on
-    ``fallback_field`` otherwise. Pass ``item_field=None`` where the cluster
+    `fallback_field` otherwise. Pass `item_field=None` where the cluster
     must nest a coarser pairing unit, as the paired ablation deltas do. The
     resolved field is reported back to the caller — the CI dictionaries expose
-    it as ``bootstrap_ci_cluster_field`` — so a slice that reverted to a finer
+    it as `bootstrap_ci_cluster_field` — so a slice that reverted to a finer
     or coarser unit is visible in the output rather than mislabelled.
+
+    Args:
+        rows: Rows to cluster.
+        cluster_field: Preferred cluster field, the provider request by default;
+            returned as is when it equals `fallback_field`.
+        fallback_field: Field used when neither of the others is complete, the
+            seed by default.
+        item_field: Intermediate field tried before the fallback, the item by
+            default; `None` skips it.
+
+    Returns:
+        The name of the field to cluster on.
     """
     if cluster_field == fallback_field:
         return cluster_field
@@ -7652,18 +10671,32 @@ def bootstrap_seed_metric(
     seed: int = 20260518,
     seed_field: str | None = None,
 ) -> tuple[float, float, float]:
-    """Cluster bootstrap of ``metric`` over ``rows``.
+    """Run a cluster bootstrap of `metric` over `rows`.
 
-    Clusters default to the provider request (``batch_id``): batched runs sent
+    Clusters default to the provider request (`batch_id`): batched runs sent
     16 items per request — four whole seeds x four source conditions — and
     model behaviour is decided per request, so the request nests the seed and
     is the conservative unit. Rows without a complete request column cluster on
     the item (single-item requests) or, failing that, the seed; see
-    :func:`resolve_bootstrap_cluster_field`.
+    `resolve_bootstrap_cluster_field`.
 
-    ``seed_field`` is the deprecated spelling of ``cluster_field``. It names the
+    `seed_field` is the deprecated spelling of `cluster_field`. It names the
     field outright with no fallback, preserving the pre-request behaviour for
     callers that still pass it.
+
+    Args:
+        rows: Rows the metric is computed over.
+        metric: Function from a list of rows to a value; NaN replicates are
+            dropped before taking the percentiles.
+        cluster_field: Preferred cluster field, resolved as described above.
+        iterations: Number of bootstrap replicates.
+        seed: Seed of the resampling generator.
+        seed_field: Deprecated; overrides `cluster_field` without fallback.
+
+    Returns:
+        The point estimate on all rows and the 2.5 and 97.5 percentiles of the
+        replicates. All three are NaN when there are no rows or the cluster field
+        is absent, and the interval is NaN when every replicate is NaN.
     """
     if seed_field is not None:
         resolved_field = seed_field
@@ -7701,14 +10734,23 @@ def bootstrap_seed_metric(
 
 
 class PairedDeltaCI(NamedTuple):
-    """Complete-pair paired bootstrap result for ``metric(b) - metric(a)``.
+    """Complete-pair paired bootstrap result for `metric(b) - metric(a)`.
 
-    ``n_complete_pairs`` is the number of pairing keys (seeds) observed in both
+    `n_complete_pairs` is the number of pairing keys (seeds) observed in both
     arms — the population the point estimate and the interval describe — and
-    ``n_excluded_single_arm`` the number dropped because only one arm ever
-    answered them. ``cluster_field`` is the field the replicates were drawn on
-    and ``n_clusters`` how many such clusters the cohort formed; the two differ
+    `n_excluded_single_arm` the number dropped because only one arm ever
+    answered them. `cluster_field` is the field the replicates were drawn on
+    and `n_clusters` how many such clusters the cohort formed; the two differ
     from the pairing count whenever a cluster holds several seeds.
+
+    Attributes:
+        delta: Point estimate of the difference on the complete-pair cohort.
+        ci_low: 2.5 percentile of the replicate differences.
+        ci_high: 97.5 percentile of the replicate differences.
+        n_complete_pairs: Pairing keys observed in both arms.
+        n_excluded_single_arm: Pairing keys observed in only one arm.
+        cluster_field: Field the replicates were drawn on.
+        n_clusters: Number of clusters the cohort formed.
     """
 
     delta: float
@@ -7730,11 +10772,11 @@ def bootstrap_seed_metric_delta(
     pair_field: str = BOOTSTRAP_CLUSTER_FALLBACK_FIELD,
     seed_field: str | None = None,
 ) -> PairedDeltaCI:
-    """Complete-pair paired cluster bootstrap for ``metric(rows_b) - metric(rows_a)``.
+    """Bootstrap `metric(rows_b) - metric(rows_a)` over complete pairs, by cluster.
 
     The two arms score the same benchmark items under different conditions (for
     example `item_context` bare vs document), so their rows are **paired by
-    seed** (``pair_field``). Each iteration draws one resample and evaluates the
+    seed** (`pair_field`). Each iteration draws one resample and evaluates the
     metric on *both* arms restricted to it before differencing; resampling the
     arms independently would treat paired observations as unrelated and
     overstate the interval.
@@ -7744,8 +10786,8 @@ def bootstrap_seed_metric_delta(
     contributes all of its paired seeds. The two arms are different runs and
     their request ids therefore differ, but the partition of seeds into requests
     is a property of the batching and is the same in both; each paired seed is
-    assigned to the first request observed for it in ``rows_a``. Rows without a
-    complete request column fall back to clustering on ``pair_field``, which
+    assigned to the first request observed for it in `rows_a`. Rows without a
+    complete request column fall back to clustering on `pair_field`, which
     reproduces the earlier seed-clustered interval exactly.
 
     Only a seed observed in both arms can form a pair, so the complete-pair
@@ -7756,8 +10798,23 @@ def bootstrap_seed_metric_delta(
     the 2.5/97.5 percentile interval describe that cohort; the delta is NaN
     when no complete pair exists.
 
-    ``seed_field`` is the deprecated spelling that pairs *and* resamples on one
+    `seed_field` is the deprecated spelling that pairs *and* resamples on one
     field, preserving the pre-request behaviour for callers that still pass it.
+
+    Args:
+        rows_a: Rows of the reference arm.
+        rows_b: Rows of the compared arm.
+        metric: Function from a list of rows to a value.
+        cluster_field: Preferred resampling field, the provider request by
+            default.
+        iterations: Number of bootstrap replicates.
+        seed: Seed of the resampling generator.
+        pair_field: Field that pairs rows across the arms, the seed by default.
+        seed_field: Deprecated; overrides both `cluster_field` and `pair_field`.
+
+    Returns:
+        The delta, its interval and the cohort counts; the interval is NaN when
+        every replicate is NaN.
     """
     if seed_field is not None:
         cluster_field = pair_field = seed_field
@@ -7827,9 +10884,30 @@ def bootstrap_seed_metric_delta(
 def exact_item_metric_pairs(rows_a, rows_b, eligible):
     """Match source identities, never arm-local item IDs; reject ambiguous keys.
 
-    Counts are item identities except duplicate_rows (observations). A key that
-    occurs more than once in either arm is excluded from both, not arbitrarily
-    resolved. Retries should already have been deduplicated by completion key.
+    The matched, unmatched, duplicate and ineligible counts are match keys (item
+    identities), and `n_matched_capabilities` counts distinct keys without the
+    modality. `n_missing_identity_rows` and every per-arm count are rows: the
+    per-arm failed, unclassified and eligible counts run over all rows of the arm
+    and equal item counts only once retries are deduplicated, and the per-arm
+    duplicate count is the rows behind duplicated keys. A key that occurs more
+    than once in either arm is excluded from both, not arbitrarily resolved.
+    Retries should already have been deduplicated by completion key.
+
+    The match key is model, dataset, benchmark variant, `source_identity` and gold
+    modality (falling back to `source_modality`); rows missing the identity or
+    the modality are counted and left out.
+
+    Args:
+        rows_a: Score rows of the first arm, reported as `bare` in the counts.
+        rows_b: Score rows of the second arm, reported as `document` in the counts.
+        eligible: Predicate on a row; a key is paired only when its row is
+            eligible in both arms.
+
+    Returns:
+        The matched rows of each arm, in the same key order and tagged with a
+        shared `exact_pair_id`, and a dict of matching counts (matched,
+        unmatched, duplicate, ineligible and missing-identity counts, plus
+        per-arm duplicate, failed, unclassified and eligible counts).
     """
 
     def index_by_identity(rows):
@@ -7896,6 +10974,17 @@ def paired_request_clusters(rows_a, rows_b):
 
     Crossing request partitions require connected components, not choosing one
     arm's partition. Missing request metadata falls back to capability clusters.
+
+    Args:
+        rows_a: Matched rows of the first arm, as returned by
+            `exact_item_metric_pairs`.
+        rows_b: Matched rows of the second arm; `rows_b[i]` pairs with
+            `rows_a[i]`.
+
+    Returns:
+        The two row lists (tagged with `paired_request_cluster` when request
+        clustering applies), the cluster field to bootstrap on and a short
+        description of the clustering used.
     """
     if not rows_a:
         return rows_a, rows_b, BOOTSTRAP_CLUSTER_FALLBACK_FIELD, "empty matched cohort"
@@ -7952,6 +11041,31 @@ def score_from_distribution(
     uncertainty_score: float,
     model_name: str | None = None,
 ) -> dict[str, Any]:
+    """Build one score row from a label distribution.
+
+    The prediction is the majority label of the distribution (ties toward the
+    weakest label) and the confidence is its largest share. Task 1 rows score the
+    yes/no decision against `task1_gold_yes` and carry `p_yes`; Task 2 and Task 3
+    rows score whether the predicted modality or relation matches the gold label.
+    Text-modality fields are left blank.
+
+    Args:
+        raw: Raw row that supplies the identity and provenance fields.
+        item: Benchmark item (or Task 3 verification item) of the row.
+        uq_method: Name of the UQ method recorded in `uq_method`.
+        distribution: Share per label of the task.
+        valid_n: Samples that parsed.
+        total_n: Samples the plan asked for.
+        uncertainty_measure: Name of the uncertainty measure recorded with the score.
+        uncertainty_score: Value of that measure.
+        model_name: Replaces the raw row's `model` when given (ensemble rows).
+
+    Returns:
+        The score row.
+
+    Raises:
+        ValueError: If the raw row's task is unknown.
+    """
     task = str(raw.get("task", ""))
     label_order = class_order_for_task(task)
     pred_label = majority_label(distribution, label_order)
@@ -8014,6 +11128,27 @@ def distribution_score_rows(
     model_name: str | None = None,
     sample_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    """Build the sampling-based score rows of one stochastic group.
+
+    Every group yields a consistency row and a variation-ratio row (both scored by
+    the variation ratio) and a predictive-entropy row. With `sample_rows`, an ACSE
+    semantic-dispersion row is added, embedded with the backend recorded on `raw`,
+    and every row records all requests the group's samples were sent in.
+
+    Args:
+        raw: Representative raw row of the group.
+        item: Benchmark item of the group.
+        distribution: Label distribution over the parsed samples.
+        valid_n: Samples that parsed.
+        total_n: Samples the plan asked for.
+        consistency_method: Name of the consistency row's method
+            (`label_self_consistency` or `modality_consistency`).
+        model_name: Replaces the raw row's `model` when given.
+        sample_rows: Parsed raw rows of the group; `None` skips the ACSE row.
+
+    Returns:
+        Three score rows, or four with the ACSE row.
+    """
     entropy = normalized_predictive_entropy(distribution)
     vr = variation_ratio(distribution)
     rows = [
@@ -8097,6 +11232,26 @@ def _build_ensemble_disagreement_scores(
 
     Shared by the per-run-id and per-run-group ensemble views; callers supply the
     grouping columns, how an ensemble member is keyed, and the score labels.
+
+    Only the first parsed deterministic answer of each member counts, and a group
+    is scored only when at least two members answered.
+
+    Args:
+        benchmark_rows: Current benchmark items; raw rows of other items or
+            earlier item texts are dropped.
+        raw_rows: Raw rows of every member.
+        group_columns: Three columns that identify an ensemble group, task and
+            item, in that order.
+        required_columns: Columns the raw rows must carry; otherwise nothing is
+            scored.
+        member_key: Function that names the ensemble member of a raw row.
+        uq_method: Method name recorded on the score rows.
+        model_name_builder: Function from the group id and the number of
+            answering members to the `model` recorded on the score row.
+        run_group_id: Restrict to this run group when given.
+
+    Returns:
+        One variation-ratio score row per scored group and item.
     """
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
     raw_rows = filter_raw_rows_to_current_benchmark(benchmark_rows, raw_rows)
@@ -8152,6 +11307,16 @@ def build_ensemble_disagreement_scores(
     benchmark_rows: list[dict[str, Any]],
     raw_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Score label disagreement across the models of one run, item by item.
+
+    Args:
+        benchmark_rows: Current benchmark items.
+        raw_rows: Raw rows of the run's models.
+
+    Returns:
+        Score rows with method `model_ensemble_disagreement`, one per run, task
+        and item answered by at least two models.
+    """
     return _build_ensemble_disagreement_scores(
         benchmark_rows,
         raw_rows,
@@ -8170,6 +11335,20 @@ def build_run_group_ensemble_disagreement_scores(
     raw_rows: list[dict[str, Any]],
     run_group_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Score label disagreement across the runs of a run group, item by item.
+
+    Members are keyed by provider, model and run id, so the same model run twice
+    counts as two members.
+
+    Args:
+        benchmark_rows: Current benchmark items.
+        raw_rows: Raw rows of the run group's runs.
+        run_group_id: Restrict to this run group when given.
+
+    Returns:
+        Score rows with method `model_ensemble_disagreement_run_group`, one per
+        run group, task and item answered by at least two members.
+    """
     return _build_ensemble_disagreement_scores(
         benchmark_rows,
         raw_rows,
@@ -8194,25 +11373,39 @@ def build_uq_scores(
     sampling_plan: SamplingPlan | None = None,
     infer_plan_from_observations: bool = False,
 ) -> list[dict[str, Any]]:
-    """Build per-item UQ score rows under a declared :class:`SamplingPlan`.
+    """Build per-item UQ score rows under a declared `SamplingPlan`.
 
-    ``min_valid_samples`` drops stochastic groups with fewer than that many
+    `min_valid_samples` drops stochastic groups with fewer than that many
     successfully parsed samples. Every stochastic row carries
-    ``stochastic_complete`` (``valid_n == total_n``); agreement and unanimity
+    `stochastic_complete` (`valid_n == total_n`); agreement and unanimity
     summaries must be restricted to complete rows, see
-    :func:`repeated_sample_agreement_metrics`.
+    `repeated_sample_agreement_metrics`.
 
-    ``sampling_plan`` is required: ``total_n`` is
-    ``plan.total_samples(len(group))``, so a sample the run never wrote (crash,
+    `sampling_plan` is required: `total_n` is
+    `plan.total_samples(len(group))`, so a sample the run never wrote (crash,
     budget stop) counts as a parse failure and the group reads as incomplete.
     Inferring the denominator from the rows that happen to exist would report
     three observed samples of a planned five as a complete 3/3; that behaviour
-    survives only behind ``infer_plan_from_observations=True``, which stamps
-    every row it produces with ``sampling_plan_source="inferred"``.
+    survives only behind `infer_plan_from_observations=True`, which stamps
+    every row it produces with `sampling_plan_source="inferred"`.
 
-    Duplicate rows for one ``run_id`` + :func:`completion_record_key` (append-only
-    raw files, resumed runs) are collapsed by :func:`dedupe_raw_rows` first, so a
+    Duplicate rows for one `run_id` + `completion_record_key` (append-only
+    raw files, resumed runs) are collapsed by `dedupe_raw_rows` first, so a
     re-requested item cannot be double-counted or scored from its stale attempt.
+
+    Args:
+        benchmark_rows: Current benchmark items.
+        raw_rows: Raw Task 1 and Task 2 rows of one or more runs.
+        min_valid_samples: Minimum parsed samples a stochastic group needs; values
+            below 1 act as 1.
+        sampling_plan: Plan the runs were executed under.
+        infer_plan_from_observations: Explicit opt-in to the exploratory inferred
+            plan when no `sampling_plan` is given.
+
+    Returns:
+        Verbalized-confidence rows for the deterministic answers, the
+        sampling-based rows of every stochastic group and the cross-model ensemble
+        rows, each stamped with `sampling_plan_source`.
     """
     plan = resolve_sampling_plan(
         sampling_plan, infer_plan_from_observations, caller="build_uq_scores"
@@ -8320,7 +11513,15 @@ def build_uq_scores(
 def _stamp_sampling_plan_source(
     scores: list[dict[str, Any]], plan: SamplingPlan
 ) -> list[dict[str, Any]]:
-    """Record on every score row which plan its denominator came from."""
+    """Record on every score row which plan its denominator came from.
+
+    Args:
+        scores: Score rows, updated in place.
+        plan: Plan whose `source` is recorded.
+
+    Returns:
+        The same list.
+    """
     for row in scores:
         row["sampling_plan_source"] = plan.source
     return scores
@@ -8337,6 +11538,22 @@ def build_task3_scores(
 
     Production callers supply the recorded sampling plan. The optional plan
     retains compatibility with older notebook calls that used observed counts.
+
+    Deterministic audits become verbalized-confidence rows, and stochastic groups
+    become the sampling-based rows of `distribution_score_rows` with a
+    `relation_consistency` row. Audits without a parsable relation, and items
+    whose gold relation is not one of `TASK3_RELATIONS`, are skipped.
+
+    Args:
+        task3_items: Task 3 verification items.
+        raw_rows: Raw rows; only Task 3 rows are used.
+        min_valid_samples: Minimum parsed samples a stochastic group needs; values
+            below 1 act as 1.
+        sampling_plan: Plan the audit run was executed under; without it the
+            denominator is the number of rows observed for the group.
+
+    Returns:
+        The Task 3 score rows.
     """
     item_by_id = {row["item_id"]: row for row in task3_items}
     scores: list[dict[str, Any]] = []
@@ -8426,10 +11643,23 @@ def task3_audit_review_rows(
     *,
     expected_stochastic_samples: int = 5,
 ) -> list[dict[str, Any]]:
-    """One row per auditable source, including missing and unscored judgments.
+    """Build one row per auditable source, including missing and unscored judgments.
 
     No correctness label is inferred from the auditor's answer. Reference-free
     outputs remain reviewable, while the scored subset stays explicit.
+
+    Args:
+        task3_items: Task 3 verification items, one per audited Task 2 output.
+        raw_rows: Raw Task 3 rows; duplicates are collapsed first.
+        expected_stochastic_samples: Planned stochastic samples per item; only
+            parsed samples with an index below it count towards completeness.
+
+    Returns:
+        One review row per item, with the deterministic audit's answer (blank when
+        missing), the reference status and the stochastic sample count.
+
+    Raises:
+        ValueError: If the rows of one item and model come from more than one run.
     """
     by_item: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for raw in dedupe_raw_rows(raw_rows):
@@ -8491,6 +11721,16 @@ def task3_audit_review_rows(
 def task3_audit_coverage_rows(
     review_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Count, per model, how many audits were observed, parsed and scorable.
+
+    Args:
+        review_rows: Rows from `task3_audit_review_rows`.
+
+    Returns:
+        One row per model, sorted by model, with counts of auditable items,
+        items with and without a reference, observed, parsed, parsed-but-unscored
+        and missing deterministic audits, and complete stochastic groups.
+    """
     by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in review_rows:
         by_model[str(row["model"])].append(row)
@@ -8574,7 +11814,16 @@ ATTEMPT_VIEWS = (ATTEMPT_VIEW_ALL, ATTEMPT_VIEW_LATEST)
 
 
 def _identity_field(row: Mapping[str, Any], *names: str, default: str = "") -> str:
-    """First non-empty value among `names`, else `default`."""
+    """Return the first non-empty value among `names`, else `default`.
+
+    Args:
+        row: Row to read.
+        *names: Field names to try, in order.
+        default: Value returned when every field is blank or absent.
+
+    Returns:
+        The stripped field value or `default`.
+    """
     for name in names:
         value = str(row.get(name, "") or "").strip()
         if value:
@@ -8588,20 +11837,31 @@ class ObservationIdentity:
 
     The pipeline used to reconstruct this from a different subset of fields at
     every boundary: the resume cache keyed on
-    ``(model, task, item, sample_kind, sample_index)``, the Task 2 -> Task 3
-    handoff on ``model`` alone, and the paper joins on ``(model, item)``. All
+    `(model, task, item, sample_kind, sample_index)`, the Task 2 -> Task 3
+    handoff on `model` alone, and the paper joins on `(model, item)`. All
     three keys are ambiguous in the current four-cell x multi-provider matrix:
-    benchmark item ids are reused between the ``must`` and ``shall`` variants of
+    benchmark item ids are reused between the `must` and `shall` variants of
     a family, and the same model is served by more than one provider profile.
     This value type is the single answer, and every one of those boundaries
     derives its key from it.
 
-    ``provider_id``/``profile_id`` come off the row; ``dataset_id``/``variant``
+    `provider_id`/`profile_id` come off the row; `dataset_id`/`variant`
     come off the row when it records them and otherwise from the caller's file
     context (a raw JSONL file holds exactly one dataset/variant). Anything still
-    missing becomes :data:`LEGACY_IDENTITY` -- explicitly, never an empty
+    missing becomes `LEGACY_IDENTITY` -- explicitly, never an empty
     string. Recorded values always win over inherited context, so a row that
     names its own cell is never re-labelled by the file it was read from.
+
+    Attributes:
+        provider_id: Provider that served the observation.
+        profile_id: Provider profile the observation was requested under.
+        model: Model identifier.
+        dataset_id: Benchmark dataset.
+        variant: Benchmark variant (cell) of the dataset.
+        task: `task1`, `task2` or `task3`.
+        item_id: Benchmark item id.
+        sample_kind: `deterministic` or `stochastic`.
+        sample_index: Index of the sample within the item's samples.
     """
 
     provider_id: str
@@ -8624,11 +11884,21 @@ class ObservationIdentity:
     ) -> ObservationIdentity:
         """Build the identity of a raw row, a planned job, or a score row.
 
-        Planned jobs nest the benchmark item under ``item`` instead of carrying
-        ``item_id``, and the registry/score rows spell the cell
-        ``dataset_id``/``benchmark_variant`` while cell dicts spell it
-        ``dataset``/``variant``; all of those spellings resolve to one identity
+        Planned jobs nest the benchmark item under `item` instead of carrying
+        `item_id`, and the registry/score rows spell the cell
+        `dataset_id`/`benchmark_variant` while cell dicts spell it
+        `dataset`/`variant`; all of those spellings resolve to one identity
         so a job and the record it produced share a key.
+
+        Args:
+            row: Raw row, planned job or score row.
+            dataset_id: Dataset of the file the row was read from; used only when
+                the row records none.
+            variant: Benchmark variant of that file; used only when the row records
+                none.
+
+        Returns:
+            The identity; a missing or unparsable `sample_index` becomes 0.
         """
         item_id = _identity_field(row, "item_id")
         nested_item = row.get("item")
@@ -8662,7 +11932,11 @@ class ObservationIdentity:
 
     @property
     def record_key(self) -> tuple[str, str, str, str, str, str, str, str, int]:
-        """Hashable form used as a cache, dedup, and join key."""
+        """Return the hashable form used as a cache, dedup, and join key.
+
+        Returns:
+            The identity fields as a tuple, ending with the sample index.
+        """
         return (
             self.provider_id,
             self.profile_id,
@@ -8683,20 +11957,23 @@ class AttemptLedger:
     A raw JSONL file records physical ATTEMPTS: a request that failed and was
     re-requested by a later resume leaves two rows for one planned observation.
     Consumers disagreed about which of those two numbers they wanted, so the
-    same recovered run could read as ``2/1`` records, a degraded registry parse
-    rate, and ``1/1`` task progress at the same time.
+    same recovered run could read as `2/1` records, a degraded registry parse
+    rate, and `1/1` task progress at the same time.
 
     This ledger holds both views and forces callers to name theirs:
 
-    - :attr:`all_attempts` -- every row, in file order. The view for anything
+    - `all_attempts` -- every row, in file order. The view for anything
       that describes provider work: API calls, retries, latency, tokens, and
       the parse-status histogram of what the provider actually returned.
-    - :attr:`latest_logical_observations` -- one row per
-      ``run_id`` + :class:`ObservationIdentity`, keeping the last row whose
-      ``parse_status`` is ``ok`` (a successful retry supersedes the earlier
+    - `latest_logical_observations` -- one row per
+      `run_id` + `ObservationIdentity`, keeping the last row whose
+      `parse_status` is `ok` (a successful retry supersedes the earlier
       failure) or the last row of the group when none parsed. The view for
       anything counted against a PLAN: coverage, completion rate, parse success
       rate, and scoring.
+
+    Attributes:
+        all_attempts: Every raw row, in file order.
     """
 
     all_attempts: list[dict[str, Any]]
@@ -8711,19 +11988,41 @@ class AttemptLedger:
     def from_raw_rows(
         cls, raw_rows: Iterable[Mapping[str, Any]] | AttemptLedger
     ) -> AttemptLedger:
-        """Accept rows or an existing ledger, so callers can pass either."""
+        """Accept rows or an existing ledger, so callers can pass either.
+
+        Args:
+            raw_rows: Raw rows, copied into the new ledger, or a ledger.
+
+        Returns:
+            The given ledger unchanged, or a new ledger over the rows.
+        """
         if isinstance(raw_rows, AttemptLedger):
             return raw_rows
         return cls([dict(row) for row in raw_rows])
 
     @property
     def latest_logical_observations(self) -> list[dict[str, Any]]:
+        """Return the latest-logical-observations view, deduplicated once and memoized.
+
+        Returns:
+            `all_attempts` reduced to one row per logical observation.
+        """
         if self._latest is None:
             self._latest = dedupe_raw_rows(self.all_attempts)
         return self._latest
 
     def view(self, view: str) -> list[dict[str, Any]]:
-        """The named view; raises rather than guessing which one was meant."""
+        """Return the named view; raises rather than guessing which one was meant.
+
+        Args:
+            view: `all_attempts` or `latest_logical_observations`.
+
+        Returns:
+            The rows of that view.
+
+        Raises:
+            ValueError: If the view name is unknown.
+        """
         if view == ATTEMPT_VIEW_ALL:
             return self.all_attempts
         if view == ATTEMPT_VIEW_LATEST:
@@ -8738,10 +12037,22 @@ def configure_run_logging(
     *,
     log_path: str | Path | None = None,
 ) -> logging.Logger:
-    """Configure the shared ``re_uq`` logger for a CLI run.
+    """Configure the shared `re_uq` logger for a CLI run.
 
-    Always logs to stderr; when ``log_path`` is given the same records are also
+    Always logs to stderr; when `log_path` is given the same records are also
     appended to that file so a long provider run leaves a durable trace.
+
+    A file handler left by an earlier run in the same process is removed and
+    closed, and the stderr handler is reused rather than duplicated.
+
+    Args:
+        level: Logging level as a number or a name such as `"DEBUG"`; unknown
+            names fall back to `INFO`.
+        log_path: File to append the records to; its parent directories are
+            created.
+
+    Returns:
+        The configured `re_uq` logger.
     """
     resolved_level = (
         level
@@ -8781,12 +12092,31 @@ def configure_run_logging(
 
 
 def is_parse_failure_status(status: Any) -> bool:
-    """Any status other than ``ok`` (including ``truncated``) is a parse failure."""
+    """Return whether a parse status counts as a failure.
+
+    Any status other than `ok` (including `truncated`) is a parse failure.
+
+    Args:
+        status: Value of a row's `parse_status`.
+
+    Returns:
+        True unless the stripped status is `ok`.
+    """
     return str(status or "").strip() != PARSE_STATUS_OK
 
 
 def parse_status_histogram(raw_rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
-    """Categorized parse-status counts with every known category always present."""
+    """Return categorized parse-status counts with every known category always present.
+
+    `ok` rows are not counted, and statuses outside `PARSE_STATUS_CATEGORIES` are
+    counted under `other`.
+
+    Args:
+        raw_rows: Raw rows to count.
+
+    Returns:
+        The count of each failure category and of `other`.
+    """
     histogram = dict.fromkeys(PARSE_STATUS_CATEGORIES, 0)
     histogram["other"] = 0
     for row in raw_rows:
@@ -8811,20 +12141,29 @@ def _percentile(values: list[float], fraction: float) -> float | str:
 def run_quality_counters(
     attempt_rows: Iterable[Mapping[str, Any]] | AttemptLedger,
 ) -> dict[str, Any]:
-    """Diagnostics shared by the registry row, the finish event, and the summary line.
+    """Return the diagnostics shared by the registry row, finish event and summary line.
 
     Covers the categorized parse-status histogram, retry volume, truncation
     counts, latency percentiles, provider-reported completion tokens, and the
     tolerant-parse repair histogram. Request-level fields are deduplicated by
-    ``batch_id``; parse, repair, and truncation statuses remain per output
+    `batch_id`; parse, repair, and truncation statuses remain per output
     record.
 
-    View: :data:`ATTEMPT_VIEW_ALL`. Everything here describes physical provider
+    View: `ATTEMPT_VIEW_ALL`. Everything here describes physical provider
     work -- what was sent, what came back, how long it took -- so a failed
     attempt that a later resume superseded still belongs in these counts. Pass
-    :attr:`AttemptLedger.all_attempts` explicitly at the call site; the
-    plan-facing counters live in :func:`live_run_counters` and
-    :func:`run_progress_summary`.
+    `AttemptLedger.all_attempts` explicitly at the call site; the
+    plan-facing counters live in `live_run_counters` and
+    `run_progress_summary`.
+
+    Args:
+        attempt_rows: Every raw row of the run, or its ledger.
+
+    Returns:
+        `parse_status_histogram`, `parse_repairs`, `retry_total`,
+        `truncated_records`, `latency_p50_s`, `latency_p95_s` and
+        `usage_completion_tokens`; the latency and token fields are blank when no
+        request reported them.
     """
     rows = AttemptLedger.from_raw_rows(attempt_rows).all_attempts
     histogram = parse_status_histogram(rows)
@@ -8886,6 +12225,15 @@ def run_quality_counters(
 
 
 def format_run_quality_line(run_id: str, quality: Mapping[str, Any]) -> str:
+    """Format run quality counters as one human-readable log line.
+
+    Args:
+        run_id: Run the counters describe.
+        quality: Counters from `run_quality_counters`.
+
+    Returns:
+        The line, listing only non-zero parse statuses and repairs.
+    """
     histogram = dict(quality.get("parse_status_histogram", {}) or {})
     nonzero = {key: value for key, value in histogram.items() if value}
     latency_p50 = quality.get("latency_p50_s", "")
@@ -8917,13 +12265,29 @@ def run_progress_summary(
     *,
     view: str = ATTEMPT_VIEW_LATEST,
 ) -> list[dict[str, Any]]:
-    """Per (run, model, task) coverage and parse-rate summary.
+    """Summarize coverage and parse rate per (run, model, task).
 
-    View: :data:`ATTEMPT_VIEW_LATEST` by default. Progress is measured against a
+    View: `ATTEMPT_VIEW_LATEST` by default. Progress is measured against a
     PLAN, so a failed request that a later resume re-requested successfully is
-    one observation, not two: the run reads ``1/1`` rather than ``2/1`` with a
-    depressed parse rate. Pass ``view=ATTEMPT_VIEW_ALL`` to summarize physical
+    one observation, not two: the run reads `1/1` rather than `2/1` with a
+    depressed parse rate. Pass `view=ATTEMPT_VIEW_ALL` to summarize physical
     attempts instead (useful when auditing how much work a recovery cost).
+
+    Args:
+        benchmark_rows: Current benchmark items; rows of other items are ignored.
+        raw_rows: Raw rows of the runs, or their ledger.
+        expected_stochastic_samples: Planned stochastic samples per item; the
+            expected record count is one deterministic record plus this many per
+            item.
+        view: Attempt view to summarize.
+
+    Returns:
+        One row per run, model and task with record counts, completion and parse
+        success rates, and deterministic and stochastic item coverage; empty when
+        the rows lack the identity or status columns.
+
+    Raises:
+        ValueError: If `view` is unknown.
     """
     ledger = AttemptLedger.from_raw_rows(raw_rows)
     rows = ledger.view(view)
@@ -8998,6 +12362,20 @@ def complete_run_ids_from_progress(
     expected_tasks: Iterable[str] = ("task1", "task2"),
     prefix: str | None = None,
 ) -> list[str]:
+    """Return the runs whose progress rows show every expected task complete.
+
+    A run is complete when it has a progress row for each expected task and every
+    row has full record completion, deterministic item coverage and complete
+    stochastic items.
+
+    Args:
+        progress_rows: Rows from `run_progress_summary`.
+        expected_tasks: Tasks a complete run must cover.
+        prefix: Run prefix to restrict to; `None` keeps every run.
+
+    Returns:
+        The complete run ids, in first-seen order.
+    """
     if not progress_rows:
         return []
     expected_task_set = {str(task) for task in expected_tasks}
@@ -9035,14 +12413,23 @@ def completion_record_key(
     dataset_id: str | None = None,
     variant: str | None = None,
 ) -> tuple[str, str, str, str, str, str, str, str, int]:
-    """Cache/dedup key of one planned observation, from its full identity.
+    """Return the cache/dedup key of one planned observation, from its full identity.
 
-    Thin wrapper over :meth:`ObservationIdentity.from_raw_row` so the resume
-    cache, :func:`dedupe_raw_rows`, and batch reconstruction cannot drift apart.
+    Thin wrapper over `ObservationIdentity.from_raw_row` so the resume
+    cache, `dedupe_raw_rows`, and batch reconstruction cannot drift apart.
     Provider and profile are part of the key, so a cell run under a different
     provider is never mistaken for one that is already complete; fields a legacy
-    row does not carry fall back to :data:`LEGACY_IDENTITY` on BOTH sides of the
+    row does not carry fall back to `LEGACY_IDENTITY` on BOTH sides of the
     comparison, which is what keeps an old raw file resumable.
+
+    Args:
+        row: Raw row or planned job.
+        dataset_id: Dataset of the file the row was read from, used when the row
+            records none.
+        variant: Benchmark variant of that file, used when the row records none.
+
+    Returns:
+        The `ObservationIdentity.record_key` of the row.
     """
     return ObservationIdentity.from_raw_row(
         row, dataset_id=dataset_id, variant=variant
@@ -9054,15 +12441,27 @@ def pending_completion_jobs(
     raw_rows: Iterable[Mapping[str, Any]],
     run_id: str,
 ) -> list[dict[str, Any]]:
-    """The planned jobs `run_id` has no reusable observation for.
+    """Return the planned jobs `run_id` has no reusable observation for.
 
     A record is reusable only when it shares the full
-    :class:`ObservationIdentity` of the planned job -- provider and profile
+    `ObservationIdentity` of the planned job -- provider and profile
     included, so a cell re-run under a second provider is planned in full rather
     than served from the first provider's rows.
 
     Native output rejections are terminal failed observations, not missing
     calls. Ordinary resume must not draw again until such a sample succeeds.
+
+    A reusable record must also have been produced under the job's current
+    `job_config_sha`; a legacy record without one is reused with a warning.
+
+    Args:
+        jobs: Planned completion jobs.
+        raw_rows: Raw rows already written; only rows of `run_id` with status
+            `ok` or `model_output_error` count as done.
+        run_id: Run being resumed.
+
+    Returns:
+        Copies of the jobs that still have to be requested, in plan order.
     """
     # Map each completed record to the job_config_sha it was produced under so
     # resume can re-run rows whose planned config has since changed. Legacy rows
@@ -9126,6 +12525,49 @@ def run_registry_summary(
     item_context: str = DEFAULT_ITEM_CONTEXT,
     notes: str = "",
 ) -> dict[str, Any]:
+    """Build the run registry row of one run, model and task set.
+
+    The row reports both readings of the raw file: `observed_records`,
+    `parse_success_rate` and the coverage fields count logical observations
+    against the plan, while `observed_attempts`, `observed_api_calls` and the
+    run-quality counters count physical attempts. The provider provenance is
+    checked for credential-shaped values before it is flattened to JSON.
+
+    Args:
+        benchmark_rows: Current benchmark items; they fix the planned item count.
+        raw_rows: Raw rows; only rows of this run, model and tasks are used.
+        run_id: Run the row describes.
+        run_group_id: Run group recorded on the row.
+        provider_id: Provider recorded on the row.
+        profile_id: Provider profile recorded on the row.
+        model: Model the row describes.
+        dataset_id: Benchmark dataset, normalized before recording.
+        variant: Benchmark variant, normalized before recording.
+        tasks: Tasks the run covers.
+        expected_stochastic_samples: Planned stochastic samples per item.
+        started_at_utc: Start timestamp recorded on the row.
+        finished_at_utc: Finish timestamp recorded on the row.
+        status: Explicit status; `None` derives `complete` or `partial` from the
+            record count and coverage.
+        base_url: Provider endpoint recorded on the row.
+        api_key_env: Name of the environment variable holding the API key.
+        concurrency: Request concurrency recorded on the row.
+        batch_size: Items per request; must be a positive integer and fixes the
+            expected number of API calls.
+        timeout_s: Request timeout recorded on the row.
+        json_mode: Whether JSON mode was requested; recorded as `yes` or `no`.
+        structured_output: Structured-output mode, normalized together with
+            `json_mode`.
+        request_extra_body: Extra request body, recorded as compact JSON.
+        server_model_probe: What the server reported about the model, recorded as
+            compact JSON.
+        batch_order: Item order within requests, normalized before recording.
+        item_context: Item context arm, normalized before recording.
+        notes: Free-text notes.
+
+    Returns:
+        The registry row, keyed by `RUN_REGISTRY_FIELDS` columns.
+    """
     # `request_extra_body` is flattened into a JSON string below, which would
     # hide a credential from a check on the finished row: validate the provider
     # provenance while it is still structured.
@@ -9289,8 +12731,14 @@ def upsert_run_registry_row(
     """Insert-or-replace one registry row under an advisory lock, atomically.
 
     Concurrent runners share one registry CSV per dataset/variant, so the
-    read-modify-write cycle is serialized with ``file_lock`` and published with
-    a temp file + ``os.replace`` so readers never observe a half-written CSV.
+    read-modify-write cycle is serialized with `file_lock` and published with
+    a temp file + `os.replace` so readers never observe a half-written CSV.
+
+    Args:
+        path: Registry CSV; created when missing.
+        row: Row to write; it replaces the row with the same run, profile, model,
+            dataset and variant, or is appended.
+        fieldnames: Column order of the file; `RUN_REGISTRY_FIELDS` by default.
     """
     path = Path(path)
     key_fields = ["run_id", "profile_id", "model", "dataset_id", "benchmark_variant"]
@@ -9333,10 +12781,26 @@ def registry_row_compatibility_issues(
 ) -> list[str]:
     """Explain why a registry row does not match an evaluation plan.
 
-    ``expected_records`` encodes both the number of planned benchmark items and
+    `expected_records` encodes both the number of planned benchmark items and
     stochastic samples. Validating it prevents deterministic-only or partial
     ablations from being selected merely because they are newer and marked
     complete.
+
+    Args:
+        row: Registry row to check.
+        run_group_id: Run group the row must belong to.
+        benchmark_item_count: Number of items in the benchmark.
+        expected_stochastic_samples: Planned stochastic samples per item.
+        required_tasks: Tasks the row must cover.
+        exact_tasks: When given, the row's tasks must be exactly these.
+        expected_batch_order: When given, the recorded batch order must match.
+        expected_batch_size: When given, the recorded batch size must match.
+        allow_partial_benchmark: Accept a plan over fewer items than the
+            benchmark holds.
+        allow_missing_batch_order: Accept a row that records no batch order.
+
+    Returns:
+        One description per mismatch; empty when the row is compatible.
     """
     issues: list[str] = []
     if str(row.get("status", "")) != "complete":
@@ -9429,6 +12893,18 @@ def run_events_path(
     run_id: Any = None,
     smoke: bool | None = None,
 ) -> Path:
+    """Return the run-event JSONL for a dataset and variant.
+
+    Args:
+        root: Repository root.
+        dataset_id: Dataset name or alias; selects the file-name suffix.
+        variant: Benchmark variant; selects the file-name suffix.
+        run_id: Run id; smoke runs are routed into the smoke tree.
+        smoke: Force the smoke tree when true; `None` infers it from `run_id`.
+
+    Returns:
+        The event-log path, in the smoke tree for smoke runs.
+    """
     return resolve_run_artifact_path(
         artifact_path(
             Path(root) / "data/processed/run_events.jsonl", dataset_id, variant
@@ -9446,6 +12922,18 @@ def run_progress_live_path(
     run_id: Any = None,
     smoke: bool | None = None,
 ) -> Path:
+    """Return the live progress CSV for a dataset and variant.
+
+    Args:
+        root: Repository root.
+        dataset_id: Dataset name or alias; selects the file-name suffix.
+        variant: Benchmark variant; selects the file-name suffix.
+        run_id: Run id; smoke runs are routed into the smoke tree.
+        smoke: Force the smoke tree when true; `None` infers it from `run_id`.
+
+    Returns:
+        The live progress path, in the smoke tree for smoke runs.
+    """
     return resolve_run_artifact_path(
         artifact_path(
             Path(root) / "data/processed/run_progress_live.csv", dataset_id, variant
@@ -9463,19 +12951,32 @@ def live_run_counters(
     started_monotonic: float | None = None,
     now_monotonic: float | None = None,
 ) -> dict[str, Any]:
-    """Live progress counters for one cell, from both views of its raw rows.
+    """Return live progress counters for one cell, from both views of its raw rows.
 
-    ``expected_records`` is a count of PLANNED jobs, so every counter compared
-    against it -- ``observed_records``, the completion rate, parse/error rates,
+    `expected_records` is a count of PLANNED jobs, so every counter compared
+    against it -- `observed_records`, the completion rate, parse/error rates,
     throughput, and the ETA -- reads
-    :attr:`AttemptLedger.latest_logical_observations`. A failed request that a
+    `AttemptLedger.latest_logical_observations`. A failed request that a
     resume re-requested successfully is therefore one record at 100%, not two
     records at 200% with half the parse rate (which is what used to trip the
     parse-failure warning on a recovered run).
 
-    ``observed_attempts``, ``observed_api_calls``, and the
-    :func:`run_quality_counters` block read :attr:`AttemptLedger.all_attempts`:
+    `observed_attempts`, `observed_api_calls`, and the
+    `run_quality_counters` block read `AttemptLedger.all_attempts`:
     those describe what the provider was actually asked to do.
+
+    Args:
+        raw_rows: Raw rows of the cell, or their ledger.
+        expected_records: Planned records of the cell.
+        expected_api_calls: Planned provider requests of the cell.
+        started_monotonic: `time.monotonic()` reading at the start of the cell;
+            `None` reports zero elapsed time.
+        now_monotonic: Current monotonic reading; `None` reads the clock.
+
+    Returns:
+        The run-quality counters plus record, parse, request-error and API-call
+        counts and rates, elapsed seconds, throughput and the ETA in seconds
+        (blank when the throughput is still zero, 0 when nothing remains).
     """
     ledger = AttemptLedger.from_raw_rows(raw_rows)
     observation_rows = ledger.latest_logical_observations
@@ -9559,6 +13060,16 @@ def _duration_label(seconds: Any) -> str:
 
 
 def format_live_progress_line(run_id: str, counters: Mapping[str, Any]) -> str:
+    """Format live progress counters as one human-readable log line.
+
+    Args:
+        run_id: Run the counters describe.
+        counters: Counters from `live_run_counters`.
+
+    Returns:
+        The line with record and API-call progress, parse success, errors,
+        elapsed time and ETA.
+    """
     expected_records = int(counters.get("expected_records", 0) or 0)
     observed_records = int(counters.get("observed_records", 0) or 0)
     expected_api_calls = int(counters.get("expected_api_calls", 0) or 0)
@@ -9574,6 +13085,12 @@ def format_live_progress_line(run_id: str, counters: Mapping[str, Any]) -> str:
 
 
 def append_run_event(path: str | Path, event: Mapping[str, Any]) -> None:
+    """Append one event to the run-event JSONL, stamped with the current UTC time.
+
+    Args:
+        path: Run-event file.
+        event: Event fields; a `created_at_utc` field in it overrides the stamp.
+    """
     append_jsonl(path, {"created_at_utc": utc_now_iso(), **dict(event)})
 
 
@@ -9583,7 +13100,14 @@ def write_live_progress_csv(
     raw_rows: list[dict[str, Any]] | AttemptLedger,
     expected_stochastic_samples: int,
 ) -> None:
-    """Publish per-task progress for one cell (logical-observation view)."""
+    """Publish per-task progress for one cell (logical-observation view).
+
+    Args:
+        path: Live progress CSV to overwrite.
+        benchmark_rows: Current benchmark items.
+        raw_rows: Raw rows of the cell, or their ledger.
+        expected_stochastic_samples: Planned stochastic samples per item.
+    """
     progress = run_progress_summary(
         benchmark_rows,
         raw_rows,
@@ -9598,6 +13122,21 @@ def warning_events_for_counters(
     logging_config: Mapping[str, Any],
     emitted_warning_types: set[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """Return warning events for parse-failure and request-error rates above threshold.
+
+    Nothing is reported before `warn_after_records` records have been observed,
+    and a warning type already emitted is not repeated.
+
+    Args:
+        counters: Counters from `live_run_counters`.
+        logging_config: Run logging settings; missing thresholds fall back to
+            `DEFAULT_RUN_LOGGING`.
+        emitted_warning_types: Warning types already emitted for this run.
+
+    Returns:
+        Zero, one or two warning events, each carrying the threshold, the observed
+        rate and all counters.
+    """
     emitted_warning_types = emitted_warning_types or set()
     observed_records = int(counters.get("observed_records", 0) or 0)
     warn_after = int(
@@ -9671,10 +13210,35 @@ def provider_preflight(
 ) -> dict[str, Any]:
     """Send one fixed-answer request and check that the reply parses.
 
-    ``max_tokens`` defaults to a budget that fits the probe answer alone; a
+    `max_tokens` defaults to a budget that fits the probe answer alone; a
     profile whose models always emit a reasoning channel (Muse Glimmer,
     gpt-oss) must pass its own budget, or the probe is truncated before the
     answer starts and the preflight fails with an empty text.
+
+    The request is a single-item Task 1 request at temperature 0, with its
+    response format resolved by `resolve_response_format_args`.
+
+    Args:
+        host: Provider base URL.
+        model: Model to probe.
+        api_key_env: Name of the environment variable holding the API key.
+        timeout_s: Request timeout in seconds.
+        prompt_version: Prompt version of the run; selects the confidence scale
+            the reply is parsed with.
+        json_mode: Legacy JSON-mode switch; requests `json_object` when no other
+            response format applies.
+        structured_output: Structured-output mode or alias.
+        response_format: Profile-level response format, used only in `none` mode.
+        extra_body: Provider-specific request body.
+        instructor_mode: Instructor library mode name.
+        validation_retries: Instructor validation retries.
+        max_tokens: Completion token budget of the probe.
+        completion_fn: Completion function; Instructor profiles are routed to
+            `instructor_completion` when this is `chat_completion`.
+
+    Returns:
+        `ok` (the request succeeded and the reply parsed), `parse_status`,
+        `error`, `latency_s` and the first 240 characters of `raw_text`.
     """
     resolved_response_format, resolved_extra_body = resolve_response_format_args(
         "task1",
@@ -9745,6 +13309,17 @@ def provider_preflight(
 def select_model_run_rows(
     rows: list[dict[str, Any]], run_id: str, model: str, tasks: Iterable[str]
 ) -> list[dict[str, Any]]:
+    """Return the rows of one run and model that belong to the given tasks.
+
+    Args:
+        rows: Raw rows to filter.
+        run_id: Run to keep.
+        model: Model to keep.
+        tasks: Tasks to keep.
+
+    Returns:
+        The matching rows, in input order.
+    """
     task_set = {str(task) for task in tasks}
     return [
         row
@@ -9762,6 +13337,24 @@ def preflight_profile(
     prompt_version: str,
     completion_fn: Callable[..., dict[str, Any]] = chat_completion,
 ) -> dict[str, Any]:
+    """Run the provider preflight with a profile's settings; fail if it does not parse.
+
+    The probe gets the profile's per-item `max_tokens`, so a reasoning model has
+    the same room before its answer as a real item.
+
+    Args:
+        profile: Provider profile; `base_url`, `api_key_env`, `timeout_s` and
+            `json_mode` are required, the request options are optional.
+        model: Model to probe.
+        prompt_version: Prompt version of the run.
+        completion_fn: Completion function passed to `provider_preflight`.
+
+    Returns:
+        The preflight result of `provider_preflight`.
+
+    Raises:
+        RuntimeError: If the preflight request failed or its reply did not parse.
+    """
     preflight = provider_preflight(
         host=profile["base_url"],
         model=model,
@@ -9794,6 +13387,18 @@ def emit_warning_events(
     context: Mapping[str, Any],
     events_path: str | Path,
 ) -> None:
+    """Log new rate warnings for a run and append them to the run-event file.
+
+    Args:
+        counters: Counters from `live_run_counters`.
+        logging_config: Run logging settings; `write_event_jsonl` must be present
+            and decides whether events are appended to `events_path`.
+        emitted_warning_types: Warning types already emitted; updated in place so
+            each type is reported once per run.
+        context: Run identity fields merged into every event; `run_id` also
+            prefixes the log line.
+        events_path: Run-event JSONL file.
+    """
     run_id = str(context.get("run_id", ""))
     for warning_event in warning_events_for_counters(
         counters, logging_config, emitted_warning_types
@@ -9817,6 +13422,16 @@ def emit_warning_events(
 def preliminary_result_paths(
     root: str | Path, variant: str | None = None, dataset_id: str | None = None
 ) -> dict[str, Path]:
+    """Return the output paths of the preliminary result snapshot.
+
+    Args:
+        root: Repository root.
+        variant: Benchmark variant; selects the file-name suffix.
+        dataset_id: Dataset name or alias; selects the file-name suffix.
+
+    Returns:
+        The `scores`, `summary` and `progress` CSVs and the markdown `table`.
+    """
     root = Path(root)
     return {
         "scores": artifact_path(
@@ -9849,8 +13464,27 @@ def write_preliminary_result_snapshot(
 
     The snapshot is read while a run is still in flight, which is exactly when
     unwritten samples exist, so it takes the same required
-    :class:`SamplingPlan` as :func:`build_uq_scores` and reports progress
+    `SamplingPlan` as `build_uq_scores` and reports progress
     against the same denominator.
+
+    Only benchmark items with a current raw output are scored. The snapshot
+    writes the score rows, the metric summary, the run progress and a markdown
+    table of the last two.
+
+    Args:
+        benchmark_rows: Current benchmark items.
+        raw_rows: Raw rows written so far.
+        root: Repository root.
+        variant: Benchmark variant; selects the file-name suffix.
+        dataset_id: Dataset name or alias; selects the file-name suffix.
+        include_baseline: Add the rule-based baseline scores.
+        sampling_plan: Plan the run is executing under.
+        infer_plan_from_observations: Explicit opt-in to the exploratory inferred
+            plan when no `sampling_plan` is given.
+
+    Returns:
+        The written paths, the number of score, summary and progress rows, and the
+        plan source and planned stochastic samples.
     """
     plan = resolve_sampling_plan(
         sampling_plan,
@@ -10027,13 +13661,24 @@ def score_base(
     valid_n: int,
     total_n: int,
 ) -> dict[str, Any]:
-    """Identity and provenance fields shared by every score row.
+    """Return the identity and provenance fields shared by every score row.
 
-    ``batch_id`` is the provider request this row's answer was decided in and
-    is the default bootstrap cluster (:data:`DEFAULT_BOOTSTRAP_CLUSTER_FIELD`);
-    ``sample_batch_ids`` lists every contributing request, which only differs
-    from ``batch_id`` for a collapsed stochastic group. Both are blank when the
-    raw record carries no ``batch_id`` (legacy, single-item, or fake rows).
+    `batch_id` is the provider request this row's answer was decided in and
+    is the default bootstrap cluster (`DEFAULT_BOOTSTRAP_CLUSTER_FIELD`);
+    `sample_batch_ids` lists every contributing request, which only differs
+    from `batch_id` for a collapsed stochastic group. Both are blank when the
+    raw record carries no `batch_id` (legacy, single-item, or fake rows).
+
+    Args:
+        raw: Raw row that supplies the run identity and answer length.
+        item: Benchmark item of the row.
+        uq_method: UQ method recorded on the row.
+        valid_n: Samples that parsed.
+        total_n: Samples the plan asked for.
+
+    Returns:
+        The shared fields, including the parse-failure count, the
+        `stochastic_complete` flag and the answer-length fields.
     """
     batch_id = raw_batch_id(raw)
     return {
@@ -10062,6 +13707,18 @@ def score_base(
 
 
 def baseline_score_base(item: dict[str, Any], task: str) -> dict[str, Any]:
+    """Return the shared score-row fields for the rule-based baseline.
+
+    The baseline sent no request, so it has no request cluster and no answer
+    length, and it always counts as one complete, parsed sample.
+
+    Args:
+        item: Benchmark item of the row.
+        task: Task the row scores.
+
+    Returns:
+        The shared fields, in the same shape as `score_base`.
+    """
     return {
         "run_id": "rule-based-baseline",
         "model": RULE_BASELINE_MODEL,
@@ -10086,6 +13743,21 @@ def baseline_score_base(item: dict[str, Any], task: str) -> dict[str, Any]:
 def build_rule_baseline_scores(
     benchmark_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Score the deterministic rule-based baseline on Task 1 and Task 2.
+
+    The baseline reads the modality off the source statement with
+    `rule_based_source_modality`, answers Task 1 `yes` exactly for `mandatory`, and
+    reports that modality for Task 2, always with confidence 1.
+
+    Args:
+        benchmark_rows: Benchmark items to score.
+
+    Returns:
+        One Task 1 and one Task 2 score row per item.
+
+    Raises:
+        ValueError: If the rules find no modality in a source statement.
+    """
     scores: list[dict[str, Any]] = []
     for item in benchmark_rows:
         predicted_modality = rule_based_source_modality(item["source_statement"])
@@ -10139,7 +13811,17 @@ def build_rule_baseline_scores(
 def prompt_sensitivity_summary(
     benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Per-prompt Task 1 drift over the deterministic prompt-sensitivity probe."""
+    """Summarize per-prompt Task 1 drift in the deterministic prompt-sensitivity probe.
+
+    Args:
+        benchmark_rows: Benchmark items of the probe.
+        raw_rows: Raw rows of the probe; each prompt variant is its own run.
+
+    Returns:
+        One row per model and prompt run with the Task 1 item count and accuracy,
+        the share of nonmandatory sources answered `yes` with confidence at least
+        0.80 and 0.90, and the mean `p_yes` on those sources.
+    """
     scores = build_uq_scores(
         benchmark_rows, raw_rows, sampling_plan=DETERMINISTIC_ONLY_SAMPLING_PLAN
     )
@@ -10179,6 +13861,22 @@ def prompt_sensitivity_summary(
 def task2_prompt_sensitivity_summary(
     benchmark_rows: list[dict[str, Any]], raw_rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
+    """Summarize per-prompt Task 2 accuracy and over-commitment.
+
+    Every parsed answer with a recognized modality is scored against the item's
+    gold modality; the nice-to-have columns isolate the weakest gold modality.
+
+    Args:
+        benchmark_rows: Benchmark items of the probe.
+        raw_rows: Raw rows of the probe; each prompt variant is its own run and
+            only Task 2 rows are used.
+
+    Returns:
+        One row per model and prompt run with raw and valid counts, parse success,
+        accuracy, nice-to-have accuracy and the share of nice-to-have items
+        predicted `recommended`, over-commitment, and the high-confidence
+        over-commitment rates at 0.80 and 0.90.
+    """
     if not raw_rows:
         return []
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
@@ -10275,6 +13973,23 @@ def task2_prompt_sensitivity_summary(
 def weak_modality_probe_summary(
     probe_items: list[dict[str, Any]], raw_rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
+    """Summarize the weak-modality probe per model, run, template and sample kind.
+
+    Every probe item is a nice-to-have statement, so `accuracy` is the share of
+    valid answers predicted `nice_to_have`, and any stronger prediction is an
+    over-commitment.
+
+    Args:
+        probe_items: Probe items, keyed by `item_id`.
+        raw_rows: Raw rows of the probe; only Task 2 rows are used.
+
+    Returns:
+        One row per model, run, template and sample kind, with raw and valid
+        counts, parse success, accuracy, the share predicted `recommended`,
+        over-commitment overall and at confidence 0.80 and 0.90, the share of each
+        predicted modality and the mean confidence; sorted by model, run, sample
+        kind and template.
+    """
     if not raw_rows:
         return []
     item_by_id = {row["item_id"]: row for row in probe_items}
@@ -10387,6 +14102,16 @@ def weak_modality_probe_summary(
 def write_weak_modality_probe_summary(
     summary_rows: list[dict[str, Any]], output_dir: str | Path, suffix: str = ""
 ) -> dict[str, Path]:
+    """Write the weak-modality probe summary as a CSV and a markdown table.
+
+    Args:
+        summary_rows: Rows from `weak_modality_probe_summary`.
+        output_dir: Output directory; created when missing.
+        suffix: Appended to both file names before the extension.
+
+    Returns:
+        The `csv` and `markdown` paths.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / f"weak_modality_probe_summary{suffix}.csv"
@@ -10404,6 +14129,20 @@ def write_weak_modality_probe_summary(
 def grouped(
     rows: Iterable[dict[str, Any]], keys: list[str]
 ) -> dict[tuple[Any, ...], list[dict[str, Any]]]:
+    """Group rows by the values of some columns.
+
+    Key columns missing from every row are filled with an empty string. As with
+    pandas grouping, a row whose key value is `None` or absent while other rows
+    carry it is dropped.
+
+    Args:
+        rows: Rows to group.
+        keys: Columns to group by.
+
+    Returns:
+        The rows of each group, keyed by the tuple of key values, in first-seen
+        order.
+    """
     frame = pd.DataFrame.from_records(list(rows))
     if frame.empty:
         return {}
@@ -10419,6 +14158,19 @@ def grouped(
 
 
 def overcommitment_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, float]:
+    """Return the over- and under-commitment rates of Task 2 rows.
+
+    Over-commitment means the predicted modality is stronger than the gold one on
+    the ordinal scale of `ORDINAL_STRENGTH`; its severity is the number of steps.
+
+    Args:
+        rows: Rows with `gold_modality` and `pred_modality`.
+
+    Returns:
+        `over_commitment`, `under_commitment`, and the mean severity over all rows
+        and over the over-committed rows; all NaN without rows, and the
+        conditional severity is NaN when nothing over-commits.
+    """
     if not rows:
         return {
             "over_commitment": math.nan,
@@ -10451,7 +14203,15 @@ def overcommitment_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, floa
 def unsupported_mandatory_acceptance_counts(
     rows: list[dict[str, Any]], threshold: float
 ) -> tuple[int, int]:
-    """High-confidence yes decisions / valid nonmandatory-source Task 1 answers."""
+    """Count high-confidence yes decisions / valid nonmandatory-source Task 1 answers.
+
+    Args:
+        rows: Score rows; only Task 1 rows with `y_true == 0` are eligible.
+        threshold: Minimum confidence of an accepted `yes`.
+
+    Returns:
+        The number of accepted rows and the number of eligible rows.
+    """
     weak_rows = [
         row
         for row in rows
@@ -10470,6 +14230,16 @@ def unsupported_mandatory_acceptance_counts(
 def unsupported_mandatory_acceptance_rate(
     rows: list[dict[str, Any]], threshold: float
 ) -> float:
+    """Return the share of nonmandatory-source Task 1 answers accepted as mandatory.
+
+    Args:
+        rows: Score rows.
+        threshold: Minimum confidence of an accepted `yes`.
+
+    Returns:
+        The rate from `unsupported_mandatory_acceptance_counts`, or NaN without
+        eligible rows.
+    """
     accepted, eligible = unsupported_mandatory_acceptance_counts(rows, threshold)
     return accepted / eligible if eligible else math.nan
 
@@ -10479,6 +14249,23 @@ def task2_high_confidence_overcommitment_rate(
     threshold: float,
     denominator: str = "all",
 ) -> float:
+    """Return the share of Task 2 rows that over-commit with high confidence.
+
+    A row counts when its predicted modality is stronger than the gold one and its
+    confidence is at least `threshold`.
+
+    Args:
+        rows: Score rows; only Task 2 rows are used.
+        threshold: Minimum confidence of a counted over-commitment.
+        denominator: `all` counts every Task 2 row; `overcommittable` counts only
+            rows whose gold modality is weaker than `mandatory`.
+
+    Returns:
+        The rate, or NaN without rows in the denominator.
+
+    Raises:
+        ValueError: If `denominator` is unknown.
+    """
     task_rows = [row for row in rows if str(row.get("task", "")) == "task2"]
     if denominator == "overcommittable":
         task_rows = [
@@ -10503,6 +14290,16 @@ def task2_high_confidence_overcommitment_rate(
 def weak_strengthening_rate(
     rows: list[dict[str, Any]], threshold: float | None = None
 ) -> float:
+    """Return the share of nice-to-have Task 2 rows predicted with a stronger modality.
+
+    Args:
+        rows: Score rows; only Task 2 rows with gold `nice_to_have` are used.
+        threshold: Minimum confidence of a counted strengthening; `None` counts
+            every one.
+
+    Returns:
+        The rate, or NaN without nice-to-have rows.
+    """
     weak_rows = [
         row
         for row in rows
@@ -10525,6 +14322,18 @@ def weak_strengthening_rate(
 def label_correct_text_overcommit_rate(
     rows: list[dict[str, Any]], threshold: float | None = None
 ) -> float:
+    """Return the share of correctly labelled Task 2 rows whose text over-commits.
+
+    The label can be right while the rewritten requirement text still states a
+    stronger modality (`text_overcommit`).
+
+    Args:
+        rows: Score rows; only Task 2 rows with a truthy `y_true` are used.
+        threshold: Minimum confidence of a counted row; `None` counts every one.
+
+    Returns:
+        The rate, or NaN without correctly labelled rows.
+    """
     label_correct_rows = [
         row
         for row in rows
@@ -10543,6 +14352,14 @@ def label_correct_text_overcommit_rate(
 
 
 def weak_modality_recall(rows: list[dict[str, Any]]) -> float:
+    """Return the share of nice-to-have Task 2 rows predicted `nice_to_have`.
+
+    Args:
+        rows: Score rows; only Task 2 rows with gold `nice_to_have` are used.
+
+    Returns:
+        The recall, or NaN without nice-to-have rows.
+    """
     weak_rows = [
         row
         for row in rows
@@ -10560,6 +14377,20 @@ def weak_modality_recall(rows: list[dict[str, Any]]) -> float:
 def high_confidence_overcommitment_rate(
     rows: list[dict[str, Any]], task: str, threshold: float
 ) -> float:
+    """Return the high-confidence over-commitment rate of one task.
+
+    Task 1 uses `unsupported_mandatory_acceptance_rate` and Task 2 uses
+    `task2_high_confidence_overcommitment_rate` over all rows; other tasks have
+    no such rate.
+
+    Args:
+        rows: Score rows.
+        task: Task whose rows are used.
+        threshold: Minimum confidence of a counted over-commitment.
+
+    Returns:
+        The rate, or NaN for other tasks or without rows of the task.
+    """
     task_rows = [row for row in rows if str(row.get("task", "")) == task]
     if not task_rows:
         return math.nan
@@ -10575,6 +14406,15 @@ def high_confidence_overcommitment_rate(
 
 
 def is_truthy_strict(value: Any) -> bool:
+    """Return whether a CSV-style cell is true.
+
+    Args:
+        value: A bool, used as is, or a value whose stripped, lower-cased text is
+            compared with `1`, `true` and `yes`.
+
+    Returns:
+        True only for a true bool or one of those strings.
+    """
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes"}
@@ -10596,6 +14436,12 @@ LENGTH_TERCILE_COUNT = 3
 
 
 def empty_text_modality_summary_metrics() -> dict[str, float | str]:
+    """Return the text-modality summary metrics with every value blank.
+
+    Returns:
+        The keys of `text_modality_summary_metrics`, each mapped to an empty
+        string.
+    """
     keys = [
         "text_modality_accuracy",
         "text_modality_accuracy_all",
@@ -10626,12 +14472,22 @@ def _coverage_adjusted_bounds(
     denominator: int,
     unknown_excluded: int,
 ) -> dict[str, float | str]:
-    """Worst/best-case bounds for a rate whose denominator drops unknown text.
+    """Return worst/best-case bounds for a rate whose denominator drops unknown text.
 
-    The published rate uses ``denominator`` (rows whose text modality parsed).
-    ``*_lower_bound`` charges every unknown row as non-strengthening and
-    ``*_upper_bound`` charges every unknown row as strengthening, both over the
-    coverage-complete denominator ``denominator + unknown_excluded``.
+    The published rate uses `denominator` (rows whose text modality parsed).
+    `*_lower_bound` charges every unknown row as non-strengthening and
+    `*_upper_bound` charges every unknown row as strengthening, both over the
+    coverage-complete denominator `denominator + unknown_excluded`.
+
+    Args:
+        metric: Name of the rate; prefixes every returned key.
+        numerator: Rows counted by the rate.
+        denominator: Rows whose text modality parsed.
+        unknown_excluded: Rows left out because their text modality is unknown.
+
+    Returns:
+        The three counts and the two bounds; the bounds are blank when there are
+        no rows at all.
     """
     full = denominator + unknown_excluded
     return {
@@ -10646,15 +14502,25 @@ def _coverage_adjusted_bounds(
 
 
 def text_modality_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, float | str]:
-    """Text-modality drift metrics with coverage-adjusted bounds.
+    """Return text-modality drift metrics with coverage-adjusted bounds.
 
-    The headline ``text_over_commitment`` / ``strict_text_over_commitment``
+    The headline `text_over_commitment` / `strict_text_over_commitment`
     rates are computed over rows whose generated text yielded a modality
-    (``text_modality_parse_status == "ok"``). Rows whose text modality is
-    ``unknown`` or ``negated`` are excluded from that denominator, so each
+    (`text_modality_parse_status == "ok"`). Rows whose text modality is
+    `unknown` or `negated` are excluded from that denominator, so each
     metric is also reported with its numerator, denominator, the number of
     excluded unknown rows, and the worst/best-case bounds that put every
     excluded row on one side.
+
+    Args:
+        rows: Score rows; only rows whose `text_modality_parse_status` is `ok` or
+            `unknown` are used.
+
+    Returns:
+        The keys of `empty_text_modality_summary_metrics`. Everything is blank
+        without such rows and the rates over parsed text are blank when no text
+        parsed; the all-row accuracy, coverage, negated and multi-modal rates
+        use every used row as denominator.
     """
     diagnostic_rows = [
         row
@@ -10763,7 +14629,15 @@ def text_modality_summary_metrics(rows: list[dict[str, Any]]) -> dict[str, float
 
 
 def _row_variation_ratio(row: Mapping[str, Any]) -> float | None:
-    """Variation ratio (1 - p_majority) for one repeated-sample score row."""
+    """Return the variation ratio (1 - p_majority) for one repeated-sample score row.
+
+    Args:
+        row: Score row; its `uncertainty_score` is used when it is a variation
+            ratio, otherwise the ratio is computed from `label_distribution`.
+
+    Returns:
+        The variation ratio, or `None` when neither field yields one.
+    """
     if str(row.get("uncertainty_measure", "")) == "variation_ratio":
         try:
             return float(row["uncertainty_score"])
@@ -10792,12 +14666,25 @@ AGREEMENT_CONSISTENCY_METHODS = {
 
 
 def repeated_sample_agreement_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Repeated-sample agreement restricted to coverage-complete rows.
+    """Return repeated-sample agreement restricted to coverage-complete rows.
 
     A published agreement / unanimity number may only be computed over items
-    where every requested stochastic sample parsed (``stochastic_complete``).
-    Items with ``valid_n < total_n`` are excluded and counted in
-    ``agreement_n_incomplete_excluded`` so the reported share is auditable.
+    where every requested stochastic sample parsed (`stochastic_complete`).
+    Items with `valid_n < total_n` are excluded and counted in
+    `agreement_n_incomplete_excluded` so the reported share is auditable.
+
+    Only rows that planned more than one sample count. When consistency-method
+    rows are among them, only those are used, so the other sampling-based rows
+    of the same item are not counted again.
+
+    Args:
+        rows: Score rows.
+
+    Returns:
+        `repeated_sample_unanimity` (share of complete rows whose samples all
+        agree), `mean_repeated_sample_agreement` (mean share of the majority
+        label), `agreement_n_complete` and `agreement_n_incomplete_excluded`; the
+        two rates are blank when no complete row has a usable distribution.
     """
     repeated: list[dict[str, Any]] = []
     for row in rows:
@@ -10856,6 +14743,12 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def empty_length_bloat_metrics() -> dict[str, Any]:
+    """Return the answer-length metrics with every value blank.
+
+    Returns:
+        The keys of `length_bloat_metrics`, including the per-tercile and
+        per-modality keys, each mapped to an empty string.
+    """
     metrics: dict[str, Any] = {
         "mean_requirement_word_count": "",
         "mean_source_word_count": "",
@@ -10876,12 +14769,23 @@ def empty_length_bloat_metrics() -> dict[str, Any]:
 
 
 def length_bloat_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Answer-length / bloat metrics and the length-vs-strengthening breakdown.
+    """Return answer-length / bloat metrics and the length-vs-strengthening breakdown.
 
-    Rows are bucketed into ``LENGTH_TERCILE_COUNT`` equal-count terciles of
-    ``length_ratio`` (generated requirement words / source statement words) and
+    Rows are bucketed into `LENGTH_TERCILE_COUNT` equal-count terciles of
+    `length_ratio` (generated requirement words / source statement words) and
     the broad and strict text-strengthening rates are reported per bucket, so a
     bloat/strengthening interaction is visible rather than pooled away.
+
+    Args:
+        rows: Task 2 score rows with the answer-length fields; blank or NaN values
+            are skipped per metric.
+
+    Returns:
+        The keys of `empty_length_bloat_metrics`: mean word counts, length ratio
+        and completion tokens, the mean requirement length per source modality,
+        and per tercile the parsed-text row count, mean length ratio and both
+        strengthening rates (over rows whose text modality parsed), plus
+        `|`-joined summaries of the tercile bounds and rates.
     """
     metrics = empty_length_bloat_metrics()
     word_counts = [_float_or_none(row.get("requirement_word_count")) for row in rows]
@@ -10965,6 +14869,23 @@ def qualitative_overcommitment_examples(
     limit: int = 5,
     threshold: float = 0.80,
 ) -> list[dict[str, Any]]:
+    """Pick the most severe high-confidence over-commitment examples.
+
+    Task 1 examples are nonmandatory sources with `p_yes` at least `threshold`,
+    ranked by `p_yes`. Task 2 examples predict a stronger modality than the gold
+    one with confidence at least `threshold`, ranked by the number of steps plus
+    the confidence. Rule-based baseline rows are skipped.
+
+    Args:
+        scores: Score rows.
+        benchmark_rows: Benchmark items; supply the source statement and the
+            candidate requirement.
+        limit: Maximum number of examples.
+        threshold: Minimum `p_yes` or confidence of an example.
+
+    Returns:
+        The top examples by descending risk score, then model and seed.
+    """
     benchmark_by_item = {row["item_id"]: row for row in benchmark_rows}
     examples: list[dict[str, Any]] = []
     for row in scores:
@@ -11033,6 +14954,20 @@ def write_qualitative_overcommitment_examples(
     limit: int = 5,
     threshold: float = 0.80,
 ) -> dict[str, Path]:
+    """Write the qualitative over-commitment examples as a CSV and a markdown table.
+
+    Args:
+        scores: Score rows.
+        benchmark_rows: Benchmark items.
+        output_dir: Output directory; created when missing.
+        suffix: Appended to both file names before the extension.
+        limit: Maximum number of examples.
+        threshold: Minimum `p_yes` or confidence of an example.
+
+    Returns:
+        The `csv` and `markdown` paths; the markdown file holds a placeholder
+        sentence when there are no examples.
+    """
     examples = qualitative_overcommitment_examples(
         scores, benchmark_rows, limit=limit, threshold=threshold
     )
@@ -11066,6 +15001,15 @@ def write_qualitative_overcommitment_examples(
 
 
 def calibration_probabilities(rows: list[dict[str, Any]], task: str) -> list[float]:
+    """Return the probabilities a task's calibration metrics are computed on.
+
+    Args:
+        rows: Score rows of the task.
+        task: `task1` uses `p_yes`; every other task uses `confidence`.
+
+    Returns:
+        One probability per row.
+    """
     if task == "task1":
         return [float(row["p_yes"]) for row in rows]
     return [float(row["confidence"]) for row in rows]
@@ -11080,6 +15024,19 @@ def _error_label(task: str, y_true: int, y_pred: int) -> int:
 
 
 def prediction_error_labels(rows: list[dict[str, Any]], task: str) -> list[int]:
+    """Return whether each score row is a prediction error.
+
+    Args:
+        rows: Score rows of the task.
+        task: `task1` compares `y_true` with `y_pred`; `task2` and `task3` rows
+            carry correctness in `y_true`, so an error is `y_true == 0`.
+
+    Returns:
+        1 for an error and 0 otherwise, one per row.
+
+    Raises:
+        ValueError: If `rows` is not empty and the task is unknown.
+    """
     labels: list[int] = []
     for row in rows:
         if task == "task1":
@@ -11092,6 +15049,18 @@ def prediction_error_labels(rows: list[dict[str, Any]], task: str) -> list[int]:
 
 
 def error_detection_auroc(rows: list[dict[str, Any]], task: str) -> float:
+    """Return how well `uncertainty_score` separates errors from correct predictions.
+
+    Rows with a blank, unparsable or NaN score are skipped.
+
+    Args:
+        rows: Score rows of the task.
+        task: Task of the rows; decides what counts as an error.
+
+    Returns:
+        The AUROC of the uncertainty score against the error labels, or NaN when
+        only one class remains.
+    """
     errors: list[int] = []
     uncertainty_scores: list[float] = []
     for row, error in zip(rows, prediction_error_labels(rows, task), strict=True):
@@ -11149,6 +15118,24 @@ def acse_normalized_score_rows(
     scores: list[dict[str, Any]],
     calibration_fraction: float = ACSE_CALIBRATION_FRACTION,
 ) -> list[dict[str, Any]]:
+    """Min-max normalize ACSE uncertainty scores and split them for calibration.
+
+    Scores are normalized within each run, model, task and embedding backend, and
+    the group's seeds are split at random (fixed seed `ACSE_CALIBRATION_SEED`)
+    into a calibration and an evaluation half, so threshold selection and
+    evaluation never share a seed. A group with a single seed, or without seed
+    ids, is calibration only.
+
+    Args:
+        scores: Score rows; only ACSE rows with a finite score are used.
+        calibration_fraction: Share of seeds in the calibration split; at least
+            one seed is always left for evaluation when there are two or more.
+
+    Returns:
+        One normalized row per ACSE score row, with the raw and normalized
+        scores, the group's raw range, the split, the prediction error and the
+        cluster diagnostics; sorted by model, task, backend and item.
+    """
     acse_rows = [
         row
         for row in scores
@@ -11292,6 +15279,25 @@ def acse_calibration_diagnostic_rows(
     normalized_rows: list[dict[str, Any]],
     target_error_rates: Iterable[float] = ACSE_TARGET_ACCEPTED_ERROR_RATES,
 ) -> list[dict[str, Any]]:
+    """Check whether an ACSE deferral threshold tuned on calibration seeds transfers.
+
+    For each target accepted error rate, the largest normalized threshold whose
+    accepted rows (score at or below it) meet the target on the calibration split
+    is selected and then applied to the evaluation split. Groups without
+    evaluation rows are evaluated on the calibration rows themselves, which
+    `evaluation_mode` records as `resubstitution_no_heldout`.
+
+    Args:
+        normalized_rows: Rows from `acse_normalized_score_rows`.
+        target_error_rates: Accepted error rates to tune thresholds for.
+
+    Returns:
+        One row per run, model, task, backend and target with the selected
+        threshold (blank when no threshold meets the target), the accepted count,
+        coverage and accepted error rate on both splits, the evaluation deferred
+        error rate, and the overall error rate and error-detection AUROC; sorted
+        by model, task, backend and target.
+    """
     rows: list[dict[str, Any]] = []
     group_keys = ["run_id", "model", "task", "semantic_embedding_backend"]
     for key, group_rows in grouped(normalized_rows, group_keys).items():
@@ -11390,6 +15396,22 @@ def selective_deferral_metrics(
     task: str,
     defer_fractions: Iterable[float] = (0.10, 0.20),
 ) -> dict[str, float]:
+    """Return coverage and error rate after deferring the most uncertain predictions.
+
+    For each fraction, the rounded-up share of rows with the highest
+    `uncertainty_score` is deferred and the rest retained; rows with a blank or
+    NaN score are left out entirely.
+
+    Args:
+        rows: Score rows of the task.
+        task: Task of the rows; decides what counts as an error.
+        defer_fractions: Shares of rows to defer.
+
+    Returns:
+        `selective_coverage_defer_<pct>` and `selective_error_defer_<pct>` per
+        fraction, where `<pct>` is the fraction in percent; both are NaN without
+        scored rows, and the error rate is NaN when nothing is retained.
+    """
     pairs: list[tuple[float, int]] = []
     for row, error in zip(rows, prediction_error_labels(rows, task), strict=True):
         value = row.get("uncertainty_score", "")
@@ -11430,18 +15452,30 @@ def cluster_ci_fields(
     seed: int = 20260518,
     cluster_field: str = DEFAULT_BOOTSTRAP_CLUSTER_FIELD,
 ) -> dict[str, float | str]:
-    """Both cluster bootstraps for every named metric over one row slice.
+    """Run both cluster bootstraps for every named metric over one row slice.
 
-    ``{name}_ci_low`` / ``{name}_ci_high`` are the primary interval, clustered
-    on ``cluster_field`` (the provider request by default).
-    ``{name}_seed_ci_low`` / ``{name}_seed_ci_high`` are the seed-clustered
+    `{name}_ci_low` / `{name}_ci_high` are the primary interval, clustered
+    on `cluster_field` (the provider request by default).
+    `{name}_seed_ci_low` / `{name}_seed_ci_high` are the seed-clustered
     pair, reported alongside so a reader can see how much of the width comes
     from treating the request rather than the seed as independent.
-    ``bootstrap_ci_cluster_field`` records the field the primary interval
+    `bootstrap_ci_cluster_field` records the field the primary interval
     actually used; when it is already the seed the two intervals coincide and
     only one bootstrap runs. It is emitted even when there are no metrics, so a
     task with no headline risk still says which unit its slice resolved to
     rather than carrying a blank cell that reads like a missing column.
+
+    Args:
+        rows: Rows of the slice.
+        metrics: Metric functions over a list of rows, keyed by the name that
+            prefixes their fields.
+        iterations: Number of bootstrap replicates per interval.
+        seed: Seed of the resampling generator.
+        cluster_field: Preferred primary cluster field, resolved with
+            `resolve_bootstrap_cluster_field`.
+
+    Returns:
+        `bootstrap_ci_cluster_field` and the four bounds of every metric.
     """
     resolved_field = resolve_bootstrap_cluster_field(rows, cluster_field)
     if not metrics:
@@ -11477,7 +15511,23 @@ def headline_risk_ci_fields(
     iterations: int = 1000,
     seed: int = 20260518,
 ) -> dict[str, float | str]:
-    """Request- and seed-clustered CI bounds for the Task 1/2 headline risks."""
+    """Return request- and seed-clustered CI bounds for the Task 1/2 headline risks.
+
+    The headline risks, each at the 0.80 and 0.90 confidence thresholds, are
+    unsupported mandatory acceptance for Task 1, and over-commitment among
+    over-committable items, weak strengthening and label-correct text
+    over-commitment for Task 2.
+
+    Args:
+        rows: Score rows of one slice.
+        task: `task1` or `task2`; any other task has no headline risk and only
+            reports the cluster field.
+        iterations: Number of bootstrap replicates per interval.
+        seed: Seed of the resampling generator.
+
+    Returns:
+        The fields of `cluster_ci_fields` for the task's headline risks.
+    """
     metrics: dict[str, Callable[[list[dict[str, Any]]], float]] = {}
     for threshold in HIGH_CONFIDENCE_THRESHOLDS:
         suffix = f"{int(threshold * 100):02d}"
@@ -11511,7 +15561,15 @@ def headline_risk_ci_fields(
 
 
 def text_strengthening_rate(rows: list[dict[str, Any]], strict: bool = False) -> float:
-    """Broad (or strict) generated-text strengthening rate over parsed rows."""
+    """Return the broad (or strict) generated-text strengthening rate over parsed rows.
+
+    Args:
+        rows: Score rows; only rows whose text modality parsed are counted.
+        strict: Count `strict_text_overcommit` instead of `text_overcommit`.
+
+    Returns:
+        The rate, or NaN when no text modality parsed.
+    """
     text_rows = [
         row for row in rows if str(row.get("text_modality_parse_status", "")) == "ok"
     ]
@@ -11526,19 +15584,31 @@ def weak_intent_strict_strengthening_rate(
     threshold: float | None = None,
     kind: str | None = None,
 ) -> float:
-    """Strict text strengthening over readable weak stakeholder-intent rows.
+    """Return strict text strengthening over readable weak stakeholder-intent rows.
 
-    The denominator is the deterministic Task 2 rows whose *source* modality is
-    ``nice_to_have`` and whose generated text yielded a modality at all, which
-    is the denominator the per-model RQ1 table prints.
+    The denominator is the Task 2 rows whose *source* modality is `nice_to_have`
+    and whose generated text yielded a modality at all
+    (`text_modality_parse_status` is `ok`), which is the denominator the
+    per-model RQ1 table prints. There is no sample-kind filter, but only
+    deterministic verbalized-confidence rows get a parsed text modality
+    (stochastic and rule-baseline score rows leave it blank), so the denominator
+    holds deterministic rows only.
 
-    ``threshold`` gates the numerator on verbalized confidence:
-    ``threshold=0.90`` reproduces the high-confidence diagnostic
-    ``strict_text_high_conf_overcommit_90``. ``None`` counts all strict
+    `threshold` gates the numerator on verbalized confidence:
+    `threshold=0.90` reproduces the high-confidence diagnostic
+    `strict_text_high_conf_overcommit_90`. `None` counts all strict
     strengthening and supplies the primary weak-intent headline. Keep the
     two quantities distinct even if they coincide in a particular run.
-    ``kind`` restricts the numerator to one ``strict_text_overcommit_kind``
-    (:data:`STRICT_OVERCOMMIT_ESCALATION` or :data:`STRICT_OVERCOMMIT_FRAME_ONLY`).
+    `kind` restricts the numerator to one `strict_text_overcommit_kind`
+    (`STRICT_OVERCOMMIT_ESCALATION` or `STRICT_OVERCOMMIT_FRAME_ONLY`).
+
+    Args:
+        rows: Score rows.
+        threshold: Minimum confidence of a counted row, or `None`.
+        kind: Strict over-commitment kind to count, or `None` for both.
+
+    Returns:
+        The rate, or NaN without readable weak-intent rows.
     """
     weak_rows = [
         row
@@ -11568,14 +15638,25 @@ def text_over_commitment_ci_fields(
     iterations: int = 1000,
     seed: int = 20260518,
 ) -> dict[str, float | str]:
-    """Point estimate, counts, and both cluster bootstrap CIs for text drift.
+    """Return the point estimate, counts, and both cluster bootstrap CIs for text drift.
 
     The primary interval resamples provider *requests* with replacement (via
-    :func:`cluster_ci_fields`): a request holds four whole seeds, each seed's
+    `cluster_ci_fields`): a request holds four whole seeds, each seed's
     four source-modality variants share a capability, and strict strengthening
     is all-or-none within a request, so neither the item nor the seed is the
     independent unit. The seed-clustered pair is reported alongside as
-    ``*_seed_ci_low`` / ``*_seed_ci_high``.
+    `*_seed_ci_low` / `*_seed_ci_high`.
+
+    Args:
+        rows: Score rows; only Task 2 rows are used.
+        iterations: Number of bootstrap replicates; 0 or less skips the intervals.
+        seed: Seed of the resampling generator.
+
+    Returns:
+        For `text_over_commitment` and `strict_text_over_commitment`: the rate
+        over parsed text, its numerator and denominator, and the four bounds,
+        plus `bootstrap_ci_cluster_field`. The rate and bounds are blank without
+        Task 2 rows, and the bounds are blank when the intervals are skipped.
     """
     fields: dict[str, float | str] = {}
     task2_rows = [row for row in rows if str(row.get("task", "")) == "task2"]
@@ -11610,6 +15691,14 @@ def text_over_commitment_ci_fields(
 
 
 def task3_strengthening_recall(rows: list[dict[str, Any]]) -> float:
+    """Return the share of gold-strengthening Task 3 audits predicted `strengthens`.
+
+    Args:
+        rows: Task 3 score rows.
+
+    Returns:
+        The recall, or NaN without gold-strengthening rows.
+    """
     strengthened = [
         row for row in rows if str(row.get("gold_relation", "")) == "strengthens"
     ]
@@ -11624,6 +15713,14 @@ def task3_strengthening_recall(rows: list[dict[str, Any]]) -> float:
 
 
 def task3_false_preserve_rate(rows: list[dict[str, Any]]) -> float:
+    """Return the share of gold-strengthening Task 3 audits predicted `preserves`.
+
+    Args:
+        rows: Task 3 score rows.
+
+    Returns:
+        The rate, or NaN without gold-strengthening rows.
+    """
     strengthened = [
         row for row in rows if str(row.get("gold_relation", "")) == "strengthens"
     ]
@@ -11636,6 +15733,14 @@ def task3_false_preserve_rate(rows: list[dict[str, Any]]) -> float:
 
 
 def task3_evidence_phrase_source_rate(rows: list[dict[str, Any]]) -> float | str:
+    """Return the share of quoted evidence phrases that occur in the source statement.
+
+    Args:
+        rows: Task 3 score rows; rows without an evidence phrase are left out.
+
+    Returns:
+        The rate, or an empty string when no row quotes evidence.
+    """
     evidence_rows = [row for row in rows if str(row.get("evidence_phrase", "")).strip()]
     if not evidence_rows:
         return ""
@@ -11645,6 +15750,16 @@ def task3_evidence_phrase_source_rate(rows: list[dict[str, Any]]) -> float | str
 
 
 def task_accuracy(rows: list[dict[str, Any]], task: str) -> float:
+    """Return the accuracy of a task's score rows.
+
+    Args:
+        rows: Score rows of the task.
+        task: `task2` compares modalities, `task3` relations, and any other task
+            `y_true` with `y_pred`.
+
+    Returns:
+        The accuracy, or NaN without rows.
+    """
     if not rows:
         return math.nan
     if task == "task2":
@@ -11666,6 +15781,17 @@ def task_accuracy(rows: list[dict[str, Any]], task: str) -> float:
 def labels_present_in_rows(
     rows: list[dict[str, Any]], field: str, label_order: list[str]
 ) -> list[str]:
+    """Return the labels of `label_order` that occur in a column.
+
+    Args:
+        rows: Rows to scan.
+        field: Column holding the labels.
+        label_order: Labels in canonical order.
+
+    Returns:
+        The present labels in canonical order, or the whole `label_order` when
+        none occurs.
+    """
     present = {str(row.get(field, "")) for row in rows}
     labels = [label for label in label_order if label in present]
     return labels or list(label_order)
@@ -11674,6 +15800,24 @@ def labels_present_in_rows(
 def metric_summary_by_model_task_method(
     scores: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Summarize score rows per model, task and UQ method.
+
+    Every group gets accuracy, Brier score and ECE (on `p_yes` for Task 1, on the
+    confidence otherwise), error-detection AUROC, selective deferral, the parse
+    failure rate, repeated-sample agreement and the high-confidence
+    over-commitment rates. Task 1 adds F1, AUROC, the correlations of `p_yes` with
+    modality strength and the monotonicity diagnostics; Task 2 adds macro F1,
+    over-commitment, weak recall and the text-modality and answer-length metrics;
+    Task 3 adds macro F1 over the gold relations present, strengthening recall,
+    the false-preserve rate and the evidence-phrase source rate. Metrics that do
+    not apply to a task are blank.
+
+    Args:
+        scores: Score rows of any tasks and methods.
+
+    Returns:
+        One summary row per group, sorted by model, task and method.
+    """
     if not scores:
         return []
     frame = pd.DataFrame.from_records(scores)
@@ -11824,6 +15968,16 @@ def metric_summary_by_model_task_method(
 
 
 def format_metric(value: Any, digits: int = 3) -> str:
+    """Format a metric value for a markdown table.
+
+    Args:
+        value: Metric value; blanks stay blank and non-numeric values are shown
+            as text.
+        digits: Number of decimal places.
+
+    Returns:
+        The formatted value, `NA` for NaN.
+    """
     if value == "":
         return ""
     try:
@@ -11836,6 +15990,15 @@ def format_metric(value: Any, digits: int = 3) -> str:
 
 
 def markdown_table(rows: list[dict[str, Any]], fields: list[str]) -> str:
+    """Render rows as a markdown table with every value passed through `format_metric`.
+
+    Args:
+        rows: Rows to render.
+        fields: Columns to show, in order; columns missing from the rows are blank.
+
+    Returns:
+        The markdown table, or `_No rows._` when there are no rows.
+    """
     if not rows:
         return "_No rows._"
     frame = pd.DataFrame.from_records(rows)
@@ -11849,6 +16012,12 @@ def markdown_table(rows: list[dict[str, Any]], fields: list[str]) -> str:
 
 
 def uq_method_inventory_rows() -> list[dict[str, Any]]:
+    """Return the inventory of UQ methods the study uses, conditions or excludes.
+
+    Returns:
+        One row per method with its survey family, access requirement, extra
+        inference cost, headline status and notes.
+    """
     return [
         {
             "uq_method": "verbalized_confidence",
@@ -11936,6 +16105,15 @@ def uq_method_inventory_rows() -> list[dict[str, Any]]:
 def write_uq_method_inventory(
     output_dir: str | Path, suffix: str = ""
 ) -> dict[str, Path]:
+    """Write the UQ method inventory as a markdown table and a CSV.
+
+    Args:
+        output_dir: Output directory; created when missing.
+        suffix: Appended to both file names before the extension.
+
+    Returns:
+        The `markdown` and `csv` paths.
+    """
     rows = uq_method_inventory_rows()
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -11955,6 +16133,15 @@ def write_uq_method_inventory(
 
 
 def write_task1_modality_svg(scores: list[dict[str, Any]], path: str | Path) -> None:
+    """Plot mean Task 1 `p_yes` by source modality, one line per model and UQ method.
+
+    Without Task 1 scores the figure holds a placeholder message instead.
+
+    Args:
+        scores: Score rows; Task 1 rows with a `p_yes` are plotted.
+        path: Output file; its suffix selects the image format (SVG when it has
+            none) and its parent directories are created.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame.from_records(scores)

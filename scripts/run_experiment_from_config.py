@@ -34,12 +34,32 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 def run_prefix(mode: str, variant: str) -> str:
+    """Return the prefix a new run id gets for a mode and benchmark variant.
+
+    Args:
+        mode: Run mode; `smoke` gives a `smoke` prefix, every other mode `full`.
+        variant: Benchmark variant; `must` adds nothing, any other variant is
+            appended as `-<variant>`.
+
+    Returns:
+        The run id prefix, for example `smoke` or `full-<variant>`.
+    """
     if mode == "smoke":
         return "smoke" if variant == "must" else f"smoke-{variant}"
     return "full" if variant == "must" else f"full-{variant}"
 
 
 def source_from_prompt(prompt: str) -> str:
+    """Recover the source statement a modality-extraction prompt quotes.
+
+    Args:
+        prompt: Rendered prompt text containing `Source:` followed by the
+            statement in double quotes.
+
+    Returns:
+        The quoted statement, or the whole prompt when no quoted source is
+        found.
+    """
     match = re.search(r'Source:\s*\n?"([^"]+)"', prompt, flags=re.S)
     return match.group(1) if match else prompt
 
@@ -49,7 +69,16 @@ FAKE_REASON = "fake smoke"
 
 
 def fake_modality(source_statement: str) -> str:
-    """Classify a statement by modal keyword, as the smoke fixture expects."""
+    """Classify a statement by modal keyword, as the smoke fixture expects.
+
+    Args:
+        source_statement: Statement text; the keywords are matched
+            case-insensitively and must be followed by a space.
+
+    Returns:
+        `mandatory` for "must" or "shall", `recommended` for "should",
+        `optional` for "may", and `nice_to_have` otherwise.
+    """
     source = source_statement.lower()
     if "must " in source or "shall " in source:
         return "mandatory"
@@ -61,7 +90,16 @@ def fake_modality(source_statement: str) -> str:
 
 
 def fake_batch_results(prompt: str) -> list[dict[str, Any]]:
-    """Answer every item of a batched prompt, one result per request index."""
+    """Answer every item of a batched prompt, one result per request index.
+
+    Args:
+        prompt: Batched prompt whose JSON item list follows the `Items:` line.
+
+    Returns:
+        One result per item: a `yes` entailment decision for items with a
+        `candidate_requirement`, otherwise the source statement echoed as the
+        requirement with its keyword modality, all at `FAKE_CONFIDENCE`.
+    """
     results: list[dict[str, Any]] = []
     for item in json.loads(prompt.split("Items:\n", 1)[1]):
         request_index = int(item["request_index"])
@@ -92,6 +130,15 @@ def fake_completion(**kwargs: Any) -> dict[str, Any]:
 
     The reply shape is chosen from the prompt: batched wrapper, Task 1
     entailment decision, or Task 2 modality extraction.
+
+    Args:
+        **kwargs: The keyword arguments a real completion function receives;
+            `prompt` selects the reply, and `model`, `temperature`, `top_p`,
+            `max_tokens` and `seed` go into the synthesized request payload.
+
+    Returns:
+        A successful completion dict in the shape `eval_utils.chat_completion`
+        returns, including the request payload and its fingerprint.
     """
     prompt = str(kwargs.get("prompt", ""))
     if '"results"' in prompt and "Items:\n" in prompt:
@@ -134,7 +181,12 @@ def fake_completion(**kwargs: Any) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """CLI for this runner: the shared options plus the Task 1/2 ones."""
+    """Build the CLI for this runner: the shared options plus the Task 1/2 ones.
+
+    Returns:
+        The argument parser, with `runner_lifecycle.common_runner_parser` as
+        its parent.
+    """
     parser = argparse.ArgumentParser(
         description="Run provider-aware benchmark experiments from a run config.",
         parents=[rl.common_runner_parser()],
@@ -154,6 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Parse the command line, load the JSON run config, and run it.
+
+    Args:
+        argv: Command-line arguments; None reads `sys.argv`.
+    """
     args = build_parser().parse_args(argv)
     eu.configure_run_logging(args.log_level)
     run_from_config(eu.load_run_config(args.config), args)
@@ -161,7 +218,27 @@ def main(argv: list[str] | None = None) -> None:
 
 @dataclass(frozen=True, slots=True)
 class MatrixRun:
-    """State shared by every cell of one provider-matrix run."""
+    """State shared by every cell of one provider-matrix run.
+
+    Attributes:
+        run_config: Normalized run config the matrix is built from.
+        args: Runner options from the JSON CLI or the Hydra bridge.
+        root: Project root all artifact paths are resolved under.
+        tasks: Normalized task filter (`task1`, `task2`, or both).
+        logging_config: Run logging settings with the command-line overrides
+            applied.
+        completion_fn: `eval_utils.chat_completion`, or `fake_completion`
+            under `--fake-completion`.
+        task1_template: Mandatory-entailment prompt template.
+        task2_template: Modality-extraction prompt template.
+        task2_context_template: Modality-extraction prompt with document
+            context; empty for bare runs.
+        item_context: Normalized item-context arm, `bare` or `document`.
+        semantic_embedding_backend: Resolved embedding backend label stamped
+            onto every raw record.
+        smoke_tree: Whether every cell writes into the parallel smoke tree
+            (fake completions, smoke mode, or a smoke run id).
+    """
 
     run_config: dict[str, Any]
     args: RunnerArgs
@@ -178,14 +255,24 @@ class MatrixRun:
 
     @property
     def run_group_id(self) -> str:
+        """Return the run group id shared by every cell of the matrix."""
         return str(self.run_config["run_group_id"])
 
     @property
     def expected_stochastic_samples(self) -> int:
+        """Return the stochastic samples the run config plans per item."""
         return int(self.run_config["stochastic"]["samples"])
 
     def smoke_for(self, run_id: str) -> bool:
-        """Whether `run_id` writes into the parallel smoke artifact tree."""
+        """Return whether `run_id` writes into the parallel smoke artifact tree.
+
+        Args:
+            run_id: Run id of the cell.
+
+        Returns:
+            True if the whole matrix writes to the smoke tree or `run_id` is a
+            smoke run id.
+        """
         return self.smoke_tree or eu.is_smoke_run_id(run_id)
 
 
@@ -195,6 +282,35 @@ class RunCell:
 
     Everything here is resolved before any provider call happens, so the dry-run
     path and the execution path report identical plans.
+
+    Attributes:
+        profile: Provider profile the cell runs under.
+        model: Model alias of the cell.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        run_id: Run id the cell's raw rows and registry row carry.
+        started_at: Start time for the registry row; a resumed cell keeps the
+            one its first attempt recorded.
+        seed: Request seed for the cell's jobs.
+        send_seed: Whether the seed is sent to the provider.
+        max_retries: Transport retries per provider request.
+        batch_order: How jobs are grouped into batches (`grouped` or
+            `shuffled`).
+        preflight: Server model probe result, or `{"dry_run": True}` in a dry
+            run.
+        benchmark_rows: Benchmark items in scope; only the first
+            `--smoke-items` in smoke mode.
+        jobs: Every planned completion job of the cell.
+        existing_rows: Raw rows already in the cell's output file.
+        pending_jobs: Planned jobs this run has no reusable raw row for yet.
+        planned_api_calls: Provider requests the full plan needs.
+        pending_api_calls: Provider requests the pending jobs still need.
+        output_path: Raw JSONL file the records are appended to.
+        registry_path: Run registry CSV of the dataset and variant.
+        progress_path: Live progress CSV of the dataset and variant.
+        events_path: Run events JSONL of the dataset and variant.
+        resume: Identity of the run being continued; set only under
+            `--mode resume`.
     """
 
     profile: dict[str, Any]
@@ -224,18 +340,25 @@ class RunCell:
 
     @property
     def profile_id(self) -> str:
+        """Return the id of the provider profile the cell runs under."""
         return str(self.profile["profile_id"])
 
     @property
     def provider_id(self) -> str:
+        """Return the id of the provider behind the cell's profile."""
         return str(self.profile["provider_id"])
 
     @property
     def batch_size(self) -> int:
+        """Return how many planned jobs the profile sends per provider request."""
         return int(self.profile["batch_size"])
 
     def identity(self) -> dict[str, Any]:
-        """The fields that identify this cell in logs and warning events."""
+        """Return the fields that identify this cell in logs and warning events.
+
+        Returns:
+            The run id, dataset, benchmark variant, provider, profile and model.
+        """
         return {
             "run_id": self.run_id,
             "dataset_id": self.dataset_id,
@@ -247,7 +370,15 @@ class RunCell:
 
 
 def cell_context(matrix: MatrixRun, cell: RunCell) -> dict[str, Any]:
-    """Identity fields stamped onto every run event and warning event."""
+    """Return the identity fields stamped onto every run event and warning event.
+
+    Args:
+        matrix: Run the cell belongs to; supplies the run group id.
+        cell: Planned cell; supplies the rest of the identity.
+
+    Returns:
+        `RunCell.identity` plus `run_group_id`.
+    """
     return {**cell.identity(), "run_group_id": matrix.run_group_id}
 
 
@@ -266,7 +397,28 @@ def plan_cell(
     batch_order: str,
     resume: rl.ResumeState | None = None,
 ) -> RunCell:
-    """Resolve one matrix cell: its artifact paths and job plan."""
+    """Resolve one matrix cell: its artifact paths and job plan.
+
+    Reads the cell's benchmark items and existing raw rows but writes nothing.
+
+    Args:
+        matrix: Run the cell belongs to.
+        profile: Provider profile the cell runs under.
+        model: Model alias of the cell.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        run_id: Run id the cell's records carry.
+        preflight: Server model probe result recorded with the jobs.
+        seed: Request seed for the cell's jobs.
+        send_seed: Whether the seed is sent to the provider.
+        max_retries: Transport retries per provider request.
+        batch_order: Normalized batch order (`grouped` or `shuffled`).
+        resume: Identity of the run being continued, or None for a new run.
+
+    Returns:
+        The fully planned cell, with pending jobs and API-call counts computed
+        against the raw rows already on disk.
+    """
     args = matrix.args
     smoke_run = matrix.smoke_for(run_id)
     benchmark = eu.read_csv_rows(
@@ -365,6 +517,17 @@ def registry_row(
 
     The start, progress, and finish writes differ only in `status` and
     `finished_at_utc`; every other field is a property of the cell.
+
+    Args:
+        matrix: Run the cell belongs to.
+        cell: Planned cell the row describes.
+        raw_rows: Raw rows of the cell's output file seen so far.
+        status: Registry status to write; None lets
+            `eval_utils.run_registry_summary` derive it from the rows.
+        finished_at_utc: Finish time, empty while the cell is still running.
+
+    Returns:
+        The registry row for `eval_utils.upsert_run_registry_row`.
     """
     profile = cell.profile
     return eu.run_registry_summary(
@@ -400,7 +563,12 @@ def registry_row(
 
 
 def log_planned_cell(matrix: MatrixRun, cell: RunCell) -> None:
-    """Report a dry-run cell plan without contacting a provider."""
+    """Report a dry-run cell plan without contacting a provider.
+
+    Args:
+        matrix: Run the cell belongs to.
+        cell: Planned cell whose job, batch and API-call counts are logged.
+    """
     eu.logger.info(
         "%s",
         {
@@ -425,7 +593,16 @@ def log_planned_cell(matrix: MatrixRun, cell: RunCell) -> None:
 
 
 def cell_execution(matrix: MatrixRun, cell: RunCell) -> rl.CellExecution:
-    """Bind this cell's Task 1/2 specifics to the shared lifecycle."""
+    """Bind this cell's Task 1/2 specifics to the shared lifecycle.
+
+    Args:
+        matrix: Run the cell belongs to.
+        cell: Planned cell to execute.
+
+    Returns:
+        The execution handed to `runner_lifecycle.execute_cell`, with the
+        cell's lease and, unless turned off, its transcript writer.
+    """
 
     def stamp_record(record: dict[str, Any]) -> None:
         # Persist the resolved choice on the run artifact. The analysis process
@@ -483,7 +660,12 @@ def cell_execution(matrix: MatrixRun, cell: RunCell) -> rl.CellExecution:
 
 
 def execute_cell(matrix: MatrixRun, cell: RunCell) -> None:
-    """Run one matrix cell to completion, streaming progress artifacts."""
+    """Run one matrix cell to completion, streaming progress artifacts.
+
+    Args:
+        matrix: Run the cell belongs to.
+        cell: Planned cell to execute.
+    """
     rl.execute_cell(cell_execution(matrix, cell))
 
 
@@ -492,6 +674,18 @@ def run_from_config(run_config: dict[str, Any], args: RunnerArgs) -> None:
 
     Shared by the argparse CLI above and by the Hydra entry point in
     `scripts/run.py`, which composes the same dictionary from `conf/`.
+
+    Args:
+        run_config: Normalized run config: profiles, datasets, variants,
+            tasks, prompt and sampling settings.
+        args: Runner options; the profile, model, dataset, variant and task
+            options narrow the matrix, and `mode`, `run_id`, `dry_run` and
+            `fake_completion` control how each cell runs.
+
+    Raises:
+        ValueError: If `--mode resume` is given without `--run-id`, or a
+            non-bare `item_context` is combined with any task other than
+            Task 2 alone.
     """
     eu.configure_run_logging(args.log_level)
     if args.mode == "resume" and not args.run_id:

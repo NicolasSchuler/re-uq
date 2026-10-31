@@ -1,8 +1,8 @@
-"""Write the manuscript's ``numbers.tex`` macro file from the paper artifacts.
+"""Write the manuscript's `numbers.tex` macro file from the paper artifacts.
 
 Every number the manuscript reports is printed through a LaTeX macro defined in
-``manuscript/numbers.tex``. Those values used to be typed in by hand from
-``outputs/paper_*.csv``. This exporter regenerates the whole file from the
+`manuscript/numbers.tex`. Those values used to be typed in by hand from
+`outputs/paper_*.csv`. This exporter regenerates the whole file from the
 artifacts, so a rerun of the pipeline propagates into the prose and tables
 without anyone transcribing a digit.
 
@@ -11,7 +11,7 @@ Usage::
     .venv/bin/python scripts/export_paper_numbers.py                     # dry run
     .venv/bin/python scripts/export_paper_numbers.py --output manuscript/numbers.tex
 
-The default ``--output`` is ``outputs/paper_numbers.tex`` so the default
+The default `--output` is `outputs/paper_numbers.tex` so the default
 invocation never touches the (gitignored) manuscript tree. When the output file
 already exists the exporter prints a macro-level diff -- added, removed, changed
 -- so a rerun's effect on the paper is visible before the file is used.
@@ -19,16 +19,16 @@ already exists the exporter prints a macro-level diff -- added, removed, changed
 Formatting conventions (matching the hand-written file)
 -------------------------------------------------------
 
-* Percentages: one decimal, without the percent sign (``8.6``).
-* AUROC / AUPRC: three decimals (``0.764``).
-* Counts: thousands separators from five digits up (``16,448``), none below
-  (``1412``) -- the typographic convention the submitted draft used.
-* Ranges: ``a to b``, always min then max.
+* Percentages: one decimal, without the percent sign (`8.6`).
+* AUROC / AUPRC: three decimals (`0.764`).
+* Counts: thousands separators from five digits up (`16,448`), none below
+  (`1412`) -- the typographic convention the submitted draft used.
+* Ranges: `a to b`, always min then max.
 
 Aggregation
 -----------
 
-``docs/aggregation.md`` is the specification; this module only chooses which of
+`docs/aggregation.md` is the specification; this module only chooses which of
 its two published conventions each macro uses, and every choice is annotated in
 the emitted file:
 
@@ -47,14 +47,14 @@ Model macro keys
 ----------------
 
 Plain LaTeX control words are letters only, so a model id cannot appear
-verbatim in a macro name. The six cohort models use the keys the manuscript
-already prints (``GlmFourFiveAir``, ``GlmFourSeven``, ``GlmFive``,
-``GlmFiveTurbo``, ``GlmFiveOne``, ``Gemma``). Any other model id is
-transliterated: the id is split into runs of letters and single digits,
-non-alphanumerics are dropped, each letter run is capitalized, and each digit
-becomes its English name (``mistral-7b-instruct`` -> ``MistralSevenBInstruct``).
-Unknown models keep their raw id as the display label and are listed after the
-hosted cohort.
+verbatim in a macro name. Ids listed in `MODEL_KEYS` use pinned keys, such as
+`GlmFiveOne`, `QwenThreeSixTwentySevenB` or `Gemma` (for `kit.gemma4-31b-it`).
+Any other model id is transliterated: the id is split into runs of letters and
+single digits, non-alphanumerics are dropped, each letter run is capitalized,
+and each digit becomes its English name (`mistral-7b-instruct` ->
+`MistralSevenBInstruct`). Unknown models keep their raw id as the display label
+and are listed after the cohort (hosted and local models) recorded in the
+provenance file.
 """
 
 from __future__ import annotations
@@ -349,7 +349,14 @@ class PaperNumbersError(RuntimeError):
 
 
 class Macro(NamedTuple):
-    """One ``\\newcommand`` line: macro name, rendered value, trailing comment."""
+    r"""One `\newcommand` line: macro name, rendered value, trailing comment.
+
+    Attributes:
+        name: Macro name without the leading backslash, e.g. `numStrictOverall`.
+        value: Rendered macro body.
+        comment: Trailing LaTeX comment that says where the value comes from and
+            how it was aggregated; empty for none.
+    """
 
     name: str
     value: str
@@ -357,7 +364,18 @@ class Macro(NamedTuple):
 
 
 def model_key(model_id: str) -> str:
-    """Letters-only macro key for ``model_id`` (see the module docstring)."""
+    """Return the letters-only macro key for `model_id` (see the module docstring).
+
+    Args:
+        model_id: Model id as recorded in the artifacts; ids in `MODEL_KEYS` use
+            their pinned key, any other id is transliterated.
+
+    Returns:
+        The macro key, e.g. `MistralSevenBInstruct` for `mistral-7b-instruct`.
+
+    Raises:
+        PaperNumbersError: If the id has no letters or digits to build a key from.
+    """
     known = MODEL_KEYS.get(model_id)
     if known:
         return known
@@ -393,22 +411,45 @@ LATEX_ESCAPES = {
 
 
 def latex_escape(text: str) -> str:
+    """Escape the characters of `text` that LaTeX would otherwise interpret.
+
+    Args:
+        text: Raw text such as a local model id.
+
+    Returns:
+        The text with every character in `LATEX_ESCAPES` replaced by its LaTeX
+        form.
+    """
     return "".join(LATEX_ESCAPES.get(character, character) for character in text)
 
 
 def model_label(model_id: str) -> str:
-    """Display label for the per-model tables; unknown ids are escaped as-is."""
+    """Return the display label for the per-model tables; unknown ids are escaped as-is.
+
+    Args:
+        model_id: Model id; ids in `MODEL_LABELS` use their pinned label.
+
+    Returns:
+        The LaTeX-safe label.
+    """
     label = MODEL_LABELS.get(model_id)
     return label if label is not None else latex_escape(model_id)
 
 
 def order_models(models: Iterable[str], cohort: Sequence[str] = ()) -> list[str]:
-    """Hosted cohort first (in `cohort` order), then any other model by id.
+    """Return the cohort first (in `cohort` order), then any other model by id.
 
-    `cohort` comes from `paper_snapshot_provenance.json`, which the tables
-    exporter writes with the cohort it actually selected, so changing the models
-    of a rerun needs no code change here. It falls back to the pinned default
-    cohort only when the provenance file predates that field.
+    Args:
+        models: Model ids present in the artifact rows; repeats are dropped.
+        cohort: Comes from `paper_snapshot_provenance.json`, which the tables
+            exporter writes with the cohort it actually selected, so changing the
+            models of a rerun needs no code change here. It falls back to the
+            pinned default cohort only when the provenance file predates that
+            field.
+
+    Returns:
+        The present models: cohort members in cohort order, then the others
+        sorted by id. Cohort members that are not present are left out.
     """
     present = list(dict.fromkeys(models))
     order = list(cohort) or list(export_paper_tables.DEFAULT_MODELS)
@@ -421,21 +462,55 @@ def order_models(models: Iterable[str], cohort: Sequence[str] = ()) -> list[str]
 
 
 def fmt_percent(value: float) -> str:
-    """A rate in [0, 1] as a percentage with one decimal, no percent sign."""
+    """Format a rate in [0, 1] as a percentage with one decimal, no percent sign.
+
+    Args:
+        value: Rate as a fraction.
+
+    Returns:
+        The percentage text, e.g. `8.6` for 0.086.
+    """
     return f"{value * 100:.1f}"
 
 
 def fmt_available_percent(value: float) -> str:
-    """A percentage or n/a when a particular cohort has no eligible answers."""
+    """Format a percentage, or n/a when a particular cohort has no eligible answers.
+
+    Args:
+        value: Rate as a fraction; a non-finite rate marks a cohort without
+            eligible answers.
+
+    Returns:
+        The percentage text as from `fmt_percent`, or `n/a`.
+    """
     return fmt_percent(value) if math.isfinite(value) else "n/a"
 
 
 def fmt_auroc(value: float) -> str:
+    """Format a ranking metric such as an AUROC with three decimals.
+
+    Args:
+        value: Metric value.
+
+    Returns:
+        The metric text, e.g. `0.764`.
+    """
     return f"{value:.3f}"
 
 
 def fmt_count(value: float) -> str:
-    """Counts carry thousands separators from five digits up, as in the draft."""
+    """Format a count with thousands separators from five digits up, as in the draft.
+
+    Args:
+        value: Count; it is rounded to the nearest integer.
+
+    Returns:
+        The count text, e.g. `16,448` or `1412`.
+
+    Raises:
+        PaperNumbersError: If the value is not finite, which means a source cell
+            is blank.
+    """
     if not math.isfinite(value):
         # round(nan) raises a bare ValueError; this says which artifact is blank.
         raise PaperNumbersError(
@@ -446,6 +521,14 @@ def fmt_count(value: float) -> str:
 
 
 def fmt_words(value: float) -> str:
+    """Format a mean response length in words with one decimal.
+
+    Args:
+        value: Mean word count.
+
+    Returns:
+        The word-count text, e.g. `12.3`.
+    """
     return f"{value:.1f}"
 
 
@@ -453,17 +536,37 @@ NAN_TOKEN = re.compile(r"(?<![A-Za-z0-9])nan(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 def nan_macros(macros: Mapping[str, str]) -> list[str]:
-    """Macro names whose rendered value carries a non-finite number.
+    r"""Return the macro names whose rendered value carries a non-finite number.
 
-    ``_number`` returns NaN for a blank cell by design and the scalar formatters
-    render it as the literal string ``nan``, so a missing artifact column would
-    otherwise reach numbers.tex as ``\\numStrictOverallCI{nan--nan}``. Checking
+    `_number` returns NaN for a blank cell by design and the scalar formatters
+    render it as the literal string `nan`, so a missing artifact column would
+    otherwise reach numbers.tex as `\numStrictOverallCI{nan--nan}`. Checking
     the rendered macros catches every such path at once.
+
+    Args:
+        macros: Rendered macro values keyed by macro name.
+
+    Returns:
+        The sorted names whose value contains a standalone `nan` token, in any
+        letter case.
     """
     return sorted(name for name, value in macros.items() if NAN_TOKEN.search(value))
 
 
 def fmt_range(values: Sequence[float], formatter: Any, label: str) -> str:
+    """Format the span of the finite values as `min to max`.
+
+    Args:
+        values: Values to span; non-finite ones are ignored.
+        formatter: Formats each end, e.g. `fmt_percent`.
+        label: Names the range in the error message.
+
+    Returns:
+        The range text `a to b`, always minimum then maximum.
+
+    Raises:
+        PaperNumbersError: If no value is finite.
+    """
     usable = [value for value in values if math.isfinite(value)]
     if not usable:
         raise PaperNumbersError(f"{label}: no finite values to build a range from")
@@ -474,7 +577,19 @@ def fmt_range(values: Sequence[float], formatter: Any, label: str) -> str:
 
 
 def _number(row: Mapping[str, Any], column: str, source: str) -> float:
-    """Parse one cell, accepting both ``0.298`` and the legacy ``29.8%`` form."""
+    """Parse one cell, accepting both `0.298` and the legacy `29.8%` form.
+
+    Args:
+        row: Artifact row to read.
+        column: Column holding the number.
+        source: Names the artifact in the error message.
+
+    Returns:
+        The value as a fraction, or NaN when the cell is blank or absent.
+
+    Raises:
+        PaperNumbersError: If the cell is not numeric.
+    """
     raw = str(row.get(column, "")).strip()
     if not raw:
         return math.nan
@@ -519,11 +634,17 @@ def _ordered(values: Iterable[Any]) -> list[Any]:
 
 
 def committed_and_unchanged(paths: Sequence[Path]) -> bool:
-    """True when git tracks every path and none differs from HEAD.
+    """Return True when git tracks every path and none differs from HEAD.
 
     A checkout writes modification times in arbitrary order, so comparing them
     says nothing about a committed snapshot: its files were exported together.
     Without git, or outside a repository, this is False and mtimes decide.
+
+    Args:
+        paths: Files to check; git runs in the directory of the first one.
+
+    Returns:
+        True when every path is tracked and unchanged against HEAD.
     """
     cwd = paths[0].parent
     names = [str(path.resolve()) for path in paths]
@@ -548,7 +669,16 @@ def committed_and_unchanged(paths: Sequence[Path]) -> bool:
 
 
 class Artifacts:
-    """The validated input artifacts, as row lists keyed by file name."""
+    """The validated input artifacts, as row lists keyed by file name.
+
+    Construction checks that every artifact in `REQUIRED_COLUMNS` exists, has
+    its required columns and at least one data row, and raises
+    `PaperNumbersError` otherwise. It also reads the hosted and local cohort
+    recorded in the snapshot provenance file.
+
+    Args:
+        outputs_dir: Directory holding the paper artifacts, normally `outputs/`.
+    """
 
     def __init__(self, outputs_dir: Path) -> None:
         self.outputs_dir = outputs_dir
@@ -583,11 +713,15 @@ class Artifacts:
         self.hosted_models, self.local_models = self._cohort_split()
 
     def _cohort_split(self) -> tuple[list[str], list[str]]:
-        """Hosted and local model ids, as the tables exporter recorded them.
+        """Return the hosted and local model ids, as the tables exporter recorded them.
 
         Read from `paper_snapshot_provenance.json` rather than hardcoded, so a
         rerun with a different cohort needs no change here. Older provenance
         files have neither field and fall back to the pinned default cohort.
+
+        Returns:
+            The hosted and the local model ids; both lists are empty when the
+            provenance file is missing, unreadable or not a JSON object.
         """
         path = self.outputs_dir / SNAPSHOT_PROVENANCE
         try:
@@ -604,13 +738,36 @@ class Artifacts:
         return self.rows[name]
 
     def columns(self, name: str) -> set[str]:
+        """Return the column names of one artifact.
+
+        Args:
+            name: Artifact file name, one of the keys of `REQUIRED_COLUMNS`.
+
+        Returns:
+            The columns of the artifact's first row.
+        """
         return set(self.rows[name][0])
 
     def source_digests(self) -> list[tuple[str, str]]:
+        """Return the SHA-256 digest of every input artifact.
+
+        Returns:
+            One (file name, hex digest) pair per artifact, in `REQUIRED_COLUMNS`
+            order.
+        """
         return [(name, eu.sha256_file(self.paths[name])) for name in REQUIRED_COLUMNS]
 
     def stale_provenance(self) -> tuple[Path | None, list[str]]:
-        """The provenance file and the inputs newer than it (empty when fresh)."""
+        """Return the provenance file and the inputs newer than it (empty when fresh).
+
+        Inputs committed with the provenance file and unchanged since HEAD count
+        as fresh whatever their modification times.
+
+        Returns:
+            The provenance path, or None when the file is absent, and the sorted
+            names of the inputs modified after it; the list is empty when the
+            file is absent or fresh.
+        """
         provenance = self.outputs_dir / SNAPSHOT_PROVENANCE
         if not provenance.is_file():
             return None, []
@@ -628,11 +785,16 @@ class Artifacts:
 class RqTable:
     """Row lookup for the generated per-model RQ table.
 
-    Three row kinds, all keyed on the same two ``"all"`` sentinels the
+    Three row kinds, all keyed on the same two `"all"` sentinels the
     per-model headline already uses: one per model (pooled over cells), one per
     cell (pooled over models), and one grand row. Every RQ1/RQ2/RQ3 macro reads
     one of them, so a rate and the range printed beside it can never come from
-    different denominators.
+    different denominators. Construction raises `PaperNumbersError` when any of
+    the three kinds is missing.
+
+    Args:
+        rows: Rows of `paper_per_model_rq_table.csv`; per-model rows of a single
+            cell fit none of the three kinds and are ignored.
     """
 
     def __init__(self, rows: Sequence[Mapping[str, Any]]) -> None:
@@ -658,15 +820,51 @@ class RqTable:
             )
 
     def pooled(self, column: str) -> float:
+        """Return one column of the grand pooled row.
+
+        Args:
+            column: RQ-table column to read.
+
+        Returns:
+            The value as a fraction, or NaN when the cell is blank.
+        """
         return _number(self.grand or {}, column, PER_MODEL_RQ)
 
     def over_cells(self, column: str) -> list[float]:
+        """Return one column from every per-cell row.
+
+        Args:
+            column: RQ-table column to read.
+
+        Returns:
+            One value per cell, in table order; blank cells give NaN.
+        """
         return [_number(row, column, PER_MODEL_RQ) for row in self.by_cell.values()]
 
     def over_models(self, column: str) -> list[float]:
+        """Return one column from every per-model row.
+
+        Args:
+            column: RQ-table column to read.
+
+        Returns:
+            One value per model, in table order; blank cells give NaN.
+        """
         return [_number(row, column, PER_MODEL_RQ) for row in self.by_model.values()]
 
     def cell(self, cell: tuple[str, str], column: str) -> float:
+        """Return one column of one per-cell row.
+
+        Args:
+            cell: The (dataset, variant) cell.
+            column: RQ-table column to read.
+
+        Returns:
+            The value as a fraction, or NaN when the cell is blank.
+
+        Raises:
+            PaperNumbersError: If the table has no row for the cell.
+        """
         row = self.by_cell.get(cell)
         if row is None:
             raise PaperNumbersError(
@@ -689,7 +887,24 @@ def _probe_row(
     scope: str,
     target: str,
 ) -> Mapping[str, Any]:
-    """The single embedding-probe row for one (variant, grouping, scope, target)."""
+    """Return the single embedding-probe row for one (variant, grouping, scope, target).
+
+    Only rows of the MLX feature backend and the gradient-boosting probe (`hgb`,
+    also assumed when the row names no probe model) are considered.
+
+    Args:
+        rows: Rows of the embedding probe grid summary.
+        text_variant: Text representation the probe was trained on, e.g.
+            `reqonly` (requirement only) or `prefixed`.
+        group_mode: Grouping of the held-out folds, e.g. `seed`.
+        scope: Rows the probe was evaluated on, `global` or
+            `source_modality=<condition>`.
+        target: Label the probe predicts, e.g.
+            `deterministic_strict_text_overcommit` or `source_modality`.
+
+    Returns:
+        The one matching row.
+    """
     matches = [
         row
         for row in rows
@@ -711,7 +926,16 @@ def _probe_row(
 
 
 class Strengthening:
-    """Pooled strict/broad strengthening and no-cue shares over one row set."""
+    """Pooled strict/broad strengthening and no-cue shares over one row set.
+
+    Construction sums the item, valid, strengthening and denominator counts of
+    the rows and raises `PaperNumbersError` when any of them is missing or
+    non-finite.
+
+    Args:
+        rows: Modality-table rows to pool, e.g. one cell or one model.
+        label: Names the row set in error messages.
+    """
 
     def __init__(self, rows: Sequence[Mapping[str, Any]], label: str) -> None:
         self.label = label
@@ -744,6 +968,12 @@ class Strengthening:
 
     @property
     def strict(self) -> float:
+        """Return the pooled strict strengthening rate.
+
+        Returns:
+            Strict strengthening count over its readable denominator, or NaN
+            when the denominator is zero.
+        """
         return (
             self.strict_n / self.strict_denominator
             if self.strict_denominator
@@ -752,10 +982,22 @@ class Strengthening:
 
     @property
     def broad(self) -> float:
+        """Return the pooled broad strengthening rate.
+
+        Returns:
+            Broad strengthening count over its readable denominator, or NaN
+            when the denominator is zero.
+        """
         return self.broad_n / self.denominator if self.denominator else math.nan
 
     @property
     def no_cue(self) -> float:
+        """Return the share of valid answers whose text carries no readable modality.
+
+        Returns:
+            Valid answers minus the readable denominator, over valid answers, or
+            NaN when there are no valid answers.
+        """
         return (self.valid - self.denominator) / self.valid if self.valid else math.nan
 
 
@@ -772,12 +1014,19 @@ def _group(
 
 
 def benchmark_design(outputs_dir: Path) -> dict[str, dict[str, Any]]:
-    """The frozen benchmark design, keyed by dataset id.
+    """Return the frozen benchmark design, keyed by dataset id.
 
     The seed and item counts the paper reports are otherwise derived from
     observed rows, so a seed missing from every model in every cell divides
     evenly and passes the guards below unnoticed. These manifests record what
     the benchmark was built to, which is the only way to see that.
+
+    Args:
+        outputs_dir: Directory holding the `benchmark_manifest*.json` files.
+
+    Returns:
+        The `metadata` object of each manifest keyed by its `dataset_id`;
+        manifests without a dataset id are skipped.
     """
     design: dict[str, dict[str, Any]] = {}
     for path in sorted(outputs_dir.glob("benchmark_manifest*.json")):
@@ -901,10 +1150,18 @@ CLUSTER_LABEL = {
 
 
 def cluster_note(cluster_field: str) -> str:
-    """How the primary interval was resampled, as the artifact recorded it.
+    """Describe how the primary interval was resampled, as the artifact recorded it.
 
     A fixed string would go stale the moment the resampling unit changes, and a
     slice that quietly fell back to the seed would still claim the request.
+
+    Args:
+        cluster_field: Bootstrap cluster field recorded with the interval; empty
+            when the artifact did not record one.
+
+    Returns:
+        A comment such as `pooled, request-clustered CI`, or
+        `pooled, resampling unit not recorded`.
     """
     if not cluster_field:
         return "pooled, resampling unit not recorded"
@@ -913,7 +1170,17 @@ def cluster_note(cluster_field: str) -> str:
 
 
 class HeadlineRate(NamedTuple):
-    """One pooled headline rate and its selected capability bootstrap bounds."""
+    """One pooled headline rate and its selected capability bootstrap bounds.
+
+    Attributes:
+        value: Pooled rate as a fraction.
+        ci_low: Lower capability-clustered bootstrap bound.
+        ci_high: Upper capability-clustered bootstrap bound.
+        n_numerator: Event count behind the rate.
+        n_denominator: Eligible answers behind the rate.
+        seed_ci: The capability-clustered bounds when both are finite, else None.
+        cluster_field: Resampling unit of the bounds, for `cluster_note`.
+    """
 
     value: float
     ci_low: float
@@ -1299,7 +1566,17 @@ def _cross_check_headlines(
     headlines: Mapping[str, tuple[float, int, int]],
     cell_stats: Mapping[tuple[str, str], Strengthening],
 ) -> None:
-    """Warn when the three independent pooled sources disagree."""
+    """Warn when the three independent pooled sources disagree.
+
+    Args:
+        artifacts: Validated artifacts; `paper_headline_metrics.csv` supplies
+            the declared pooled values.
+        warnings: List the disagreement messages are appended to.
+        headlines: Strict and broad headline (value, numerator, denominator)
+            from the bootstrap CI table, keyed by headline key.
+        cell_stats: Per-cell strengthening of the modality table, summed into
+            the third source.
+    """
     pooled = {
         str(row["headline_key"]): _number(row, "value_pooled", HEADLINE_METRICS)
         for row in artifacts[HEADLINE_METRICS]
@@ -1336,12 +1613,19 @@ def _cross_check_rq_table(
     strict: HeadlineRate,
     broad: HeadlineRate,
 ) -> None:
-    """The two generated headline paths must agree on the same numbers.
+    """Check that the two generated headline paths agree on the same numbers.
 
     `paper_headline_bootstrap_ci.csv` and the RQ table's pooled row are written
     by the same exporter run from the same score rows, so a disagreement means
     one of the two slices is wrong -- worth a warning rather than a silent
     preference for whichever the macro happens to read.
+
+    Args:
+        artifacts: Not used by the check.
+        warnings: List the disagreement messages are appended to.
+        rq: RQ table whose pooled row is compared.
+        strict: Strict strengthening headline from the bootstrap CI table.
+        broad: Broad strengthening headline from the bootstrap CI table.
     """
     for label, headline, column in (
         ("strict", strict, "task2_strict_strengthening"),
@@ -1384,11 +1668,19 @@ def _cross_check_per_model(
 
 
 def _rq2_block(artifacts: Artifacts) -> list[Macro]:
-    """Signal macros. Every rate is the pooled one, with its clustered CI.
+    """Build the signal macros; every rate is the pooled one, with its clustered CI.
 
     These used to be unweighted macros over the four cells, taken from static
     snapshots. The RQ table computes them over the same rows the bootstrap
     resamples, so the pooled value and the range beside it share a denominator.
+
+    Args:
+        artifacts: Validated artifacts; only the per-model RQ table is read.
+
+    Returns:
+        The RQ2 macros: high-confidence share, repeated-sample agreement,
+        meaning-variation AUROC and verbalized-confidence AUROC, with intervals
+        and ranges over cells and models where the paper prints them.
     """
     rq = RqTable(artifacts[PER_MODEL_RQ])
     cluster = cluster_note(eu.BOOTSTRAP_CLUSTER_FALLBACK_FIELD)
@@ -1648,13 +1940,22 @@ def _rq3_block(artifacts: Artifacts) -> list[Macro]:
 
 
 def fmt_pct_ci(rate: float, low: float, high: float) -> str:
-    """``8.6 [7.6, 9.6]``, or just ``8.6`` for an unavailable interval.
+    """Format `8.6 [7.6, 9.6]`, or just `8.6` for an unavailable interval.
 
     A rate that does not exist at all (no rows) prints n/a. An
     interval whose bounds coincide exactly is a percentile-bootstrap artifact
     (one cluster, or a rate that is 0 or 1 in every cluster), not a measured
     width, so it prints as unavailable too; bounds that merely coincide after
     rounding are kept.
+
+    Args:
+        rate: Rate as a fraction; non-finite when the rate does not exist.
+        low: Lower interval bound as a fraction; non-finite when unavailable.
+        high: Upper interval bound as a fraction; non-finite when unavailable.
+
+    Returns:
+        The percentage with its bracketed interval, the percentage alone, or
+        `n/a`.
     """
     if not math.isfinite(rate):
         return "n/a"
@@ -1666,7 +1967,16 @@ def fmt_pct_ci(rate: float, low: float, high: float) -> str:
 
 
 def fmt_auroc_ci(value: float, low: float, high: float) -> str:
-    """``0.768 [0.742, 0.791]``; a zero-width interval prints as unavailable."""
+    """Format `0.768 [0.742, 0.791]`; a zero-width interval prints as unavailable.
+
+    Args:
+        value: AUROC; a non-finite value prints `n/a`.
+        low: Lower interval bound; non-finite when unavailable.
+        high: Upper interval bound; non-finite when unavailable.
+
+    Returns:
+        The AUROC with its bracketed interval, the AUROC alone, or `n/a`.
+    """
     if not math.isfinite(value):
         return "n/a"
     text = fmt_auroc(value)
@@ -1689,12 +1999,25 @@ def render_grouped_table_body(
     *,
     local_label: str = "Local (llama.cpp)",
 ) -> str:
-    r"""Everything between a table's header rule and its bottom rule.
+    r"""Render everything between a table's header rule and its bottom rule.
 
     Hosted models, then local models (a `\placeholder` row while none have
     run), then the pooled row after an inner rule. Shared by all three per-model
     tables so their bodies cannot drift apart. Model rows are unshaded and
     separated by a small gap; only the pooled row carries a background tint.
+
+    Args:
+        hosted_rows: Rendered rows of the hosted models, shown under the
+            `Commercial` group heading.
+        local_rows: Rendered rows of the local models; empty prints the
+            placeholder row.
+        all_row: Rendered pooled row.
+        n_columns: Number of table columns, used for the group headings and the
+            placeholder row.
+        local_label: Group heading of the local models.
+
+    Returns:
+        The table body as LaTeX lines joined by newlines.
     """
     group = f"\\multicolumn{{{n_columns}}}{{@{{}}l}}"
     placeholder = " & ".join(
@@ -1722,7 +2045,18 @@ def render_grouped_table_body(
 
 
 def _rq_table_rows(rq: RqTable, models: Sequence[str]) -> tuple[list[str], list[str]]:
-    """The `tab:rq1` and `tab:rq23` cells for each of `models`, in table order."""
+    """Return the `tab:rq1` and `tab:rq23` cells for each of `models`, in table order.
+
+    Args:
+        rq: RQ table holding the per-model rows.
+        models: Models to render, in table order.
+
+    Returns:
+        The `tab:rq1` rows and the `tab:rq23` rows.
+
+    Raises:
+        PaperNumbersError: If a model has no pooled row in the RQ table.
+    """
     rq_one: list[str] = []
     rq_two_three: list[str] = []
     for model in models:
@@ -1735,12 +2069,20 @@ def _rq_table_rows(rq: RqTable, models: Sequence[str]) -> tuple[list[str], list[
 
 
 def _counted_estimate_cell(count: str, estimate: str) -> str:
-    r"""One results cell, ``\estcell{point}{interval}{n/N}``.
+    r"""Render one results cell, `\estcell{point}{interval}{n/N}`.
 
     The manuscript macro sets the point estimate bold in the table colour with
     the interval and the eligible counts small and grey beneath it. An
     unavailable interval prints an en-dash so the middle line never collapses
     and every model keeps the same height.
+
+    Args:
+        count: Rendered eligible counts, `n` or `n/N`.
+        estimate: Rendered estimate as from `fmt_pct_ci` or `fmt_auroc_ci`;
+            everything after the first space is the interval.
+
+    Returns:
+        The `\estcell` call.
     """
     point, _, interval = estimate.partition(" ")
     return rf"\estcell{{{point}}}{{{interval or NO_INTERVAL}}}{{{count}}}"
@@ -1765,14 +2107,21 @@ def _rate_cell(
 
 
 def _rq_one_row(label: str, row: Mapping[str, Any]) -> str:
-    """Model and four outcomes, each showing the rate above its interval and n/N.
+    """Render model and four outcomes, each showing rate above interval and n/N.
 
     The weak-intent stratum leads and is split by what moved: the obligation
-    (``should``/``shall``/``must``) or only the wish frame around a kept
-    ``could``/``may``. The all-modality strict rate stays as the last column;
+    (`should`/`shall`/`must`) or only the wish frame around a kept
+    `could`/`may`. The all-modality strict rate stays as the last column;
     its denominator is the whole benchmark, of which mandatory sources cannot
     strengthen and weak-intent sources are one quarter, so it reads as a
     benchmark-composition figure rather than a per-model propensity.
+
+    Args:
+        label: Model display label, or `All models` for the pooled row.
+        row: Matching row of the RQ table.
+
+    Returns:
+        The `tab:rq1` row, ending in a LaTeX line break.
     """
     columns = [label] + [
         _rate_cell(row, name, denominator=True)
@@ -1787,7 +2136,18 @@ def _rq_one_row(label: str, row: Mapping[str, Any]) -> str:
 
 
 def _rq_two_three_row(label: str, row: Mapping[str, Any]) -> str:
-    """Model, confidence, agreement, meaning-variation AUROC, and blind check."""
+    """Render model, confidence, agreement, meaning-variation AUROC, and blind check.
+
+    The blind check takes two columns: strengthened outputs the audit flagged,
+    and those it called preserved.
+
+    Args:
+        label: Model display label, or `All models` for the pooled row.
+        row: Matching row of the RQ table.
+
+    Returns:
+        The `tab:rq23` row, ending in a LaTeX line break.
+    """
     auroc_counts = (
         fmt_count(
             _number(row, "task2_meaning_variation_auroc_n_positive", PER_MODEL_RQ)
@@ -1832,7 +2192,15 @@ def _rq_two_three_row(label: str, row: Mapping[str, Any]) -> str:
 
 
 def _rq_table_blocks(artifacts: Artifacts) -> list[Macro]:
-    """The two RQ table bodies, hosted then local then the pooled row."""
+    """Build the two RQ table bodies, hosted then local then the pooled row.
+
+    Args:
+        artifacts: Validated artifacts; models of the recorded local cohort go
+            to the local group, every other model to the hosted group.
+
+    Returns:
+        The `numTableRqOneRows` and `numTableRqTwoThreeRows` macros.
+    """
     rq = RqTable(artifacts[PER_MODEL_RQ])
     hosted = order_models(
         [model for model in rq.by_model if model not in set(artifacts.local_models)],
@@ -1922,7 +2290,22 @@ def _per_model_blocks(artifacts: Artifacts) -> tuple[list[Macro], list[Macro], s
 
 
 def modality_table_body(artifacts: Artifacts) -> str:
-    """One model row with strict/broad subcolumns for each source modality."""
+    """Render one model row with strict/broad subcolumns for each source modality.
+
+    Every pooled cell is checked against the summed per-cell modality table
+    before it is printed.
+
+    Args:
+        artifacts: Validated artifacts; the pooled modality table supplies the
+            cells and the per-cell modality table the check.
+
+    Returns:
+        The `tab:per_model` body with hosted, local and pooled rows.
+
+    Raises:
+        PaperNumbersError: If a pooled strict or broad count or denominator
+            disagrees with the per-cell modality table.
+    """
     source_rows = artifacts[MODALITY_TABLE]
     pooled_rows = artifacts[POOLED_MODALITY]
     models = order_models(
@@ -1989,7 +2372,14 @@ def modality_table_body(artifacts: Artifacts) -> str:
 def build_blocks(
     artifacts: Artifacts,
 ) -> tuple[list[tuple[str, list[Macro]]], list[str]]:
-    """The ordered macro blocks and any non-fatal consistency warnings."""
+    """Build the ordered macro blocks and any non-fatal consistency warnings.
+
+    Args:
+        artifacts: Validated artifacts every block reads from.
+
+    Returns:
+        The (title, macros) blocks in output order and the warning messages.
+    """
     warnings: list[str] = []
     pooled, conditions, table_body = _per_model_blocks(artifacts)
     blocks = [
@@ -2018,7 +2408,17 @@ def build_blocks(
 
 
 def macros_from_blocks(blocks: Sequence[tuple[str, list[Macro]]]) -> dict[str, str]:
-    """Flatten the blocks, failing closed on a duplicate macro name."""
+    """Flatten the blocks, failing closed on a duplicate macro name.
+
+    Args:
+        blocks: (title, macros) blocks from `build_blocks`.
+
+    Returns:
+        Rendered macro values keyed by name, in block order.
+
+    Raises:
+        PaperNumbersError: If a macro name repeats or is not letters-only.
+    """
     macros: dict[str, str] = {}
     for _, block in blocks:
         for macro in block:
@@ -2039,7 +2439,15 @@ RULE_WIDTH = 79
 
 
 def _display_dir(outputs_dir: Path) -> str:
-    """The outputs directory as written into the header: checkout-relative."""
+    """Return the outputs directory as written into the header: checkout-relative.
+
+    Args:
+        outputs_dir: Directory the artifacts were read from.
+
+    Returns:
+        The POSIX path relative to the project root, or the path as given when
+        it lies outside the checkout.
+    """
     try:
         return outputs_dir.resolve().relative_to(eu.project_root().resolve()).as_posix()
     except ValueError:
@@ -2051,6 +2459,21 @@ def render(
     digests: Sequence[tuple[str, str]],
     outputs_dir: Path,
 ) -> str:
+    """Render the complete macro file.
+
+    A generated-file header lists the source artifacts with their SHA-256
+    digests; each non-empty block follows under a ruled title, one macro
+    definition per line with its comment.
+
+    Args:
+        blocks: (title, macros) blocks from `build_blocks`; empty blocks are
+            skipped.
+        digests: (file name, SHA-256) pairs from `Artifacts.source_digests`.
+        outputs_dir: Artifact directory named in the header.
+
+    Returns:
+        The file text, ending in a newline.
+    """
     lines = [
         "%% numbers.tex -- every number reported in the manuscript, in one place.",
         "%%",
@@ -2085,10 +2508,16 @@ MACRO_PATTERN = re.compile(r"\\newcommand\{\\([A-Za-z]+)\}\{")
 
 
 def parse_macros(text: str) -> dict[str, str]:
-    """Macro name -> value for every ``\\newcommand`` in ``text``.
+    r"""Map macro name -> value for every `\newcommand` in `text`.
 
     Values may span lines and contain balanced braces, so the closing brace is
     found by counting rather than by a regular expression.
+
+    Args:
+        text: Contents of a macro file such as a previous `numbers.tex`.
+
+    Returns:
+        Macro values keyed by name; a later definition of a name wins.
     """
     macros: dict[str, str] = {}
     for match in MACRO_PATTERN.finditer(text):
@@ -2105,7 +2534,16 @@ def parse_macros(text: str) -> dict[str, str]:
 
 
 def diff_macros(before: Mapping[str, str], after: Mapping[str, str]) -> list[str]:
-    """Human-readable added / removed / changed lines, added and removed last."""
+    """Return human-readable added / removed / changed lines, added and removed last.
+
+    Args:
+        before: Macros of the previous file.
+        after: Macros about to be written.
+
+    Returns:
+        The changed, then added, then removed lines, each with the macro name
+        and its value or values.
+    """
     changed = [
         f"  {'changed':<9}{name:<34}{before[name]} -> {after[name]}"
         for name in after
@@ -2126,6 +2564,15 @@ def diff_macros(before: Mapping[str, str], after: Mapping[str, str]) -> list[str
 
 
 def build_parser(root: Path) -> argparse.ArgumentParser:
+    """Build the command-line parser.
+
+    Args:
+        root: Project root; the default `--outputs-dir` and `--output` lie under
+            its `outputs/`.
+
+    Returns:
+        A parser for `--outputs-dir`, `--output` and `--strict`.
+    """
     parser = argparse.ArgumentParser(
         description=(
             "Write the manuscript's numbers.tex macro file from the paper artifacts."
@@ -2158,6 +2605,18 @@ def build_parser(root: Path) -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Write the macro file, then print the warnings and the macro-level diff.
+
+    Args:
+        argv: Command-line arguments; None reads them from `sys.argv`.
+
+    Returns:
+        0 after writing, or 1 when `--strict` refuses to write because of
+        warnings.
+
+    Raises:
+        SystemExit: If an artifact, column, row or cell is missing or unusable.
+    """
     root = eu.project_root()
     args = build_parser(root).parse_args(argv)
     try:

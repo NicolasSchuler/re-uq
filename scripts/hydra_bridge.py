@@ -52,7 +52,15 @@ def _container(node: Any) -> Any:
 
 
 def mask_secrets(value: Any) -> Any:
-    """Recursively replace credential-shaped values with a masking token."""
+    """Recursively replace credential-shaped values with a masking token.
+
+    Args:
+        value: Config value to mask; mappings and lists are walked, and a
+            non-empty value under a credential-shaped key becomes `MASK_VALUE`.
+
+    Returns:
+        A masked copy of mappings and lists; any other value unchanged.
+    """
     if isinstance(value, Mapping):
         return {
             key: MASK_VALUE
@@ -75,6 +83,17 @@ def hydra_config_to_run_config(cfg: DictConfig | Mapping[str, Any]) -> dict[str,
 
     The returned dictionary has exactly the shape of `run_configs/*.json`, so
     the Hydra path and the JSON path converge before any pipeline code runs.
+
+    Args:
+        cfg: Composed configuration with one selected profile, dataset and
+            variant; a set `model` narrows the profile to that single model.
+
+    Returns:
+        A run-config dictionary with one profile, one dataset and one variant.
+
+    Raises:
+        ValueError: If `model` is set to a model the selected profile does not
+            list.
     """
     raw = _container(cfg) if isinstance(cfg, (DictConfig, ListConfig)) else dict(cfg)
     profile = dict(raw["profile"])
@@ -117,7 +136,15 @@ def hydra_config_to_run_config(cfg: DictConfig | Mapping[str, Any]) -> dict[str,
 
 
 def resolved_config_yaml(cfg: DictConfig) -> str:
-    """Fully resolved composition as YAML text, with credentials masked."""
+    """Return the fully resolved composition as YAML text, with credentials masked.
+
+    Args:
+        cfg: Composed configuration of the current Hydra job.
+
+    Returns:
+        The YAML text, with interpolations resolved and credential-shaped
+        values replaced by `MASK_VALUE`.
+    """
     resolved = OmegaConf.to_container(cfg, resolve=True)
     return OmegaConf.to_yaml(OmegaConf.create(mask_secrets(resolved)))
 
@@ -129,6 +156,16 @@ def run_args_namespace(
 
     Field names and semantics match the two runner CLIs one-for-one, so the
     Hydra path exercises the same code with the same defaults.
+
+    Args:
+        cfg: Composed configuration of the current Hydra job.
+        resolved_yaml: Masked resolved composition from `resolved_config_yaml`;
+            stored with its SHA-256 for the run's provenance, empty for none.
+
+    Returns:
+        A namespace satisfying `runner_args.Task3RunnerArgs`. An unset `model`
+        means every model of the profile, and the `both` and `task3` task
+        values leave the Task 1/2 task filter unset.
     """
     raw = _container(cfg) if isinstance(cfg, (DictConfig, ListConfig)) else dict(cfg)
     model = raw.get("model")
@@ -212,6 +249,22 @@ def run_config_to_hydra_yaml(
     config's profile / dataset / variant matrix. Each profile then runs only
     its own model list. Composing
     `+experiment=<name>` then reproduces the JSON config cell by cell.
+
+    The config is checked for credential-shaped values before anything is
+    written, so a rejected config leaves nothing on disk.
+
+    Args:
+        path: JSON run config to export.
+        output_dir: Config root to write into; None means the project's
+            `conf/`.
+        name: Preset name for the sampling, logging and experiment files;
+            None means the JSON file stem.
+        overwrite: Whether to replace existing files whose content differs;
+            without it such a file stops the export.
+
+    Returns:
+        The written paths, keyed `profile/<profile_id>`, `sampling`,
+        `logging` and `experiment`.
     """
     source = Path(path)
     config = eu.load_run_config(source)
@@ -307,6 +360,11 @@ def run_config_to_hydra_yaml(
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Export the JSON run config named on the command line and list the files.
+
+    Args:
+        argv: Command-line arguments; None reads `sys.argv`.
+    """
     parser = argparse.ArgumentParser(
         description="Export a JSON run config into Hydra config groups under conf/."
     )

@@ -97,11 +97,30 @@ POSITIVE_COLUMN = 1
 
 
 def clean_label(value: Any) -> str:
+    """Return a label as stripped text, or `unknown` when it is empty or missing.
+
+    Args:
+        value: Raw label value of a row; `None`, other falsy values and blank
+            strings count as missing.
+
+    Returns:
+        The stripped label or `unknown`.
+    """
     text = str(value or "").strip()
     return text if text else "unknown"
 
 
 def sample_text_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """Score one sample's requirement text against its source and declared modality.
+
+    Args:
+        row: Sample row with `requirement`, `source_modality` and the sampled
+            declared `pred_modality`.
+
+    Returns:
+        The `eu.text_modality_fields` of the sample text at confidence 1.0,
+        including its strict and broad strengthening flags and parse status.
+    """
     return eu.text_modality_fields(
         row.get("requirement", ""),
         clean_label(row.get("source_modality", "")),
@@ -111,6 +130,17 @@ def sample_text_fields(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def add_probe_labels(rows: list[dict[str, Any]]) -> None:
+    """Add the four strengthening targets to every sample row in place.
+
+    The `deterministic_*` targets copy the strict and broad flags of the
+    single-pass output, empty when the row has none. The `sample_*` targets
+    score the sampled text itself with `sample_text_fields`. Set values are
+    `"1"` or `"0"`.
+
+    Args:
+        rows: Sample rows from the cached embedding artifacts, modified in
+            place.
+    """
     for row in rows:
         fields = sample_text_fields(row)
         row["deterministic_strict_text_overcommit"] = (
@@ -134,10 +164,18 @@ def add_probe_labels(rows: list[dict[str, Any]]) -> None:
 
 
 def stamp_text_condition(row: dict[str, Any], condition: str) -> dict[str, Any]:
-    """Prefix a result row with the text condition it came from and that condition's role.
+    """Prefix a result row with its text condition and that condition's role.
 
     Both columns are written on every artifact so a reader never has to know which
     condition happens to be the default to tell a diagnostic from a control.
+
+    Args:
+        row: Fold, summary or prediction row to stamp.
+        condition: Text condition the row was computed under, a key of
+            `TEXT_CONDITION_ROLES`.
+
+    Returns:
+        A new row with `text_condition` and `text_condition_role` first.
     """
     return {
         "text_condition": condition,
@@ -151,6 +189,13 @@ def requirements_digest(requirements: list[str]) -> str:
 
     A row count cannot tell a stale cache of equal length apart from the right
     one, so every reader of the cache compares this instead.
+
+    Args:
+        requirements: Requirement text of each row, in row order.
+
+    Returns:
+        The SHA-256 hex digest of an `mlx` prefix and the texts, joined with
+        NUL separators.
     """
     return hashlib.sha256(
         ("mlx\x00" + "\x00".join(requirements)).encode("utf-8")
@@ -164,7 +209,19 @@ def embed_requirement_only(
     cache_path: Path,
     reuse_cache: bool,
 ) -> np.ndarray:
-    """Embed each row's requirement text with MLX, deduplicating first."""
+    """Embed each row's requirement text with MLX, deduplicating first.
+
+    Args:
+        requirements: Requirement text of each row.
+        batch_size: Unique texts per embedding call.
+        cache_path: `.npz` cache, read when reusable and written after every
+            fresh embedding.
+        reuse_cache: Reuse `cache_path` when its row count and requirements
+            digest match; otherwise, or when false, re-embed.
+
+    Returns:
+        A float32 matrix with one row per requirement, in input order.
+    """
     digest = requirements_digest(requirements)
     if reuse_cache and cache_path.exists():
         cached = np.load(cache_path, allow_pickle=False)
@@ -227,7 +284,25 @@ def build_text_conditions(
     cache_path: Path,
     reuse_cache: bool,
 ) -> dict[str, np.ndarray]:
-    """Return the raw (unprojected) feature matrix for each requested condition."""
+    """Return the raw (unprojected) feature matrix for each requested condition.
+
+    Args:
+        sample_rows: Sample rows whose `requirement` texts feed the
+            requirement-only condition.
+        cached_prefixed: Cached sample embeddings of the requirement with the
+            sampled declared label, used as is for that condition.
+        conditions: Text conditions to build.
+        mlx_batch: Batch size for `embed_requirement_only`.
+        cache_path: Requirement-only embedding cache for
+            `embed_requirement_only`.
+        reuse_cache: Whether `embed_requirement_only` may reuse its cache.
+
+    Returns:
+        The feature matrix of each condition, in request order.
+
+    Raises:
+        ValueError: If a condition is unknown.
+    """
     matrices: dict[str, np.ndarray] = {}
     for condition in conditions:
         if condition == PREFIXED_CONTROL_CONDITION:
@@ -246,6 +321,20 @@ def build_text_conditions(
 
 
 def target_values(rows: list[dict[str, Any]], target: str) -> np.ndarray:
+    """Return the probe target of each row.
+
+    Args:
+        rows: Sample rows carrying the target column.
+        target: A name in `BINARY_TARGETS` or `MULTICLASS_TARGETS`.
+
+    Returns:
+        Integer 0/1 labels for a binary target, where anything not strictly
+        truthy is 0, or cleaned class labels as an object array for a
+        multiclass target.
+
+    Raises:
+        ValueError: If the target is in neither set.
+    """
     if target in BINARY_TARGETS:
         return np.asarray(
             [1 if eu.is_truthy_strict(row.get(target, "")) else 0 for row in rows],
@@ -259,6 +348,19 @@ def target_values(rows: list[dict[str, Any]], target: str) -> np.ndarray:
 
 
 def group_values(rows: list[dict[str, Any]], mode: str) -> np.ndarray:
+    """Return the cross-validation group of each row.
+
+    Args:
+        rows: Sample rows.
+        mode: `seed` groups by dataset and seed requirement (the capability),
+            `item` by dataset, benchmark variant and item.
+
+    Returns:
+        The group key of each row as an object array.
+
+    Raises:
+        ValueError: If the mode is neither `seed` nor `item`.
+    """
     if mode == "seed":
         return np.asarray(
             [f"{row.get('dataset_id')}::{row.get('seed_id')}" for row in rows],
@@ -276,6 +378,20 @@ def group_values(rows: list[dict[str, Any]], mode: str) -> np.ndarray:
 
 
 def model_steps(model_name: str, random_state: int) -> list[Any]:
+    """Return the pipeline steps of one probe classifier.
+
+    Args:
+        model_name: `logreg` for a standardized, class-balanced logistic
+            regression, or `hgb` for a class-balanced histogram gradient
+            boosting classifier with early stopping.
+        random_state: Seed of the classifier.
+
+    Returns:
+        The steps, ending with the classifier.
+
+    Raises:
+        ValueError: If the model name is unknown.
+    """
     if model_name == "logreg":
         return [
             StandardScaler(),
@@ -305,14 +421,26 @@ def model_steps(model_name: str, random_state: int) -> list[Any]:
 
 
 class FoldSafeSVD(TruncatedSVD):
-    """``TruncatedSVD`` that clamps its rank to what the training fold supports.
+    """`TruncatedSVD` that clamps its rank to what the training fold supports.
 
     When a vectorizer is fitted inside the pipeline, the fold's vocabulary size is
-    unknown until ``fit`` runs, so the component count cannot be clamped by the
+    unknown until `fit` runs, so the component count cannot be clamped by the
     caller the way a dense matrix allows.
     """
 
     def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
+        """Clamp the component count to the fold's shape, then fit and transform.
+
+        The count becomes at most the sample count and one less than the
+        feature count, and at least 1.
+
+        Args:
+            X: Training features of the fold, typically vectorizer output.
+            y: Passed through to `TruncatedSVD.fit_transform`, which ignores it.
+
+        Returns:
+            The reduced training features.
+        """
         n_samples, n_features = X.shape
         self.n_components = max(1, min(self.n_components, n_samples, n_features - 1))
         return super().fit_transform(X, y)
@@ -333,10 +461,27 @@ def make_estimator(
     fitted on the training rows of one fold, so neither the vocabulary and idf
     weights nor the axes the held-out rows are transformed into were chosen with
     them. Callers that pass features which are already reduced leave
-    ``pca_components`` at ``None``.
+    `pca_components` at `None`.
 
-    A text vectorizer produces a sparse matrix, which ``PCA`` cannot centre, so
-    the reducer is the truncated SVD that ``TfidfVectorizer`` output calls for.
+    A text vectorizer produces a sparse matrix, which `PCA` cannot centre, so
+    the reducer is the truncated SVD that `TfidfVectorizer` output calls for.
+
+    Args:
+        model_name: Classifier, `logreg` or `hgb` (see `model_steps`).
+        random_state: Seed of the classifier and the reducer.
+        pca_components: Components of the fold-local reducer; `None` adds no
+            reducer.
+        text_vectorizer: Unfitted text vectorizer, cloned into the first
+            pipeline step; it also switches the reducer to `FoldSafeSVD`.
+            `None` for numeric features.
+        hgb_max_iter: Boosting iteration budget of `hgb`.
+        fixed_budget: Train `hgb` for the full budget without early stopping.
+
+    Returns:
+        The classifier alone when it is the only step, otherwise a pipeline.
+
+    Raises:
+        ValueError: If `hgb_max_iter` is below 1 for `hgb`.
     """
     steps = model_steps(model_name, random_state)
     if model_name == "hgb":
@@ -362,6 +507,14 @@ def make_estimator(
 
 
 def finite_metric(value: float) -> float | str:
+    """Return a metric for a CSV cell, with NaN written as an empty cell.
+
+    Args:
+        value: Metric value, NaN when undefined.
+
+    Returns:
+        The value as a float, or an empty string for NaN.
+    """
     return "" if math.isnan(value) else float(value)
 
 
@@ -373,6 +526,28 @@ def select_hgb_budget(
     Preprocessing is refitted within the inner training split for every budget.
     The caller then refits the selected budget on the complete outer training
     fold. Curves are diagnostic evidence, not a claim of convergence.
+
+    Args:
+        X: Features of the outer training fold.
+        y: Encoded labels of the outer training fold.
+        groups: Capability group of each row; the inner split holds out whole
+            groups and is the first of up to five whose sides both contain
+            every class.
+        budgets: Candidate iteration budgets; duplicates are dropped.
+        random_state: Seed of the inner splitter and the estimators.
+        pca_components: Fold-local reducer components, capped at the inner
+            training size; `None` adds no reducer.
+        text_vectorizer: Optional unfitted vectorizer for `make_estimator`.
+
+    Returns:
+        The budget with the lowest validation log loss, the smaller budget on a
+        tie, and diagnostics with the validation curves, the inner training and
+        held-out groups, and whether the largest budget was selected.
+
+    Raises:
+        ValueError: If no budget is given or one is below 1, there are fewer
+            than two capability groups, or no inner split contains every class
+            on both sides.
     """
     budgets = sorted(set(budgets))
     if not budgets or budgets[0] < 1:
@@ -440,6 +615,14 @@ def select_hgb_budget(
 
 
 def positive_rate(y: np.ndarray) -> float:
+    """Return the share of positive labels.
+
+    Args:
+        y: Binary labels.
+
+    Returns:
+        The mean label, NaN for an empty array.
+    """
     if y.size == 0:
         return math.nan
     return float(np.mean(y.astype(int)))
@@ -450,12 +633,20 @@ def ordered_class_probabilities(
     estimator_classes: np.ndarray,
     class_labels: np.ndarray,
 ) -> np.ndarray:
-    """Scatter an estimator's probability columns into ``class_labels`` order.
+    """Scatter an estimator's probability columns into `class_labels` order.
 
-    ``estimator.classes_`` only covers the classes its training fold contained, in
+    `estimator.classes_` only covers the classes its training fold contained, in
     its own order. Keying the copy by class label rather than by position keeps the
     matrix aligned no matter how the estimator ordered or dropped classes; a class
     the estimator never saw keeps a zero column.
+
+    Args:
+        probabilities: `predict_proba` output in the estimator's class order.
+        estimator_classes: The estimator's `classes_`, integer class ids.
+        class_labels: All class ids in the probe's order.
+
+    Returns:
+        A matrix with one column per entry of `class_labels`.
     """
     column_of = {int(label): column for column, label in enumerate(class_labels)}
     ordered = np.zeros((probabilities.shape[0], len(class_labels)), dtype=float)
@@ -465,11 +656,19 @@ def ordered_class_probabilities(
 
 
 def ranking_metric_is_defined(y_true: np.ndarray, classes: np.ndarray) -> bool:
-    """AUROC and average precision need at least two classes, all present in the fold.
+    """Return whether ranking metrics are defined for a held-out fold.
 
-    A held-out fold that is missing a class has no defined one-vs-rest score for it,
-    so the probe reports an empty cell. That is a property of the fold, not a
-    swallowed error.
+    AUROC and average precision need at least two classes, all present in the
+    fold. A held-out fold that is missing a class has no defined one-vs-rest
+    score for it, so the probe reports an empty cell. That is a property of the
+    fold, not a swallowed error.
+
+    Args:
+        y_true: Held-out labels.
+        classes: All classes of the target.
+
+    Returns:
+        True when there are at least two classes and the fold has every one.
     """
     return len(classes) >= 2 and len(np.unique(y_true)) == len(classes)
 
@@ -477,11 +676,19 @@ def ranking_metric_is_defined(y_true: np.ndarray, classes: np.ndarray) -> bool:
 def probe_auroc(
     y_true: np.ndarray, probabilities: np.ndarray, classes: np.ndarray
 ) -> float:
-    """Held-out AUROC; ``probabilities`` must already be in ``classes`` order.
+    """Compute held-out AUROC; `probabilities` must already be in `classes` order.
 
     Exactly two classes take scikit-learn's binary API on the positive column --
     the multiclass entry point rejects a two-column score matrix outright. Three or
     more classes keep macro-averaged one-vs-rest.
+
+    Args:
+        y_true: Held-out labels.
+        probabilities: Class probabilities, one column per entry of `classes`.
+        classes: All classes of the target.
+
+    Returns:
+        The AUROC, NaN when `ranking_metric_is_defined` is false.
     """
     if not ranking_metric_is_defined(y_true, classes):
         return math.nan
@@ -501,7 +708,16 @@ def probe_auroc(
 def probe_average_precision(
     y_true: np.ndarray, probabilities: np.ndarray, classes: np.ndarray
 ) -> float:
-    """Macro-averaged held-out average precision, one column per class."""
+    """Compute macro-averaged held-out average precision, one column per class.
+
+    Args:
+        y_true: Held-out labels.
+        probabilities: Class probabilities, one column per entry of `classes`.
+        classes: All classes of the target.
+
+    Returns:
+        The average precision, NaN when `ranking_metric_is_defined` is false.
+    """
     if not ranking_metric_is_defined(y_true, classes):
         return math.nan
     indicator = label_binarize(y_true, classes=classes)
@@ -530,6 +746,42 @@ def fold_metrics(
     hgb_max_iter: int = 300,
     hgb_budgets: list[int] | None = None,
 ) -> list[dict[str, Any]]:
+    """Fit and score one probe with grouped, stratified cross-validation.
+
+    Splits with `StratifiedGroupKFold` so that no group spans training and
+    held-out rows, fits a fresh fold-local estimator per fold, and records the
+    held-out ranking and classification metrics with fitting diagnostics. A
+    target that cannot be split, a training fold that misses a class and a
+    failed fit become rows with status `unavailable` and a reason, not
+    exceptions.
+
+    Args:
+        X: Features of the eligible rows.
+        y_raw: Target value of each row, before class encoding.
+        groups: Split group of each row; whole groups are held out.
+        target: Target name; binary targets use the classes `"0"` and `"1"`.
+        model_name: Classifier, `logreg` or `hgb`.
+        scope: Scope label written to every row, such as `global`.
+        n_splits: Requested folds, capped at the number of groups.
+        random_state: Base seed; fold `k` uses `random_state + k`.
+        pca_components: Fold-local reducer components, capped at what each
+            training fold supports; `None` uses the features as given.
+        text_vectorizer: Optional unfitted vectorizer fitted inside each fold.
+        sample_rows: Metadata rows aligned with `X`, copied into prediction
+            rows and used for capability groups during budget selection.
+        prediction_rows: When given, receives one row per held-out prediction
+            with its identity, fold and class probabilities.
+        expected_classes: Class names of a multiclass target, sorted into the
+            class order; when the eligible rows miss one of them, the target is
+            reported unavailable. `None` uses the observed classes.
+        hgb_max_iter: Iteration budget of `hgb` without budget selection.
+        hgb_budgets: Candidate `hgb` budgets, selected per fold by
+            `select_hgb_budget`; `None` keeps `hgb_max_iter`.
+
+    Returns:
+        One row per fold, or a single `unavailable` row with fold -1 when no
+        split is possible.
+    """
     metadata = sample_rows if sample_rows is not None else [{} for _ in y_raw]
     class_names = (
         np.asarray(["0", "1"])
@@ -839,7 +1091,19 @@ def fold_metrics(
 
 
 def eligible_observations(rows, target):
-    """Common input cohort for text alone and text plus sampled declared label."""
+    """Mark the common input cohort for text alone and text plus sampled declared label.
+
+    Args:
+        rows: Sample rows. A row is eligible only with a requirement text, a
+            sampled declared modality among the four classes, a `seed_id` and a
+            `dataset_id`.
+        target: Target name. `deterministic_*` targets also need a parsed
+            single-pass output with a 0 or 1 label, `sample_*` targets a parsed
+            sample text, and any other target a known value.
+
+    Returns:
+        A boolean mask over `rows`.
+    """
 
     def eligible(row):
         if not str(row.get("requirement", "")).strip() or row.get(
@@ -860,13 +1124,27 @@ def eligible_observations(rows, target):
 
 
 def prediction_summary(predictions, folds, *, iterations=1000, seed=20260527):
-    """Equal mean over evaluable held-out folds; capability percentile bootstrap.
+    """Average evaluable held-out folds equally, with a capability percentile bootstrap.
 
     Fixed OOF predictions/splits are resampled, not refitted. Each draw uses the
     same capability multiplicity across all samples, models and cells. A draw
     missing any class in an evaluated fold is undefined, counted, and omitted.
     This quantifies held-out cohort uncertainty conditional on training/splits;
     it excludes retraining, split-selection and model-generation uncertainty.
+
+    Args:
+        predictions: Held-out prediction rows from `fold_metrics`.
+        folds: Fold rows from the same call; only folds with status `ok` and a
+            defined AUROC are evaluated.
+        iterations: Bootstrap draws; 0 or fewer disables the interval.
+        seed: Bootstrap seed.
+
+    Returns:
+        One summary row with fold and cohort counts, the mean AUROC and average
+        precision with 95% percentile intervals, the average-precision
+        baseline, the number of defined draws, a fit-review flag and the reason
+        for any value left empty. The interval needs at least 90% defined
+        draws.
     """
     evaluated = {
         int(r["fold"])
@@ -987,6 +1265,16 @@ def prediction_summary(predictions, folds, *, iterations=1000, seed=20260527):
 
 
 def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Average fold metrics per scope, target and classifier.
+
+    Args:
+        rows: Fold rows from `fold_metrics`; empty metric cells are skipped.
+
+    Returns:
+        One row per `(scope, target, model)` in sorted order, with the fold
+        count, the mean held-out size, and the mean and sample standard
+        deviation of each metric, empty where undefined.
+    """
     metric_names = [
         "accuracy",
         "balanced_accuracy",
@@ -1032,6 +1320,17 @@ def filtered_scope(
     rows: list[dict[str, Any]],
     scope: str,
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """Restrict features and rows to one probe scope.
+
+    Args:
+        X: Features aligned with `rows`.
+        rows: Sample rows.
+        scope: `global` for every row, or `column=value` to keep the rows whose
+            column equals the value as text.
+
+    Returns:
+        The kept feature rows and sample rows.
+    """
     if scope == "global":
         return X, rows
     key, value = scope.split("=", 1)
@@ -1040,6 +1339,11 @@ def filtered_scope(
 
 
 def main() -> None:
+    """Run the grouped probes for every text condition, scope, target and classifier.
+
+    Writes `held_out_predictions.jsonl`, `fold_metrics.csv`, `summary.csv`,
+    `summary.md` and `manifest.json` to `--output-dir` and prints the manifest.
+    """
     parser = argparse.ArgumentParser(
         description="Run grouped supervised probes on cached ACSE embeddings."
     )

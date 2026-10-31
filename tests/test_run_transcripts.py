@@ -44,7 +44,14 @@ TASK2_ANSWER = {
 
 
 def batch_body(request_indices):
-    """A well-formed batch response covering every request index."""
+    """Return a well-formed batch response covering every request index.
+
+    Args:
+        request_indices: Request indices to answer, each with `TASK2_ANSWER`.
+
+    Returns:
+        The response body as a JSON string.
+    """
     return json.dumps(
         {
             "results": [
@@ -147,7 +154,16 @@ class HttpErrorBodyTest(TranscriptTestCase):
 
 class BatchedTranscriptTest(TranscriptTestCase):
     def _completion(self, **kwargs):
-        """Stand-in provider returning `self.body` with full call provenance."""
+        """Stand in for the provider, returning `self.body` with full call provenance.
+
+        Args:
+            **kwargs: Completion arguments as the runner passes them; `model`,
+                `prompt`, `temperature`, `top_p` and `max_tokens` are echoed in
+                the request payload, and `seed` as `request_seed`.
+
+        Returns:
+            A successful completion result in the shape of `eu.chat_completion`.
+        """
         return {
             "ok": True,
             "raw_text": self.body,

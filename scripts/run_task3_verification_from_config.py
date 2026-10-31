@@ -34,20 +34,44 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 def source_run_prefix(variant: str) -> str:
-    """Canonical (paper-facing) Task 2 source-run prefix for a benchmark variant."""
+    """Return the canonical (paper-facing) Task 2 source-run prefix for a variant.
+
+    Args:
+        variant: Benchmark variant; `must` gives `full`, any other variant
+            `full-<variant>`.
+
+    Returns:
+        The run id prefix a full Task 2 run of this variant carries.
+    """
     return "full" if variant == "must" else f"full-{variant}"
 
 
 def smoke_source_run_prefix(variant: str) -> str:
+    """Return the run id prefix of a smoke Task 2 run for a benchmark variant.
+
+    Args:
+        variant: Benchmark variant; `must` gives `smoke`, any other variant
+            `smoke-<variant>`.
+
+    Returns:
+        The run id prefix a smoke Task 2 run of this variant carries.
+    """
     return "smoke" if variant == "must" else f"smoke-{variant}"
 
 
 def source_run_prefixes(variant: str, mode: str = "full") -> list[str]:
-    """Accepted Task 2 source-run prefixes.
+    """Return the accepted Task 2 source-run prefixes.
 
     Official Task 3 runs always audit a `full-*` Task 2 run. `--mode smoke` also
     accepts a `smoke-*` source so the no-credentials fake-completion chain can
     run end to end without paper-facing data.
+
+    Args:
+        variant: Benchmark variant of the cell.
+        mode: Task 3 run mode; only `smoke` adds the smoke prefix.
+
+    Returns:
+        The full-run prefix, followed by the smoke-run prefix in smoke mode.
     """
     prefixes = [source_run_prefix(variant)]
     if mode == "smoke":
@@ -58,6 +82,19 @@ def source_run_prefixes(variant: str, mode: str = "full") -> list[str]:
 def task3_run_prefix(
     mode: str, variant: str, audit_mode: str = eu.OFFICIAL_TASK3_AUDIT_MODE
 ) -> str:
+    """Return the prefix a new Task 3 run id gets.
+
+    Args:
+        mode: Run mode; `smoke` appends `-smoke`.
+        variant: Benchmark variant; any variant other than `must` is appended
+            as `-<variant>`.
+        audit_mode: Task 3 audit mode; any mode other than the official blind
+            audit is inserted after `task3` with hyphens for underscores.
+
+    Returns:
+        The run id prefix, for example `task3`, `task3-declared-text-<variant>`
+        or `task3-smoke`.
+    """
     audit_mode = eu.normalize_task3_audit_mode(audit_mode)
     audit_suffix = (
         ""
@@ -73,6 +110,17 @@ def task3_run_prefix(
 
 
 def task3_prompt_path(root: Path, audit_mode: str) -> Path:
+    """Return the prompt template file for a Task 3 audit mode.
+
+    Args:
+        root: Project root that contains `prompts/`.
+        audit_mode: Task 3 audit mode; the official blind audit uses the blind
+            prompt, both declared-modality modes share the declared prompt.
+
+    Returns:
+        The path of `modality_verification.txt` or
+        `modality_verification_declared.txt` under `root/prompts`.
+    """
     audit_mode = eu.normalize_task3_audit_mode(audit_mode)
     if audit_mode == eu.OFFICIAL_TASK3_AUDIT_MODE:
         return root / "prompts/modality_verification.txt"
@@ -80,6 +128,17 @@ def task3_prompt_path(root: Path, audit_mode: str) -> Path:
 
 
 def task3_declared_modality_for_prompt(item: Mapping[str, Any], audit_mode: str) -> str:
+    """Return the declared modality a declared-modality audit shows the model.
+
+    Args:
+        item: Task 3 audit item.
+        audit_mode: Task 3 audit mode; `declared_text` shows the modality of
+            the Task 2 requirement text, `declared_source` the source modality.
+
+    Returns:
+        The item's `task2_text_modality` or `source_modality`, or "" for the
+        blind audit.
+    """
     audit_mode = eu.normalize_task3_audit_mode(audit_mode)
     if audit_mode == "declared_text":
         return str(item.get("task2_text_modality", ""))
@@ -93,6 +152,18 @@ def task3_prompt_for(
     item: Mapping[str, Any],
     audit_mode: str = eu.OFFICIAL_TASK3_AUDIT_MODE,
 ) -> str:
+    """Render the Task 3 prompt for one audit item.
+
+    Args:
+        template: Prompt template from `task3_prompt_path`.
+        item: Task 3 audit item supplying the source statement and the Task 2
+            requirement.
+        audit_mode: Task 3 audit mode; any mode other than the blind audit
+            also fills in the declared extracted modality.
+
+    Returns:
+        The rendered prompt text.
+    """
     audit_mode = eu.normalize_task3_audit_mode(audit_mode)
     values = {
         "source_statement": item["source_statement"],
@@ -106,6 +177,20 @@ def task3_prompt_for(
 
 
 def fake_completion(**kwargs: Any) -> dict[str, Any]:
+    """Answer a prompt offline, so smoke runs never contact a provider.
+
+    Every audited item is reported as `preserves` at confidence 0.9; a prompt
+    asking for a `decision` (the provider preflight) gets a `yes`.
+
+    Args:
+        **kwargs: The keyword arguments a real completion function receives;
+            `prompt` selects the reply, and `model`, `temperature`, `top_p`,
+            `max_tokens` and `seed` go into the synthesized request payload.
+
+    Returns:
+        A successful completion dict in the shape `eval_utils.chat_completion`
+        returns, including the request payload and its fingerprint.
+    """
     prompt = str(kwargs.get("prompt", ""))
     if "Items:\n" in prompt:
         items = json.loads(prompt.split("Items:\n", 1)[1])
@@ -158,7 +243,15 @@ class Task3SourceProfileMismatchError(ValueError):
 
 
 def _profiles_present(rows: list[dict[str, Any]]) -> tuple[str, ...]:
-    """Distinct `profile_id` values on `rows`, with the legacy blank named."""
+    """Return the distinct `profile_id` values on `rows`, with the legacy blank named.
+
+    Args:
+        rows: Task 2 raw rows.
+
+    Returns:
+        The sorted profile ids, with a blank id reported as
+        `eval_utils.LEGACY_IDENTITY`.
+    """
     return tuple(
         sorted(
             {str(row.get("profile_id", "") or "") or eu.LEGACY_IDENTITY for row in rows}
@@ -173,24 +266,38 @@ def source_rows_for_model(
     *,
     allow_profile_mismatch: bool = False,
 ) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
-    """Task 2 rows of `model` under `profile_id`, and the profiles they came from.
+    """Return the Task 2 rows of `model` under `profile_id`, and their profiles.
 
     Rows written before `profile_id` was recorded carry no profile at all. They
     are accepted as this profile's own output -- a raw file is scoped to one
     dataset/variant and predates the provider matrix -- and reported as
-    ``eval_utils.LEGACY_IDENTITY``.
+    `eval_utils.LEGACY_IDENTITY`.
 
     Rows belonging to a DIFFERENT profile are never silently audited. Task 3
     stamps the REQUESTED profile on every row it writes, so falling back to
     "any row for this model" (as this function used to) attributes one
     provider's extraction to another and leaves no trace of it in the artifact.
     Without `allow_profile_mismatch` that raises
-    :class:`Task3SourceProfileMismatchError`; with it the mismatch is logged as a
+    `Task3SourceProfileMismatchError`; with it the mismatch is logged as a
     warning and the profiles actually audited are returned so the caller can
     record them in the run's audit provenance.
 
-    Returns ``([], ())`` when the source run holds no rows for `model` at all,
-    which is a different failure the caller reports separately.
+    Args:
+        source_rows: Rows of the selected Task 2 source run.
+        model: Model whose Task 2 output is audited.
+        profile_id: Provider profile the Task 3 cell runs under.
+        allow_profile_mismatch: Whether to audit the model's rows of another
+            profile (with a warning) when none exist under `profile_id`.
+
+    Returns:
+        The selected rows and the profile ids they were produced under. Returns
+        `([], ())` when the source run holds no rows for `model` at all, which
+        is a different failure the caller reports separately.
+
+    Raises:
+        Task3SourceProfileMismatchError: If the source run holds rows for
+            `model` only under other profiles and `allow_profile_mismatch` is
+            false.
     """
     model_rows = [row for row in source_rows if str(row.get("model", "")) == str(model)]
     if not model_rows:
@@ -235,6 +342,20 @@ def require_complete_task2_source(
     prefix: str | list[str],
     expected_stochastic_samples: int,
 ) -> None:
+    """Check that the Task 2 source run is complete for the selected model.
+
+    Args:
+        benchmark: Benchmark items of the cell's dataset and variant.
+        source_rows: The model's rows of the source run.
+        source_run_id: Run id of the Task 2 source run.
+        prefix: Run id prefix or prefixes a source run may carry.
+        expected_stochastic_samples: Stochastic samples the run config plans
+            per item, used to judge completeness.
+
+    Raises:
+        ValueError: If `source_run_id` is not a complete Task 2 run with an
+            accepted prefix.
+    """
     progress = eu.run_progress_summary(
         benchmark,
         source_rows,
@@ -251,7 +372,12 @@ def require_complete_task2_source(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """CLI for this runner: the shared options plus the Task 3 ones."""
+    """Build the CLI for this runner: the shared options plus the Task 3 ones.
+
+    Returns:
+        The argument parser, with `runner_lifecycle.common_runner_parser` as
+        its parent.
+    """
     parser = argparse.ArgumentParser(
         description="Run Task 3 blind text audit from a provider-aware run config.",
         parents=[rl.common_runner_parser()],
@@ -277,6 +403,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Parse the command line, load the JSON run config, and run the audit.
+
+    Args:
+        argv: Command-line arguments; None reads `sys.argv`.
+    """
     args = build_parser().parse_args(argv)
     eu.configure_run_logging(args.log_level)
     run_from_config(eu.load_run_config(args.config), args)
@@ -284,7 +415,24 @@ def main(argv: list[str] | None = None) -> None:
 
 @dataclass(frozen=True, slots=True)
 class Task3Run:
-    """State shared by every cell of one Task 3 audit run."""
+    """State shared by every cell of one Task 3 audit run.
+
+    Attributes:
+        run_config: Normalized run config the audit is built from.
+        args: Runner options from the JSON CLI or the Hydra bridge.
+        root: Project root all artifact paths are resolved under.
+        audit_mode: Normalized audit mode (`blind`, `declared_text` or
+            `declared_source`).
+        logging_config: Run logging settings with the command-line overrides
+            applied.
+        completion_fn: `eval_utils.chat_completion`, or `fake_completion`
+            under `--fake-completion`.
+        task3_template: Prompt template for the audit mode.
+        smoke_tree: Whether every cell writes into the parallel smoke tree
+            (fake completions, smoke mode, or a smoke run id).
+        dry_run: Whether cells are only planned and logged, without writing
+            audit items or contacting a provider.
+    """
 
     run_config: dict[str, Any]
     args: Task3RunnerArgs
@@ -298,16 +446,56 @@ class Task3Run:
 
     @property
     def run_group_id(self) -> str:
+        """Return the run group id shared by every cell of the audit."""
         return str(self.run_config["run_group_id"])
 
     @property
     def expected_stochastic_samples(self) -> int:
+        """Return the stochastic samples the run config plans per item."""
         return int(self.run_config["stochastic"]["samples"])
 
 
 @dataclass(frozen=True, slots=True)
 class Task3Cell:
-    """One (profile, model, dataset, variant) Task 3 cell, fully planned."""
+    """One (profile, model, dataset, variant) Task 3 cell, fully planned.
+
+    Attributes:
+        profile: Provider profile the cell runs under.
+        model: Model alias of the cell; the same model's Task 2 output is
+            audited.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        run_id: Run id the cell's Task 3 rows and registry row carry.
+        source_run_id: Task 2 run whose output is audited.
+        source_profile_ids: Profile(s) the audited Task 2 rows were produced
+            under. Equal to `(profile_id,)` for a normal cell; a different
+            value means `--allow-source-profile-mismatch` was used and is
+            recorded in the registry notes so the artifact says whose output
+            was audited.
+        started_at: Start time for the registry row; a resumed cell keeps the
+            one its first attempt recorded.
+        seed: Request seed for the cell's jobs.
+        send_seed: Whether the seed is sent to the provider.
+        max_retries: Transport retries per provider request.
+        batch_order: How jobs are grouped into batches (`grouped` or
+            `shuffled`).
+        preflight: Server model probe result, or `{"dry_run": True}` in a dry
+            run.
+        items: Audit items in scope; only the first `--smoke-items` in smoke
+            mode.
+        jobs: Every planned completion job of the cell.
+        existing_rows: Raw rows already in the cell's Task 3 output file.
+        pending_jobs: Planned jobs this run has no reusable raw row for yet.
+        planned_api_calls: Provider requests the full plan needs.
+        pending_api_calls: Provider requests the pending jobs still need.
+        output_path: Task 3 raw JSONL file the records are appended to.
+        registry_path: Task 3 run registry CSV of the dataset and variant.
+        progress_path: Task 3 live progress CSV of the dataset and variant.
+        events_path: Task 3 run events JSONL of the dataset and variant.
+        items_path: CSV holding every audit item built for the cell.
+        resume: Identity of the run being continued; set only under
+            `--mode resume`.
+    """
 
     profile: dict[str, Any]
     model: str
@@ -343,18 +531,25 @@ class Task3Cell:
 
     @property
     def profile_id(self) -> str:
+        """Return the id of the provider profile the cell runs under."""
         return str(self.profile["profile_id"])
 
     @property
     def provider_id(self) -> str:
+        """Return the id of the provider behind the cell's profile."""
         return str(self.profile["provider_id"])
 
     @property
     def batch_size(self) -> int:
+        """Return how many planned jobs the profile sends per provider request."""
         return int(self.profile["batch_size"])
 
     def identity(self) -> dict[str, Any]:
-        """The fields that identify this cell in logs and warning events."""
+        """Return the fields that identify this cell in logs and warning events.
+
+        Returns:
+            The run id, dataset, benchmark variant, provider, profile and model.
+        """
         return {
             "run_id": self.run_id,
             "dataset_id": self.dataset_id,
@@ -366,7 +561,15 @@ class Task3Cell:
 
 
 def cell_context(matrix: Task3Run, cell: Task3Cell) -> dict[str, Any]:
-    """Identity fields stamped onto every run event and warning event."""
+    """Return the identity fields stamped onto every run event and warning event.
+
+    Args:
+        matrix: Audit run the cell belongs to; supplies the run group id.
+        cell: Planned cell; supplies the rest of the identity.
+
+    Returns:
+        `Task3Cell.identity` plus `run_group_id`.
+    """
     return {**cell.identity(), "run_group_id": matrix.run_group_id}
 
 
@@ -379,11 +582,25 @@ def resolve_source_rows(
 ) -> tuple[str, list[dict[str, Any]], tuple[str, ...]]:
     """Locate the complete Task 2 run this cell audits.
 
-    Returns the source run id, its rows for this cell, and the profile(s) those
-    rows were produced under. Raises if no source run matches, if it holds no
-    rows for `model`, if its rows for `model` belong to another profile (see
-    :func:`source_rows_for_model`), or if it is incomplete and
-    `--allow-partial-source` was not passed.
+    Raises if no source run matches, if it holds no rows for `model`, if its
+    rows for `model` belong to another profile (see `source_rows_for_model`),
+    or if it is incomplete and `--allow-partial-source` was not passed.
+
+    Args:
+        matrix: Audit run the cell belongs to; supplies `--source-run-id`,
+            the mode and the partial-source and profile-mismatch switches.
+        profile: Provider profile the cell runs under.
+        model: Model whose Task 2 output is audited.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+
+    Returns:
+        The source run id, its rows for this cell, and the profile(s) those
+        rows were produced under.
+
+    Raises:
+        ValueError: If no source run with an accepted prefix matches, or the
+            source run holds no rows for `model`.
     """
     args = matrix.args
     # A smoke-* source run lives in the parallel smoke tree.
@@ -446,7 +663,34 @@ def plan_cell(
     batch_order: str,
     resume: rl.ResumeState | None = None,
 ) -> Task3Cell:
-    """Resolve one Task 3 cell: its source run, audit items, and job plan."""
+    """Resolve one Task 3 cell: its source run, audit items, and job plan.
+
+    Outside a dry run this writes every built audit item to the cell's items
+    CSV. A resumed cell is checked here, before any provider call, against the
+    source provenance its first attempt recorded.
+
+    Args:
+        matrix: Audit run the cell belongs to.
+        profile: Provider profile the cell runs under.
+        model: Model alias of the cell.
+        dataset_id: Dataset of the cell.
+        variant: Benchmark variant of the cell.
+        run_id: Run id the cell's records carry.
+        preflight: Server model probe result recorded with the jobs.
+        seed: Request seed for the cell's jobs.
+        send_seed: Whether the seed is sent to the provider.
+        max_retries: Transport retries per provider request.
+        batch_order: Normalized batch order (`grouped` or `shuffled`).
+        resume: Identity of the run being continued, or None for a new run.
+
+    Returns:
+        The fully planned cell, with pending jobs and API-call counts computed
+        against the Task 3 rows already on disk.
+
+    Raises:
+        ValueError: If no audit items could be built from valid deterministic
+            Task 2 rows.
+    """
     args = matrix.args
     audit_mode = matrix.audit_mode
     source_run_id, model_source_rows, source_profile_ids = resolve_source_rows(
@@ -561,11 +805,19 @@ def plan_cell(
 
 
 def source_note(matrix: Task3Run, cell: Task3Cell) -> str:
-    """Provenance for the audited Task 2 output, as registry-note fragments.
+    """Return the provenance for the audited Task 2 output as registry-note fragments.
 
     The source profile is spelled out only when it is not this cell's own, so
     the note stays quiet on the normal path but a
     `--allow-source-profile-mismatch` run is self-describing.
+
+    Args:
+        matrix: Audit run the cell belongs to; supplies the audit mode.
+        cell: Planned cell; supplies the source run and source profiles.
+
+    Returns:
+        `audit_mode=...; source_run_id=...`, plus `source_profile_id=...` when
+        the audited rows came from another profile.
     """
     note = f"audit_mode={matrix.audit_mode}; source_run_id={cell.source_run_id}"
     if set(cell.source_profile_ids) - {cell.profile_id}:
@@ -581,7 +833,21 @@ def registry_row(
     status: str | None = None,
     finished_at_utc: str = "",
 ) -> dict[str, Any]:
-    """Summarize `raw_rows` as this cell's Task 3 registry row."""
+    """Summarize `raw_rows` as this cell's Task 3 registry row.
+
+    Args:
+        matrix: Audit run the cell belongs to.
+        cell: Planned cell the row describes.
+        raw_rows: Raw rows of the cell's Task 3 output file seen so far.
+        status: Registry status to write; None lets
+            `eval_utils.run_registry_summary` derive it from the rows.
+        finished_at_utc: Finish time, empty while the cell is still running.
+
+    Returns:
+        The registry row for `eval_utils.upsert_run_registry_row`, with the
+        source provenance in its notes (or the first attempt's notes for a
+        resumed cell).
+    """
     profile = cell.profile
     return eu.run_registry_summary(
         cell.items,
@@ -618,7 +884,13 @@ def registry_row(
 
 
 def log_planned_cell(matrix: Task3Run, cell: Task3Cell) -> None:
-    """Report a dry-run cell plan without contacting a provider."""
+    """Report a dry-run cell plan without contacting a provider.
+
+    Args:
+        matrix: Audit run the cell belongs to.
+        cell: Planned cell whose item, job, batch and API-call counts are
+            logged.
+    """
     eu.logger.info(
         "%s",
         {
@@ -644,7 +916,16 @@ def log_planned_cell(matrix: Task3Run, cell: Task3Cell) -> None:
 
 
 def cell_execution(matrix: Task3Run, cell: Task3Cell) -> rl.CellExecution:
-    """Bind this cell's Task 3 specifics to the shared lifecycle."""
+    """Bind this cell's Task 3 specifics to the shared lifecycle.
+
+    Args:
+        matrix: Audit run the cell belongs to.
+        cell: Planned cell to execute.
+
+    Returns:
+        The execution handed to `runner_lifecycle.execute_cell`, with the
+        cell's lease and, unless turned off, its transcript writer.
+    """
     return rl.CellExecution(
         cell=cell,
         tasks=("task3",),
@@ -701,7 +982,12 @@ def cell_execution(matrix: Task3Run, cell: Task3Cell) -> rl.CellExecution:
 
 
 def execute_cell(matrix: Task3Run, cell: Task3Cell) -> None:
-    """Run one Task 3 cell to completion, streaming progress artifacts."""
+    """Run one Task 3 cell to completion, streaming progress artifacts.
+
+    Args:
+        matrix: Audit run the cell belongs to.
+        cell: Planned cell to execute.
+    """
     rl.execute_cell(cell_execution(matrix, cell))
 
 
@@ -710,6 +996,17 @@ def run_from_config(run_config: dict[str, Any], args: Task3RunnerArgs) -> None:
 
     Shared by the argparse CLI above and by the Hydra entry point in
     `scripts/run.py`, which composes the same dictionary from `conf/`.
+
+    Args:
+        run_config: Normalized run config: profiles, datasets, variants,
+            prompt and sampling settings.
+        args: Task 3 runner options; the profile, model, dataset and variant
+            options narrow the matrix, `source_run_id` and `audit_mode` pick
+            what is audited and how, and `mode`, `run_id`, `dry_run` and
+            `fake_completion` control how each cell runs.
+
+    Raises:
+        ValueError: If `--mode resume` is given without `--run-id`.
     """
     eu.configure_run_logging(args.log_level)
     eu.apply_acse_embedding_env(run_config)

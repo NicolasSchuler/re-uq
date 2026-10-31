@@ -108,7 +108,7 @@ ACSE_ONLY_SCORE_ROW_FIELDS = frozenset(
 
 
 def export_report_seeds():
-    """Return the canonical single ``export reports`` seed row as a fresh list."""
+    """Return the canonical single `export reports` seed row as a fresh list."""
     return [
         {
             "seed_id": "S0001",
@@ -120,7 +120,12 @@ def export_report_seeds():
 
 
 def _scaffold_project_root(root, *, with_prompts=True):
-    """Create the standard temp-project layout used by CLI integration tests."""
+    """Create the standard temp-project layout used by CLI integration tests.
+
+    Args:
+        root: Temporary directory that becomes the project root.
+        with_prompts: Whether to create the `prompts` directory as well.
+    """
     if with_prompts:
         (root / "prompts").mkdir(parents=True)
     (root / "data/processed").mkdir(parents=True)
@@ -177,7 +182,15 @@ class EvalUtilsTest(unittest.TestCase):
         )
 
     def _task1_two_seed_jobs(self, **overrides):
-        """Two mandatory Task 1 jobs (one per seed) on the plain (non-Instructor) path."""
+        """Plan two mandatory Task 1 jobs (one per seed) on the non-Instructor path.
+
+        Args:
+            **overrides: Keyword arguments that replace the defaults passed to
+                `eu.planned_completion_jobs`.
+
+        Returns:
+            The planned jobs.
+        """
         seeds = [
             {
                 "seed_id": "S0001",
@@ -1960,11 +1973,18 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertTrue(all("uncertainty_score" in row for row in scores))
 
     def _batched_task2_raw_rows(self, benchmark, *, stochastic_samples=0):
-        """Task 2 raw rows for one seed, all four variants in one request.
+        """Build Task 2 raw rows for one seed, all four variants in one request.
 
-        The deterministic variants share a single ``batch_id``, exactly as the
+        The deterministic variants share a single `batch_id`, exactly as the
         archived runs sent them (16 items = 4 seeds x 4 modalities per request).
         Each stochastic sample index is its own request.
+
+        Args:
+            benchmark: Benchmark items of the seed, one per variant.
+            stochastic_samples: Stochastic samples to add per item.
+
+        Returns:
+            The deterministic row of each item followed by its stochastic rows.
         """
         rows = []
         for item in benchmark:
@@ -4090,7 +4110,10 @@ class EvalUtilsTest(unittest.TestCase):
         self.assertEqual(len(eu.pending_completion_jobs(jobs, records, "full-1")), 0)
 
     def test_batched_completion_missing_results_fall_back_to_single_item_requests(self):
-        """An unusable batch response is re-sent per item, mirroring the Instructor path."""
+        """An unusable batch response is re-sent per item.
+
+        This mirrors the Instructor path.
+        """
         seeds = [
             {
                 "seed_id": "S0001",
@@ -6529,7 +6552,14 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
     # --- item 7: shuffled batches never repeat a seed ----------------------
 
     def _full_matrix_task2_jobs(self, **overrides):
-        """The real 180-seed x 4-variant benchmark cell, planned as 720 Task 2 jobs."""
+        """Plan the real 180-seed x 4-variant benchmark cell as 720 Task 2 jobs.
+
+        Args:
+            **overrides: Keyword arguments that replace the defaults of `_plan`.
+
+        Returns:
+            The planned jobs.
+        """
         benchmark = eu.read_csv_rows("data/processed/benchmark_items_mlm_tapt.csv")
         self.assertEqual(len(benchmark), 720)
         self.assertEqual(len({row["seed_id"] for row in benchmark}), 180)
@@ -6822,7 +6852,14 @@ class ResponseProvenanceAndRetryTest(unittest.TestCase):
 
 
 def provider_profile(**overrides):
-    """Return a minimal valid provider profile, with ``overrides`` applied."""
+    """Return a minimal valid provider profile, with `overrides` applied.
+
+    Args:
+        **overrides: Profile fields that replace or extend the defaults.
+
+    Returns:
+        The profile as a fresh dict.
+    """
     profile = {
         "provider_id": "local",
         "profile_id": "local",
@@ -7205,11 +7242,21 @@ class BootstrapClusteringTest(unittest.TestCase):
     N_REQUESTS = 10
 
     def _rows(self, *, seeds_per_request=SEEDS_PER_REQUEST, flag_of=None):
-        """Score-like rows: `seeds_per_request` whole seeds inside one request.
+        """Build score-like rows: `seeds_per_request` whole seeds inside one request.
 
-        ``flag_of(request_index, seed_index)`` decides the outcome, so a test
+        `flag_of(request_index, seed_index)` decides the outcome, so a test
         can make the metric vary within a request or be all-or-none per
         request the way the archive behaves.
+
+        Args:
+            seeds_per_request: Whole seeds placed in each of the `N_REQUESTS`
+                requests.
+            flag_of: Outcome function of the request and seed index; `None`
+                flags every request with an odd index.
+
+        Returns:
+            One row per seed and modality with `seed_id`, `source_modality`,
+            `batch_id` and `flag`.
         """
         flag_of = flag_of or (lambda request_index, _: request_index % 2)
         rows = []

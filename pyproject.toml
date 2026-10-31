@@ -55,6 +55,7 @@ select = [
     "A",    # flake8-builtins
     "B",    # flake8-bugbear
     "C4",   # flake8-comprehensions
+    "D",    # pydocstyle (Google convention, see [tool.ruff.lint.pydocstyle])
     "DTZ",  # flake8-datetimez
     "E",    # pycodestyle errors
     "F",    # pyflakes
@@ -79,6 +80,11 @@ ignore = [
     # where folding a multi-line dict literal into a comprehension costs more
     # readability than the loop overhead is worth.
     "PERF401",
+    # Docstring presence is enforced for public modules, classes and functions
+    # (D100-D104), not for magic methods or __init__: constructor parameters
+    # are documented in the class docstring, as the Google convention asks.
+    "D105",
+    "D107",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -89,6 +95,16 @@ ignore = [
 # This module builds a markdown document, so long prose wrapped across adjacent
 # string literals inside list literals is the point, not a missing comma.
 "scripts/export_benchmark_ground_truth.py" = ["ISC004"]
+# Pydantic copies a class docstring into the model's JSON Schema, which the
+# Instructor path sends to the provider, so the response models stay
+# undocumented on purpose (see the module docstring).
+"scripts/structured_outputs.py" = ["D101"]
+# Test names carry the meaning; docstrings on test cases are optional, but the
+# ones that exist follow the same Google shape as everything else.
+"tests/**" = ["D1"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.isort]
 known-first-party = ["scripts", "tests"]
